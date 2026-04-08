@@ -1,6 +1,5 @@
 # Versionskontrolle ignorieren
 .git
-.github
 
 # Lokale Umgebungen und Caches ignorieren
 venv/
