@@ -29,6 +29,6 @@ jobs:
       - name: Build Image and Upload
         uses: docker/build-push-action@v5
         with: 
-          context: -
+          context: .
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/runpod-workspace:latest
