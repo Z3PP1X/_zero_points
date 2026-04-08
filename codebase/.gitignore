@@ -1,0 +1,18 @@
+# Virtuelle Umgebung (sehr wichtig!)
+venv/
+.venv/
+env/
+
+# Python Cache (verhindert __pycache__ Ordner)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE Einstellungen
+.vscode/
+.idea/
+
+# Distribution / Build
+dist/
+build/
+*.egg-info/
