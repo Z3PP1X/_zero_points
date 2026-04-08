@@ -17,7 +17,7 @@ class DatasetLoader:
                 f"File {self.dataset_name} does not exist in {filepath}"
             )
 
-# FIX:
+    # FIX:
     def _load_dataset_from_csv(self):
         self._data = pd.read_csv(
             filepath_or_buffer=self._get_dataset_filepath(), sep=","
@@ -97,21 +97,36 @@ class DatasetDescriptor:
         self.pandas_dataframe = None
 
     def _load_dataset(self):
-        if self.dataset is None:
-            ds = DatasetLoader(self.dataset_name)
-            self.pandas_dataframe = pd.DataFrame(ds.data)
-            ds = self.dataset
+        """Stellt sicher, dass das Dataframe geladen ist."""
+        if self.pandas_dataframe is None:
+            if self.dataset is None:
+                self.dataset = DatasetLoader(self.dataset_name)
 
-    def _description(self):
+            # Wir nutzen die .data Property des Loaders
+            self.pandas_dataframe = self.dataset.data
+
+    def print_distribution(self):
+        """Gibt die Verteilung der Zielklasse (faster_algorithm) aus."""
         self._load_dataset()
-        return self.pandas_dataframe.describe()
 
-    def _count(self):
-        gmgf = self.pandas_dataframe["faster_algorithm"].value_counts().get(1)
-        newton = self.pandas_dataframe["faster_algorithm"].value_counts().get(0)
+        if "faster_algorithm" not in self.pandas_dataframe.columns:
+            print(
+                "⚠️ Spalte 'faster_algorithm' nicht gefunden. "
+                "Führe zuerst FeatureEngineering._tag_faster_algorithm() aus."
+            )
+            return
 
-        percentage_newton = newton / (newton + gmgf)
-        percentage_gmgf = gmgf / (newton + gmgf)
+        counts = self.pandas_dataframe["faster_algorithm"].value_counts()
+        total = len(self.pandas_dataframe)
 
-        return newton, gmgf, percentage_newton, percentage_gmgf
+        newton_count = counts.get(0, 0)
+        gmgf_count = counts.get(1, 0)
 
+        perc_newton = (newton_count / total) * 100
+        perc_gmgf = (gmgf_count / total) * 100
+
+        print(f"--- Verteilung für Dataset: {self.dataset_name} ---")
+        print(f"Gesamtanzahl Samples: {total}")
+        print(f"Klasse 0 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
+        print(f"Klasse 1 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
+        print("-" * (30 + len(self.dataset_name)))

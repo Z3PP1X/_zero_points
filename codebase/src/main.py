@@ -12,20 +12,26 @@ from torchmetrics.classification import (
 from dataset import DatasetDescriptor
 
 # --- Config ---
+# Wir setzen die Threads explizit auf 6, um deine Ressourcenplanung einzuhalten
+NUM_CORES = 6
+torch.set_num_threads(NUM_CORES)
+
 DEVICE = (
     torch.accelerator.current_accelerator().type
     if torch.accelerator.is_available()
     else "cpu"
 )
+
 DATASET_NAME = "run_20260408_160456/dataset_4"
 EXPERIMENTS_DIR = "../../_datasets/run_20260408_160456/graphs"
 SEED = 42001
 TEST_SIZE = 0.2
 EPOCHS = 100
-BATCH_SIZE = 64
+BATCH_SIZE = 256
 LR = 1e-3
 SAVE_PATH = "../../_models/best_model.pth"
 
+# Metriken initialisieren
 f1_metric = MulticlassF1Score(num_classes=2).to(DEVICE)
 precision_metric = MulticlassPrecision(num_classes=2).to(DEVICE)
 recall_metric = MulticlassRecall(num_classes=2).to(DEVICE)
@@ -95,13 +101,16 @@ def main():
         experiments_dir=EXPERIMENTS_DIR,
         seed=SEED,
     )
-    train_loader, test_loader = pipeline.pipe(
+
+    # Nutze num_workers=NUM_CORES für paralleles Laden der Graphen auf der CPU
+    train_loader, test_loader, class_weights = pipeline.pipe(
         test_size=TEST_SIZE,
         batch_size=BATCH_SIZE,
+        num_workers=3,
     )
 
     model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
     mlflow.set_experiment(DATASET_NAME)
@@ -115,6 +124,7 @@ def main():
                 "lr": LR,
                 "test_size": TEST_SIZE,
                 "device": DEVICE,
+                "num_threads": NUM_CORES,
                 "model": "TestGraphNetwork (GATv2)",
                 "input_dim": pipeline.input_dim,
                 "global_dim": pipeline.global_dim,

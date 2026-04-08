@@ -1,4 +1,18 @@
+# Versionskontrolle ignorieren
+.git
+.github
+
+# Lokale Umgebungen und Caches ignorieren
+venv/
+env/
 __pycache__/
+*.pyc
+
+# Sensible Dateien ignorieren (Ganz wichtig!)
+.env
+secrets.json
+
+# Test- oder Entwickler-Ordner ignorieren
 _datasets/
 _experiments/
 _models/
