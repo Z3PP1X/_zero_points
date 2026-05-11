@@ -11,8 +11,7 @@ from torchmetrics.classification import (
 )
 from dataset import DatasetDescriptor
 
-# --- Config ---
-# Wir setzen die Threads explizit auf 6, um deine Ressourcenplanung einzuhalten
+
 NUM_CORES = 6
 torch.set_num_threads(NUM_CORES)
 
@@ -31,7 +30,6 @@ BATCH_SIZE = 256
 LR = 1e-3
 SAVE_PATH = "../../_models/best_model.pth"
 
-# Metriken initialisieren
 f1_metric = MulticlassF1Score(num_classes=2).to(DEVICE)
 precision_metric = MulticlassPrecision(num_classes=2).to(DEVICE)
 recall_metric = MulticlassRecall(num_classes=2).to(DEVICE)
@@ -102,7 +100,6 @@ def main():
         seed=SEED,
     )
 
-    # Nutze num_workers=NUM_CORES für paralleles Laden der Graphen auf der CPU
     train_loader, test_loader, class_weights = pipeline.pipe(
         test_size=TEST_SIZE,
         batch_size=BATCH_SIZE,

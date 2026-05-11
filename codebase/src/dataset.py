@@ -1,93 +1,123 @@
 import pandas as pd
 from pathlib import Path
+import json
+import shutil
 
 
 class DatasetLoader:
-    def __init__(self, dataset_name):
+    def __init__(self, dataset_name: str, run_key: str, addTraces=False):
         self.dataset_name = dataset_name
+        self.run_key = run_key
+        self.working_directory = self._set_working_directory()
         self._data = None
+        self.addTraces = addTraces
 
-    def _get_dataset_filepath(self):
+    def _set_working_directory(self):
         base = Path(__file__).parent.parent.parent
-        filepath = base / "_datasets" / f"{self.dataset_name}.csv"
-        if filepath.exists():
-            return filepath
-        else:
-            raise FileNotFoundError(
-                f"File {self.dataset_name} does not exist in {filepath}"
+        return base / "_datasets" / self.run_key
+
+    def _load_dataset_from_csv(self):
+        filepath = self.working_directory / f"{self.dataset_name}.csv"
+        self._data = pd.read_csv(filepath, sep=",")
+        # Typen für den Merge vorbereiten
+        self._data["problem_id"] = self._data["problem_id"].astype(str)
+        self._data["point_index"] = self._data["point_index"].astype(int)
+
+    def _import_traces(self):
+        traces_dir = self.working_directory / "traces"
+        temp_dir = self.working_directory / "temp_parts"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True)
+
+        batch = []
+        batch_size = 5000
+        part_num = 0
+
+        columns = [
+            "problem_id",
+            "point_index",
+            "y_target_json",
+            "x0_json",
+            "algorithm",
+            "solver_converged",
+            "solver_iterations",
+            "solver_time_s",
+            "iter",
+            "x",
+            "step_gain",
+        ]
+
+        for chunk_file in Path(traces_dir).glob("*.jsonl"):
+            with open(chunk_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    pid = str(data.get("problemId"))
+                    pix = int(data.get("pointIndex"))
+                    yt = data.get("yTarget")
+                    x0 = data.get("x0")
+
+                    for solver in ["newton", "gmgf"]:
+                        if solver not in data:
+                            continue
+                        s_obj = data[solver]
+
+                        s_meta = [
+                            solver,
+                            s_obj.get("converged"),
+                            s_obj.get("iterations"),
+                            s_obj.get("time_s"),
+                        ]
+
+                        for t in s_obj.get("trace", []):
+                            row = (
+                                [pid, pix, yt, x0]
+                                + s_meta
+                                + [t.get("iter"), t.get("x"), t.get("step_gain")]
+                            )
+                            batch.append(row)
+
+                            if len(batch) >= batch_size:
+                                pd.DataFrame(batch, columns=columns).to_parquet(
+                                    temp_dir / f"p_{part_num}.pq"
+                                )
+                                batch, part_num = [], part_num + 1
+
+        if batch:
+            pd.DataFrame(batch, columns=columns).to_parquet(
+                temp_dir / f"p_{part_num}.pq"
             )
 
-    # FIX:
-    def _load_dataset_from_csv(self):
-        self._data = pd.read_csv(
-            filepath_or_buffer=self._get_dataset_filepath(), sep=","
+        return (
+            pd.read_parquet(temp_dir)
+            if any(temp_dir.iterdir())
+            else pd.DataFrame(columns=columns)
+        )
+
+    def _join_traces(self):
+        self._load_dataset_from_csv()
+        raw_data = self._import_traces()
+
+        # Merge-Typen sicherstellen
+        raw_data["problem_id"] = raw_data["problem_id"].astype(str)
+        raw_data["point_index"] = raw_data["point_index"].astype(int)
+
+        # Join
+        self._data = pd.merge(
+            self._data, raw_data, on=["problem_id", "point_index"], how="left"
         )
 
     @property
     def data(self):
-        """ "Lazy-loads the dataframe upon first access."""
         if self._data is None:
-            self._load_dataset_from_csv()
+            if self.addTraces:
+                self._join_traces()
+            else:
+                self._load_dataset_from_csv()
         return self._data
-
-    @property
-    def newton(self):
-        self.data
-        if self._data is not None:
-            return self._data[
-                [
-                    "problem_id",
-                    "schritte_newton",
-                    "loesung_newton",
-                ]
-            ]
-
-    @property
-    def gMGF(self):
-        self.data
-        if self._data is not None:
-            return self._data[["problem_id", "schritte_gmgf", "loesung_gmgf"]]
-
-    @property
-    def problem_config(self):
-        self.data
-        if self._data is not None:
-            return self._data[
-                [
-                    "problem_id",
-                    "problem",
-                    "startwert",
-                    "zielwert",
-                    "conserved_step_rel",
-                ]
-            ]
-
-    @property
-    def history(self):
-        self.data
-        if self._data is not None:
-            return self._data[
-                [
-                    "problem_id",
-                    "newton_abs_err_hist",
-                    "newton_rel_err_hist",
-                    "newton_diag_status",
-                    "gmgf_abs_err_hist",
-                    "gmgf_rel_err_hist",
-                    "gmgf_kappa_raw_hist",
-                    "gmgf_kappa_clamp_hist",
-                    "gmgf_diag_status",
-                ]
-            ]
-
-    def add_column(self, name: str, values):
-        self.data[name] = values
-
-    def get_view(self, view: str):
-        allowed = {"data", "newton", "gmgf", "config"}
-        if view not in allowed:
-            raise ValueError(f"'{view}' ist ungültig. Erlaubt: {allowed}")
-        return getattr(self, view)
 
 
 class DatasetDescriptor:
@@ -101,20 +131,10 @@ class DatasetDescriptor:
         if self.pandas_dataframe is None:
             if self.dataset is None:
                 self.dataset = DatasetLoader(self.dataset_name)
-
-            # Wir nutzen die .data Property des Loaders
             self.pandas_dataframe = self.dataset.data
 
     def print_distribution(self):
-        """Gibt die Verteilung der Zielklasse (faster_algorithm) aus."""
         self._load_dataset()
-
-        if "faster_algorithm" not in self.pandas_dataframe.columns:
-            print(
-                "⚠️ Spalte 'faster_algorithm' nicht gefunden. "
-                "Führe zuerst FeatureEngineering._tag_faster_algorithm() aus."
-            )
-            return
 
         counts = self.pandas_dataframe["faster_algorithm"].value_counts()
         total = len(self.pandas_dataframe)
@@ -130,3 +150,10 @@ class DatasetDescriptor:
         print(f"Klasse 0 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
         print(f"Klasse 1 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
         print("-" * (30 + len(self.dataset_name)))
+
+
+data = DatasetLoader(
+    run_key="run_20260419_110821", addTraces=True, dataset_name="dataset1"
+)
+print(data.data.head())
+print(list(data.data.columns.values))

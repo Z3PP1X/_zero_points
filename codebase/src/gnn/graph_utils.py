@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.utils import from_networkx
-from dataset import DatasetLoader
 import numpy as np
 
 
@@ -90,12 +89,27 @@ class ExpressionGraphConverter:
     def _build_networkx(self, raw: dict) -> nx.DiGraph:
         G = nx.DiGraph()
         for node in raw["nodes"]:
+            val_dict = node.get("value")
+            if isinstance(val_dict, dict) and val_dict.get("mantissa") is not None:
+                mantissa = val_dict["mantissa"]
+                exponent = val_dict.get("exponent", 0)
+                actual_value = float(mantissa * (10 ** exponent))
+                has_val = 1.0
+            else:
+                # Fallback, falls value direkt eine Zahl ist oder None
+                if isinstance(val_dict, (int, float)):
+                    actual_value = float(val_dict)
+                    has_val = 1.0
+                else:
+                    actual_value = 0.0
+                    has_val = 0.0
+                    
             G.add_node(
                 node["id"],
                 node_type=self.NODE_TYPES[node["type"]],
                 label_id=self._encode_label(node["label"]),
-                value=node["value"] if node["value"] is not None else 0.0,
-                has_value=1.0 if node["value"] is not None else 0.0,
+                value=actual_value,
+                has_value=has_val,
             )
         for edge in raw["edges"]:
             G.add_edge(
@@ -251,29 +265,3 @@ class GraphConversionPipeline:
         return ["node_type", "label_id", "value", "has_value", "degree_centrality"]
 
 
-class FeatureEngineering:
-    def __init__(self, loader: DatasetLoader):
-        self._loader = loader
-
-    def _tag_faster_algorithm(self):
-        """Set binary labels for the faster algorithm: 0: Newton, 1: gMGF"""
-        boundaries = [
-            self._loader.data["avg_abs_time_newton"]
-            < self._loader.data["avg_abs_time_gmgf"],
-            self._loader.data["avg_abs_time_newton"]
-            > self._loader.data["avg_abs_time_gmgf"],
-        ]
-        values = [0, 1]
-
-        self._loader.add_column("faster_algorithm", np.select(boundaries, values))
-
-    def _conserve_relationships(self):
-        """Conserve relationships between absolute times"""
-        """self._data["conserved_time_rel"] = (
-            self._data["avg_abs_time_newton"] / self._data["avg_abs_time_gmgf"]
-        )"""
-
-        self._loader.add_column(
-            "conserved_step_rel",
-            self._loader.data["schritte_newton"] / self._loader.data["schritte_gmgf"],
-        )

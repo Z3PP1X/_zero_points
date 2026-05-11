@@ -4,29 +4,17 @@ from dataset import DatasetLoader
 from feature_engineering import FeatureEngineering, GraphConversionPipeline
 from torch.utils.data import Dataset
 
-# Angenommen dein Descriptor liegt in dataset_descriptor.py
-
 
 class GraphPipeline:
     def __init__(self, dataset_name: str, experiments_dir: str, seed: int = 42):
         self.seed = seed
-
-        # Tabulare Daten + Feature Engineering
         self.loader = DatasetLoader(dataset_name)
         fe = FeatureEngineering(self.loader)
         fe._tag_faster_algorithm()
-
-        # Descriptor für eine globale Übersicht (optional)
-        # self.descriptor = DatasetDescriptor(dataset_name, self.loader)
-        # self.descriptor.print_distribution()
-
-        # Graphen konvertieren
         self.graph_pipeline = GraphConversionPipeline(experiments_dir)
-
-        # Werden in pipe() gesetzt
         self.train_loader = None
         self.test_loader = None
-        self.class_weights = None  # NEU: Hier speichern wir die berechneten Gewichte
+        self.class_weights = None
         self.Y_train = None
         self.Y_test = None
         self.train_pids = None
@@ -39,28 +27,26 @@ class GraphPipeline:
         graph_ids = set(self.graph_pipeline.graphs.keys())
         df_matched = df[df["problem_id"].isin(graph_ids)].copy()
 
-        unique_pids = df_matched["problem_id"].unique()
+        unique_problem_ids = df_matched["problem_id"].unique()
 
-        pid_labels = [
+        unique_problem_labels = [
             df_matched[df_matched["problem_id"] == p]["faster_algorithm"].iloc[0]
-            for p in unique_pids
+            for p in unique_problem_ids
         ]
 
         train_pids, test_pids = train_test_split(
-            unique_pids,
+            unique_problem_ids,
             test_size=test_size,
             random_state=self.seed,
-            stratify=pid_labels if stratify else None,
+            stratify=unique_problem_labels if stratify else None,
         )
 
         train_pids_set = set(train_pids)
         test_pids_set = set(test_pids)
 
-        # 2. DataFrame anhand der IDs aufteilen
         train_df = df_matched[df_matched["problem_id"].isin(train_pids_set)]
         test_df = df_matched[df_matched["problem_id"].isin(test_pids_set)]
 
-        # 3. Class Weights berechnen (nur auf Trainingsdaten!)
         class_counts = train_df["faster_algorithm"].value_counts()
         total_train = len(train_df)
         num_classes = len(class_counts)
@@ -69,11 +55,9 @@ class GraphPipeline:
         weight_1 = total_train / (num_classes * class_counts.get(1, 1))
         self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
 
-        # 4. Custom Datasets initialisieren
         train_dataset = ProblemRunDataset(train_df, self.graph_pipeline.graphs)
         test_dataset = ProblemRunDataset(test_df, self.graph_pipeline.graphs)
 
-        # 5. DataLoaders erstellen
         from torch_geometric.loader import DataLoader
 
         self.train_loader = DataLoader(
@@ -85,7 +69,7 @@ class GraphPipeline:
 
         print("-" * 40)
         print(
-            f"IDs gesamt: {len(unique_pids)} "
+            f"IDs gesamt: {len(unique_problem_ids)} "
             f"(Train-IDs: {len(train_pids)}, Test-IDs: {len(test_pids)})"
         )
         print(
@@ -111,10 +95,6 @@ class GraphPipeline:
 
 
 class ProblemRunDataset(Dataset):
-    """
-    Baut die Graphen erst im Moment des Trainings zusammen.
-    Spart massiv RAM und Startzeit.
-    """
 
     def __init__(self, df, base_graphs):
         self.df = df.reset_index(drop=True)
@@ -127,10 +107,8 @@ class ProblemRunDataset(Dataset):
         row = self.df.iloc[idx]
         pid = row["problem_id"]
 
-        # Klonen passiert hier, pro Batch, blitzschnell!
         data = self.base_graphs[pid].clone()
 
-        # Features und Label anhängen
         data.y = torch.tensor([row["faster_algorithm"]], dtype=torch.long)
         data.global_features = torch.tensor(
             [row["startwert"], row["zielwert"]], dtype=torch.float

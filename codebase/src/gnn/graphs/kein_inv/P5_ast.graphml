@@ -1,0 +1,689 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<graphml>
+ <key id='nodeKey1'
+     for='node'
+     attr.name='label'
+     attr.type='String' />
+ <key id='nodeKey2'
+     for='node'
+     attr.name='NodeLabel'
+     attr.type='String' />
+ <key id='nodeKey3'
+     for='node'
+     attr.name='NodeType'
+     attr.type='String' />
+ <key id='nodeKey4'
+     for='node'
+     attr.name='NodeValue'
+     attr.type='String' />
+ <key id='nodeKey5'
+     for='node'
+     attr.name='VertexCoordinates'
+     attr.type='String' />
+ <key id='nodeKey6'
+     for='node'
+     attr.name='VertexLabels'
+     attr.type='String' />
+ <key id='edgeKey1'
+     for='edge'
+     attr.name='EdgeType'
+     attr.type='String' />
+ <graph id='Graph1'
+     edgedefault='directed'>
+  <node id='global'>
+   <data key='nodeKey1'>GLOBAL</data>
+   <data key='nodeKey2'>GLOBAL</data>
+   <data key='nodeKey3'>global</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[0.`, 8.`]</data>
+   <data key='nodeKey6'>Placed[&quot;GLOBAL&quot;, Tooltip]</data>
+  </node>
+  <node id='f_1'>
+   <data key='nodeKey1'>Plus</data>
+   <data key='nodeKey2'>Plus</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-1.9999999994341238`, 7.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Plus&quot;, Tooltip]</data>
+  </node>
+  <node id='f_2'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-3.655152608374351`, 6.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='f_3'>
+   <data key='nodeKey1'>-1</data>
+   <data key='nodeKey2'>-1</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.1, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-5.196694493899628`, 5.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-1&quot;, Tooltip]</data>
+  </node>
+  <node id='f_4'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-4.19669449386555`, 5.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='f_5'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-4.19669449267775`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='f_6'>
+   <data key='nodeKey1'>-1</data>
+   <data key='nodeKey2'>-1</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.1, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-5.196694493261987`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-1&quot;, Tooltip]</data>
+  </node>
+  <node id='f_7'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-6.737952348360466`, 5.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='f_8'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-8.196694494102019`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='f_9'>
+   <data key='nodeKey1'>-1/2</data>
+   <data key='nodeKey2'>-1/2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.5, &quot;exponent&quot; -&gt; 0|&gt;</data>
+   <data key='nodeKey5'>List[-7.196694494279143`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-1/2&quot;, Tooltip]</data>
+  </node>
+  <node id='f_10'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-1.5545678491252204`, 5.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='f_11'>
+   <data key='nodeKey1'>3/20</data>
+   <data key='nodeKey2'>3/20</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.15, &quot;exponent&quot; -&gt; 0|&gt;</data>
+   <data key='nodeKey5'>List[-2.1966944959440866`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;3/20&quot;, Tooltip]</data>
+  </node>
+  <node id='f_12'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-1.1966944910675181`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='f_13'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-2.196694492847911`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='f_14'>
+   <data key='nodeKey1'>10</data>
+   <data key='nodeKey2'>10</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.1, &quot;exponent&quot; -&gt; 2|&gt;</data>
+   <data key='nodeKey5'>List[-1.1966944919491311`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;10&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_1'>
+   <data key='nodeKey1'>Plus</data>
+   <data key='nodeKey2'>Plus</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-0.10331468565783553`, 5.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Plus&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_2'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-3.19669449228482`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_3'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-1.1966944917917886`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_4'>
+   <data key='nodeKey1'>-2</data>
+   <data key='nodeKey2'>-2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.2, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-2.1966944922642995`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-2&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_5'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-6.196694492959779`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_6'>
+   <data key='nodeKey1'>-1/2</data>
+   <data key='nodeKey2'>-1/2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.5, &quot;exponent&quot; -&gt; 0|&gt;</data>
+   <data key='nodeKey5'>List[-7.196694494243388`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-1/2&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_7'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-6.1966944941645465`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_8'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-8.196694493634766`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_9'>
+   <data key='nodeKey1'>-3/2</data>
+   <data key='nodeKey2'>-3/2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.15, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-7.196694493762635`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-3/2&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_10'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-0.19669449197246536`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_11'>
+   <data key='nodeKey1'>3/2</data>
+   <data key='nodeKey2'>3/2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.15, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-0.19669449122574179`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;3/2&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_12'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-4.196694493550325`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_13'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-4.19669449402906`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='fp_14'>
+   <data key='nodeKey1'>9</data>
+   <data key='nodeKey2'>9</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.9, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-3.1966944926140286`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;9&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_1'>
+   <data key='nodeKey1'>Plus</data>
+   <data key='nodeKey2'>Plus</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[1.8033055140970191`, 4.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Plus&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_2'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-0.1966944905949788`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_3'>
+   <data key='nodeKey1'>-2</data>
+   <data key='nodeKey2'>-2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.2, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[0.8033055088327785`, 1.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-2&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_4'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-1.1966944917056992`, 1.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_5'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-2.1966944916274542`, 0.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_6'>
+   <data key='nodeKey1'>-3</data>
+   <data key='nodeKey2'>-3</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.3, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-1.1966944914578335`, 0.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-3&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_7'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-5.196694493650909`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_8'>
+   <data key='nodeKey1'>3/4</data>
+   <data key='nodeKey2'>3/4</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.75, &quot;exponent&quot; -&gt; 0|&gt;</data>
+   <data key='nodeKey5'>List[-6.196694493915345`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;3/4&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_9'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-4.155684618065237`, 1.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_10'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-4.633164346609931`, 0.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_11'>
+   <data key='nodeKey1'>-5/2</data>
+   <data key='nodeKey2'>-5/2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; -0.25, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[-3.633164346661232`, 0.`]</data>
+   <data key='nodeKey6'>Placed[&quot;-5/2&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_12'>
+   <data key='nodeKey1'>Times</data>
+   <data key='nodeKey2'>Times</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[0.8033055104343703`, 3.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Times&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_13'>
+   <data key='nodeKey1'>27/2</data>
+   <data key='nodeKey2'>27/2</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.135, &quot;exponent&quot; -&gt; 2|&gt;</data>
+   <data key='nodeKey5'>List[0.8033055100437991`, 2.`]</data>
+   <data key='nodeKey6'>Placed[&quot;27/2&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_14'>
+   <data key='nodeKey1'>Power</data>
+   <data key='nodeKey2'>Power</data>
+   <data key='nodeKey3'>operator</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-0.19669449119493265`, 1.`]</data>
+   <data key='nodeKey6'>Placed[&quot;Power&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_15'>
+   <data key='nodeKey1'>x</data>
+   <data key='nodeKey2'>x</data>
+   <data key='nodeKey3'>variable</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; Null, &quot;exponent&quot; -&gt; Null|&gt;</data>
+   <data key='nodeKey5'>List[-0.19669449121184357`, 0.`]</data>
+   <data key='nodeKey6'>Placed[&quot;x&quot;, Tooltip]</data>
+  </node>
+  <node id='fpp_16'>
+   <data key='nodeKey1'>8</data>
+   <data key='nodeKey2'>8</data>
+   <data key='nodeKey3'>constant</data>
+   <data key='nodeKey4'>&lt;|&quot;mantissa&quot; -&gt; 0.8, &quot;exponent&quot; -&gt; 1|&gt;</data>
+   <data key='nodeKey5'>List[0.8033055089680374`, 0.`]</data>
+   <data key='nodeKey6'>Placed[&quot;8&quot;, Tooltip]</data>
+  </node>
+  <edge id='e1'
+      source='f_1'
+      target='f_2'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e2'
+      source='f_2'
+      target='f_3'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e3'
+      source='f_2'
+      target='f_4'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e4'
+      source='f_4'
+      target='f_5'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e5'
+      source='f_4'
+      target='f_6'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e6'
+      source='f_1'
+      target='f_7'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e7'
+      source='f_7'
+      target='f_8'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e8'
+      source='f_7'
+      target='f_9'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e9'
+      source='f_1'
+      target='f_10'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e10'
+      source='f_10'
+      target='f_11'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e11'
+      source='f_10'
+      target='f_12'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e12'
+      source='f_12'
+      target='f_13'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e13'
+      source='f_12'
+      target='f_14'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e14'
+      source='fp_1'
+      target='fp_2'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e15'
+      source='fp_2'
+      target='fp_3'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e16'
+      source='fp_2'
+      target='fp_4'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e17'
+      source='fp_1'
+      target='fp_5'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e18'
+      source='fp_5'
+      target='fp_6'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e19'
+      source='fp_5'
+      target='fp_7'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e20'
+      source='fp_7'
+      target='fp_8'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e21'
+      source='fp_7'
+      target='fp_9'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e22'
+      source='fp_1'
+      target='fp_10'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e23'
+      source='fp_10'
+      target='fp_11'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e24'
+      source='fp_10'
+      target='fp_12'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e25'
+      source='fp_12'
+      target='fp_13'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e26'
+      source='fp_12'
+      target='fp_14'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e27'
+      source='fpp_1'
+      target='fpp_2'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e28'
+      source='fpp_2'
+      target='fpp_3'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e29'
+      source='fpp_2'
+      target='fpp_4'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e30'
+      source='fpp_4'
+      target='fpp_5'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e31'
+      source='fpp_4'
+      target='fpp_6'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e32'
+      source='fpp_1'
+      target='fpp_7'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e33'
+      source='fpp_7'
+      target='fpp_8'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e34'
+      source='fpp_7'
+      target='fpp_9'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e35'
+      source='fpp_9'
+      target='fpp_10'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e36'
+      source='fpp_9'
+      target='fpp_11'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e37'
+      source='fpp_1'
+      target='fpp_12'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e38'
+      source='fpp_12'
+      target='fpp_13'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e39'
+      source='fpp_12'
+      target='fpp_14'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e40'
+      source='fpp_14'
+      target='fpp_15'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e41'
+      source='fpp_14'
+      target='fpp_16'>
+   <data key='edgeKey1'>child_of</data>
+  </edge>
+  <edge id='e42'
+      source='f_2'
+      target='fp_2'>
+   <data key='edgeKey1'>derivative_of</data>
+  </edge>
+  <edge id='e43'
+      source='f_5'
+      target='fp_2'>
+   <data key='edgeKey1'>power_related</data>
+  </edge>
+  <edge id='e44'
+      source='f_7'
+      target='fp_5'>
+   <data key='edgeKey1'>derivative_of</data>
+  </edge>
+  <edge id='e45'
+      source='f_5'
+      target='fp_7'>
+   <data key='edgeKey1'>power_related</data>
+  </edge>
+  <edge id='e46'
+      source='f_10'
+      target='fp_10'>
+   <data key='edgeKey1'>derivative_of</data>
+  </edge>
+  <edge id='e47'
+      source='f_5'
+      target='fp_12'>
+   <data key='edgeKey1'>power_related</data>
+  </edge>
+  <edge id='e48'
+      source='f_9'
+      target='fp_6'>
+   <data key='edgeKey1'>same_expr</data>
+  </edge>
+  <edge id='e49'
+      source='f_1'
+      target='fp_1'>
+   <data key='edgeKey1'>root_deriv</data>
+  </edge>
+  <edge id='e50'
+      source='fp_2'
+      target='fpp_2'>
+   <data key='edgeKey1'>derivative_of</data>
+  </edge>
+  <edge id='e51'
+      source='fp_3'
+      target='fpp_4'>
+   <data key='edgeKey1'>power_related</data>
+  </edge>
+  <edge id='e52'
+      source='fp_5'
+      target='fpp_7'>
+   <data key='edgeKey1'>derivative_of</data>
+  </edge>
+  <edge id='e53'
+      source='fp_3'
+      target='fpp_9'>
+   <data key='edgeKey1'>power_related</data>
+  </edge>
+  <edge id='e54'
+      source='fp_10'
+      target='fpp_12'>
+   <data key='edgeKey1'>derivative_of</data>
+  </edge>
+  <edge id='e55'
+      source='fp_3'
+      target='fpp_14'>
+   <data key='edgeKey1'>power_related</data>
+  </edge>
+  <edge id='e56'
+      source='fp_1'
+      target='fpp_1'>
+   <data key='edgeKey1'>root_deriv</data>
+  </edge>
+  <edge id='e57'
+      source='global'
+      target='f_1'>
+   <data key='edgeKey1'>belongs_to_f</data>
+  </edge>
+  <edge id='e58'
+      source='global'
+      target='fp_1'>
+   <data key='edgeKey1'>belongs_to_fp</data>
+  </edge>
+  <edge id='e59'
+      source='global'
+      target='fpp_1'>
+   <data key='edgeKey1'>belongs_to_fpp</data>
+  </edge>
+ </graph>
+</graphml>
