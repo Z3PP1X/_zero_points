@@ -1,8 +1,12 @@
 import os
 import json
-import networkx as nx
 from typing import Dict, Any
+
+import torch
+from torch_geometric.data import Data
+
 from graph_utils import ExpressionGraphConverter
+
 
 class Preprocessor:
     def __init__(self, graphs_dir: str):
@@ -13,18 +17,22 @@ class Preprocessor:
         """
         self.graphs_dir = graphs_dir
         self.converter = ExpressionGraphConverter()
+        # Static AST / topology per graph id; per-step scalars go into global_features only.
+        self._static_template_cache: Dict[str, Data] = {}
 
     def process(self, message: Dict[str, Any], dataloader: Any = None):
         """
         Verarbeitet eine vom network_gateway empfangene Nachricht:
         - Extrahiert relevante Status-Keys
-        - Lädt den passenden Graphen anhand der 'id'
-        - Baut ein NetworkX-Objekt und injiziert die Keys als Node-Features beim globalen Knoten
+        - Lädt den passenden Graphen anhand der 'id' (einmalig pro id, dann gecacht)
+        - Baut PyG ``Data``; Zeitreihen-Skalare liegen in ``global_features`` (pro Nachricht)
         - Sendet die aufbereiteten Daten optional an den Dataloader
         """
         graph_id = message.get("id")
         if graph_id is None:
             raise ValueError("Nachricht enthält keine 'id', Graph kann nicht geladen werden.")
+
+        cache_key = str(graph_id)
 
         # 1. Wichtige Parameter aus der Nachricht extrahieren
         keys_to_extract = [
@@ -37,25 +45,26 @@ class Preprocessor:
             val = message.get(key)
             extracted_features[key] = float(val) if val is not None else 0.0
 
-        # Die Datei wird anhand der extrahierten ID aus dem festgelegten Verzeichnis gelesen.
-        graph_path = os.path.join(self.graphs_dir, f"{graph_id}_meta.json")
-        if not os.path.exists(graph_path):
-            # Fallback für alte Dateinamen
-            graph_path = os.path.join(self.graphs_dir, f"{graph_id}.json")
+        if cache_key not in self._static_template_cache:
+            graph_path = os.path.join(self.graphs_dir, f"{graph_id}_meta.json")
             if not os.path.exists(graph_path):
-                raise FileNotFoundError(f"Graph-Datei nicht gefunden: {graph_id}_meta.json (oder .json)")
-            
-        with open(graph_path, "r", encoding="utf-8") as f:
-            raw_graph = json.load(f)
+                graph_path = os.path.join(self.graphs_dir, f"{graph_id}.json")
+                if not os.path.exists(graph_path):
+                    raise FileNotFoundError(
+                        f"Graph-Datei nicht gefunden: {graph_id}_meta.json (oder .json)"
+                    )
 
-        # 3. Graph in PyTorch Geometric Data konvertieren (nutzt intern _build_networkx und from_networkx)
-        # Dadurch wird data.x mit den korrekten Dimensionen (input_dim=5) erstellt.
-        data = self.converter.convert(raw_graph, heterogeneous=False)
+            with open(graph_path, "r", encoding="utf-8") as f:
+                raw_graph = json.load(f)
+
+            template = self.converter.convert(raw_graph, heterogeneous=False)
+            self._static_template_cache[cache_key] = template
+
+        data = self._static_template_cache[cache_key].clone()
 
         # 4. Globale Features als Tensor an das Data-Objekt hängen 
         # (wird im Batch automatisch korrekt zusammengefasst)
         feat_list = [extracted_features[k] for k in keys_to_extract]
-        import torch
         raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0) # Shape [1, 9]
         
         # Symmetrische logarithmische Normalisierung: y = sign(x) * ln(1 + |x|)

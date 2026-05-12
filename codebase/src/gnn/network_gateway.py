@@ -1,9 +1,23 @@
-import time
 import zmq
 import threading
 from queue import Queue
 
-class NetworkGateway():
+# Multiplexed ingress: state socket vs reward (terminal) socket
+CHANNEL_STATE = "state"
+CHANNEL_TERMINAL = "terminal"
+
+
+class NetworkGateway:
+    """
+    ZeroMQ bridge to Mathematica.
+
+    - State port (receiver): transition observations during an episode.
+    - Reward port (reward_receiver): terminal payloads and benchmark fields
+      for reward calculation (CHANNEL_TERMINAL).
+
+    Both are merged into ``event_queue`` as (channel, dict) so the env can
+    block on one queue while keeping receive-side routing explicit.
+    """
 
     def __init__(self, receiver_port, sender_port, control_port, reward_port):
         self.context = zmq.Context()
@@ -18,7 +32,7 @@ class NetworkGateway():
         self.running = False
         self._thread = None
         self._ready = threading.Event()
-        self.network_queue = Queue()
+        self.event_queue = Queue()
 
     def _set_up_sender(self):
         self.sender = self.context.socket(zmq.PUSH)
@@ -62,17 +76,27 @@ class NetworkGateway():
         print(f"[Gateway Debug] Loop is live! Polling on ports {self.receiver_port} and {self.reward_port}...")
         
         try:
-            while self.running:                   
+            while self.running:
                 socks = dict(self.poller.poll(timeout=100))
                 if self.receiver in socks and socks[self.receiver] == zmq.POLLIN:
-                    message = self.receiver.recv_json()
-                    self.network_queue.put(message)
+                    while True:
+                        try:
+                            message = self.receiver.recv_json(flags=zmq.NOBLOCK)
+                            self.event_queue.put((CHANNEL_STATE, message))
+                        except zmq.Again:
+                            break
                 if (
                     self.reward_receiver in socks
                     and socks[self.reward_receiver] == zmq.POLLIN
                 ):
-                    reward_state = self.reward_receiver.recv_json()
-                    self.network_queue.put(reward_state)
+                    while True:
+                        try:
+                            reward_state = self.reward_receiver.recv_json(
+                                flags=zmq.NOBLOCK
+                            )
+                            self.event_queue.put((CHANNEL_TERMINAL, reward_state))
+                        except zmq.Again:
+                            break
 
         except Exception as e:
             print(f"[Gateway] CRITICAL ERROR IN POLL LOOP: {e}")

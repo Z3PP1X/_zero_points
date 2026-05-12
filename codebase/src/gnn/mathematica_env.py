@@ -6,6 +6,7 @@ import queue
 import logging
 
 from replay_buffer import EpisodeReplayBuffer
+from network_gateway import CHANNEL_STATE, CHANNEL_TERMINAL
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +16,16 @@ class MathematicaGraphEnv(gym.Env):
     Gymnasium environment for interacting with Mathematica via ZeroMQ.
 
     Manages the communication cycle:
-        1. Receive state from Mathematica
+        1. Receive states from Mathematica (state ZeroMQ port)
         2. Process graph via Preprocessor
         3. Record transition in EpisodeReplayBuffer
         4. Send action decision back to Mathematica
-        5. At episode end: compute rewards retroactively via RewardCalculator
+        5. At episode end: receive terminal / benchmark payload on the reward port,
+           compute rewards retroactively via RewardCalculator
+
+    Terminal episodes are recognized when the next event arrives on the reward
+    port (``CHANNEL_TERMINAL``). For backward compatibility, a terminal dict on the
+    state port with ``status`` in ``reward_calc`` / ``finished`` is still accepted.
 
     Args:
         gateway: NetworkGateway instance for ZeroMQ communication.
@@ -86,23 +92,47 @@ class MathematicaGraphEnv(gym.Env):
             "num_edges": np.array([num_edges], dtype=np.int64)
         }
 
-    def _wait_for_next_state(self):
+    def _wait_for_next_event(self):
         """
-        Blocks until the next state arrives from the NetworkGateway queue.
+        Blocks until the next (channel, payload) arrives from the gateway.
 
-        Returns:
-            State dict from Mathematica.
+        Channels:
+            CHANNEL_STATE: observation from the state port.
+            CHANNEL_TERMINAL: terminal / reward payload from the reward port.
 
         Raises:
             InterruptedError: If the gateway stops running.
         """
         while True:
             try:
-                state_dict = self.gateway.network_queue.get(timeout=0.1)
-                return state_dict
+                channel, payload = self.gateway.event_queue.get(timeout=0.1)
+                return channel, payload
             except queue.Empty:
                 if not self.gateway.running:
                     raise InterruptedError("Gateway stopped running.")
+
+    def _wait_for_initial_state(self):
+        """
+        Blocks until a non-terminal observation arrives on the **state** port.
+
+        Terminal-only messages on the reward port while waiting are consumed
+        and logged so they cannot corrupt episode start.
+        """
+        while True:
+            channel, state_dict = self._wait_for_next_event()
+            if channel == CHANNEL_TERMINAL:
+                logger.info(
+                    "Ignoring terminal/reward message on reward port while waiting for reset state."
+                )
+                continue
+            if state_dict.get("status") in ["reward_calc", "finished"]:
+                msg_id = state_dict.get("id", "UNKNOWN")
+                logger.info(
+                    "Skipping legacy terminal state on state port (ID: %s) during reset.",
+                    msg_id,
+                )
+                continue
+            return state_dict
 
     def reset(self, seed=None, options=None):
         """
@@ -124,14 +154,8 @@ class MathematicaGraphEnv(gym.Env):
         if self.current_uuid and self.replay_buffer.has_episode(self.current_uuid):
             self.replay_buffer.clear_episode(self.current_uuid)
 
-        # Block until we receive a new state from Mathematica
-        state_dict = self._wait_for_next_state()
-
-        # Skip legacy terminal states from previously interrupted episodes
-        while state_dict.get("status") in ["reward_calc", "finished"]:
-            msg_id = state_dict.get("id", "UNKNOWN")
-            logger.info("Skipping legacy terminal state (ID: %s) during reset.", msg_id)
-            state_dict = self._wait_for_next_state()
+        # Block until we receive a new state from Mathematica (state port only)
+        state_dict = self._wait_for_initial_state()
 
         # Extract UUID and start new episode in replay buffer
         self.current_uuid = state_dict.get("uuid")
@@ -154,7 +178,7 @@ class MathematicaGraphEnv(gym.Env):
         1. Decodes the continuous action into solver choice + tolerance.
         2. Records the transition in the replay buffer.
         3. Sends the decision to Mathematica.
-        4. Waits for the next state.
+        4. Waits for the next observation (state port) or terminal payload (reward port).
         5. If terminal: computes rewards retroactively via RewardCalculator
            and returns the total episode reward.
         6. If intermediate: returns reward=0.0 (sparse reward strategy).
@@ -190,13 +214,16 @@ class MathematicaGraphEnv(gym.Env):
         # 3. Send decision to Mathematica
         self.gateway.send_decision(self.current_state_dict, chosen_solver, chosen_tol)
 
-        # 4. Wait for next state
-        next_state_dict = self._wait_for_next_state()
+        # 4. Wait for next observation (state port) or terminal (reward port)
+        next_channel, next_state_dict = self._wait_for_next_event()
+        is_terminal = next_channel == CHANNEL_TERMINAL or next_state_dict.get(
+            "status"
+        ) in ["reward_calc", "finished"]
 
         # 5. Set next_state on the last transition
         self.replay_buffer.set_next_state(self.current_uuid, next_state_dict)
 
-        if next_state_dict.get("status") in ["reward_calc", "finished"]:
+        if is_terminal:
             # ── TERMINAL ──
             # Compute ALL per-step rewards retroactively
             transitions = self.replay_buffer.get_transitions(self.current_uuid)
