@@ -1,5 +1,6 @@
 import os
 import argparse
+import random
 import mlflow
 import torch
 import numpy as np
@@ -8,7 +9,7 @@ from optuna.pruners import MedianPruner
 
 from network_gateway import NetworkGateway
 from preprocessor import Preprocessor
-from model import TestGraphNetwork
+from gnn_architectures import ARCHITECTURE_NAMES, build_gnn, maybe_torch_compile
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
@@ -84,6 +85,11 @@ parser = argparse.ArgumentParser(description="Start GNN RL Pipeline with SB3 & O
 parser.add_argument("--experiment", type=str, default="nur_f", choices=["nur_f", "f_fp_roh", "kein_inv"])
 parser.add_argument("--timesteps", type=int, default=10000, help="Timesteps per trial")
 parser.add_argument("--n_trials", type=int, default=50, help="Number of optuna trials")
+parser.add_argument(
+    "--no-torch-compile",
+    action="store_true",
+    help="Disable torch.compile on the GNN (default: try compile with dynamic shapes, fall back on error).",
+)
 args = parser.parse_args()
 
 RECEIVER_PORT = 5650
@@ -112,17 +118,29 @@ study = None
 
 def objective(trial):
     print(f"\n--- Starting Trial {trial.number} ---")
-    
+
     # 1. Sample Hyperparameters
+    random_seed = trial.suggest_int("random_seed", 0, 99_999)
+    random.seed(random_seed)
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(random_seed)
+
     # PPO Parameters
     learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
     gamma = trial.suggest_float("gamma", 0.9, 0.999)
     ent_coef = trial.suggest_float("ent_coef", 1e-8, 1e-2, log=True)
-    
+
     # GNN Parameters
+    gnn_architecture = trial.suggest_categorical("gnn_architecture", ARCHITECTURE_NAMES)
     hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
     heads = trial.suggest_categorical("heads", [2, 4, 8])
-    
+
+    print(
+        f"  Trial {trial.number}: arch={gnn_architecture} seed={random_seed} "
+        f"torch_compile={not args.no_torch_compile}"
+    )
     # Reward Shaping Parameters
     alpha = trial.suggest_float("alpha", 0.1, 5.0)
     basis_reward = trial.suggest_float("basis_reward", 0.1, 2.0)
@@ -146,7 +164,13 @@ def objective(trial):
     env = Monitor(base_env)
     
     # 3. GNN Modell initialisieren
-    gnn_model = TestGraphNetwork(input_dim=5, hidden_dim=hidden_dim, global_dim=9, heads=heads)
+    gnn_model = build_gnn(
+        gnn_architecture,
+        input_dim=5,
+        hidden_dim=hidden_dim,
+        global_dim=9,
+        heads=heads,
+    )
     
     policy_kwargs = dict(
         features_extractor_class=CustomGNNFeaturesExtractor,
@@ -161,8 +185,13 @@ def objective(trial):
         gamma=gamma,
         ent_coef=ent_coef,
         policy_kwargs=policy_kwargs, 
-        verbose=0
+        verbose=0,
+        seed=random_seed,
     )
+
+    if not args.no_torch_compile:
+        fe = model.policy.features_extractor
+        fe.gnn = maybe_torch_compile(fe.gnn, enabled=True)
     
     # 5. Training
     optuna_callback = CustomOptunaCallback(trial, study, check_freq=500)

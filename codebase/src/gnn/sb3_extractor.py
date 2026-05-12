@@ -7,7 +7,7 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
     """
     Custom feature extractor for Stable Baselines 3 that handles padded graph data 
     from the Dict observation space, un-pads them, constructs a PyTorch Geometric Batch,
-    and runs them through the TestGraphNetwork.
+    and runs them through the graph stack (GATv2 / GCN / SAGE / GIN).
     """
     def __init__(self, observation_space, gnn_model, features_dim=128):
         # We assume the output of the GNN is features_dim
