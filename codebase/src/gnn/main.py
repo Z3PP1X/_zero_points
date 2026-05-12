@@ -16,6 +16,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from mathematica_env import MathematicaGraphEnv
+from mathematica_vec_env import MathematicaVecEnv
 from sb3_extractor import CustomGNNFeaturesExtractor
 from reward import RewardCalculator
 
@@ -90,6 +91,27 @@ parser.add_argument(
     action="store_true",
     help="Disable torch.compile on the GNN (default: try compile with dynamic shapes, fall back on error).",
 )
+parser.add_argument(
+    "--num_envs",
+    type=int,
+    default=1,
+    help=(
+        "Number of concurrent slots in the vectorized env (= in-flight UUIDs). "
+        "1 keeps the original synchronous behaviour. Higher values let "
+        "Mathematica process problems concurrently while Python batches inference. "
+        "Should match (or be <=) the batch size Mathematica is willing to push."
+    ),
+)
+parser.add_argument(
+    "--n_steps",
+    type=int,
+    default=None,
+    help=(
+        "Override PPO rollout length per env (defaults to PPO's built-in 2048). "
+        "With --num_envs > 1, the rollout buffer is n_steps * num_envs, so reduce "
+        "n_steps accordingly to keep memory and update frequency reasonable."
+    ),
+)
 args = parser.parse_args()
 
 RECEIVER_PORT = 5650
@@ -153,15 +175,24 @@ def objective(trial):
         alpha=alpha
     )
     
-    base_env = MathematicaGraphEnv(
-        gateway=pipeline, 
-        preprocessor=preprocessor, 
-        reward_calculator=reward_calc,
-        max_nodes=200,   
-        max_edges=1000
-    )
-    # Wrap in Monitor to track episode rewards in model.ep_info_buffer
-    env = Monitor(base_env)
+    if args.num_envs == 1:
+        base_env = MathematicaGraphEnv(
+            gateway=pipeline,
+            preprocessor=preprocessor,
+            reward_calculator=reward_calc,
+            max_nodes=200,
+            max_edges=1000,
+        )
+        env = Monitor(base_env)
+    else:
+        env = MathematicaVecEnv(
+            num_envs=args.num_envs,
+            gateway=pipeline,
+            preprocessor=preprocessor,
+            reward_calculator=reward_calc,
+            max_nodes=200,
+            max_edges=1000,
+        )
     
     # 3. GNN Modell initialisieren
     gnn_model = build_gnn(
@@ -177,17 +208,18 @@ def objective(trial):
         features_extractor_kwargs=dict(gnn_model=gnn_model, features_dim=hidden_dim)
     )
     
-    # 4. PPO Modell erstellen
-    model = PPO(
-        "MultiInputPolicy", 
-        env, 
+    ppo_kwargs = dict(
         learning_rate=learning_rate,
         gamma=gamma,
         ent_coef=ent_coef,
-        policy_kwargs=policy_kwargs, 
+        policy_kwargs=policy_kwargs,
         verbose=0,
         seed=random_seed,
     )
+    if args.n_steps is not None:
+        ppo_kwargs["n_steps"] = args.n_steps
+
+    model = PPO("MultiInputPolicy", env, **ppo_kwargs)
 
     if not args.no_torch_compile:
         fe = model.policy.features_extractor
@@ -203,20 +235,34 @@ def objective(trial):
         model.learn(total_timesteps=args.timesteps, callback=optuna_callback)
         
         # 6. Handle Episode State after training (or pruning)
-        # Check if we need to flush the environment (Mathematica blocked mid-episode)
-        unwrapped_env = env.unwrapped
-        if unwrapped_env.current_state_dict is not None:
-            status = unwrapped_env.current_state_dict.get("status")
-            if status not in ["reward_calc", "finished"]:
-                print("[Main] Flushing unfinished Mathematica episode...")
-                while unwrapped_env.current_state_dict.get("status") not in ["reward_calc", "finished"]:
-                    obs, reward, term, trunc, info = env.step(env.action_space.sample())
-                    if term or trunc:
-                        break
-        
-        # Clean up any leftover replay buffer entries
-        if unwrapped_env.current_uuid and unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid):
-            unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
+        if isinstance(env, MathematicaVecEnv):
+            # Vec env: just drop local slot/replay state. Mathematica's
+            # in-flight messages for retired UUIDs are dropped on the next
+            # reset() via _route_event's unknown-UUID guard.
+            env.close()
+        else:
+            # Single env: try to flush an unfinished Mathematica episode so
+            # the solver does not stall mid-problem on the next trial.
+            unwrapped_env = env.unwrapped
+            if unwrapped_env.current_state_dict is not None:
+                status = unwrapped_env.current_state_dict.get("status")
+                if status not in ["reward_calc", "finished"]:
+                    print("[Main] Flushing unfinished Mathematica episode...")
+                    while unwrapped_env.current_state_dict.get("status") not in [
+                        "reward_calc",
+                        "finished",
+                    ]:
+                        obs, reward, term, trunc, info = env.step(
+                            env.action_space.sample()
+                        )
+                        if term or trunc:
+                            break
+
+            if (
+                unwrapped_env.current_uuid
+                and unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid)
+            ):
+                unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
         
         # Handle Pruning
         if optuna_callback.is_pruned:
