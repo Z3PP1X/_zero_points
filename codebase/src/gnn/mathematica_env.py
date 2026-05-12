@@ -10,6 +10,28 @@ from replay_buffer import EpisodeReplayBuffer
 logger = logging.getLogger(__name__)
 
 
+def decode_action_to_solver_tol(action, state_dict: dict) -> tuple:
+    """
+    Mappt die kontinuierliche Policy-Aktion auf Solver und Toleranz.
+
+    Returns:
+        (chosen_solver: int, chosen_tol: float, action_dict: dict)
+    """
+    chosen_solver = 1 if action[0] > 0 else 0
+
+    base_tol = state_dict.get("tolerance", 1e-15)
+    log_tol_base = math.log10(base_tol)
+    log_tol_min = log_tol_base - 4.0
+    log_tol_max = log_tol_base + 4.0
+
+    scale_factor = (action[1] + 1.0) / 2.0
+    log10_tol = log_tol_min + scale_factor * (log_tol_max - log_tol_min)
+    chosen_tol = 10.0 ** log10_tol
+
+    action_dict = {"solver": chosen_solver, "localMaxTolerance": chosen_tol}
+    return chosen_solver, chosen_tol, action_dict
+
+
 class MathematicaGraphEnv(gym.Env):
     """
     Gymnasium environment for interacting with Mathematica via ZeroMQ.
@@ -165,20 +187,9 @@ class MathematicaGraphEnv(gym.Env):
         Returns:
             Tuple of (observation, reward, terminated, truncated, info).
         """
-        # 1. Decode action
-        chosen_solver = 1 if action[0] > 0 else 0
-
-        # Tolerance mapping: Action [-1, 1] mapped to log-space around base tolerance
-        base_tol = self.current_state_dict.get("tolerance", 1e-15)
-        log_tol_base = math.log10(base_tol)
-        log_tol_min = log_tol_base - 4.0
-        log_tol_max = log_tol_base + 4.0
-
-        scale_factor = (action[1] + 1.0) / 2.0  # Map [-1, 1] to [0, 1]
-        log10_tol = log_tol_min + scale_factor * (log_tol_max - log_tol_min)
-        chosen_tol = 10.0 ** log10_tol
-
-        action_dict = {"solver": chosen_solver, "localMaxTolerance": chosen_tol}
+        chosen_solver, chosen_tol, action_dict = decode_action_to_solver_tol(
+            action, self.current_state_dict
+        )
 
         # 2. Record transition in replay buffer (next_state still unknown)
         self.replay_buffer.add_transition(

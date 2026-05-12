@@ -15,8 +15,14 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
 from mathematica_env import MathematicaGraphEnv
+from async_mathematica_vec_env import AsyncMathematicaVecEnv
 from sb3_extractor import CustomGNNFeaturesExtractor
 from reward import RewardCalculator
+
+try:
+    from stable_baselines3.common.vec_env.vec_monitor import VecMonitor
+except ImportError:
+    VecMonitor = None
 
 # --- Custom Optuna Callback ---
 class CustomOptunaCallback(BaseCallback):
@@ -84,6 +90,12 @@ parser = argparse.ArgumentParser(description="Start GNN RL Pipeline with SB3 & O
 parser.add_argument("--experiment", type=str, default="nur_f", choices=["nur_f", "f_fp_roh", "kein_inv"])
 parser.add_argument("--timesteps", type=int, default=10000, help="Timesteps per trial")
 parser.add_argument("--n_trials", type=int, default=50, help="Number of optuna trials")
+parser.add_argument(
+    "--n_envs",
+    type=int,
+    default=1,
+    help="Parallele Mathematica-Slots (1=Single-Env). Async Collector + UUID-Routing.",
+)
 args = parser.parse_args()
 
 RECEIVER_PORT = 5650
@@ -145,15 +157,30 @@ def objective(trial):
         solver_wrong_slow_coef=solver_wrong_slow_coef,
     )
     
-    base_env = MathematicaGraphEnv(
-        gateway=pipeline, 
-        preprocessor=preprocessor, 
-        reward_calculator=reward_calc,
-        max_nodes=200,   
-        max_edges=1000
-    )
-    # Wrap in Monitor to track episode rewards in model.ep_info_buffer
-    env = Monitor(base_env)
+    max_nodes, max_edges = 200, 1000
+    if args.n_envs < 1:
+        raise ValueError("--n_envs muss >= 1 sein.")
+
+    vec_for_flush = None
+    if args.n_envs == 1:
+        base_env = MathematicaGraphEnv(
+            gateway=pipeline,
+            preprocessor=preprocessor,
+            reward_calculator=reward_calc,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
+        env = Monitor(base_env)
+    else:
+        vec_for_flush = AsyncMathematicaVecEnv(
+            gateway=pipeline,
+            preprocessor=preprocessor,
+            reward_calculator=reward_calc,
+            num_envs=args.n_envs,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
+        env = VecMonitor(vec_for_flush) if VecMonitor is not None else vec_for_flush
     
     # 3. GNN Modell initialisieren
     gnn_model = TestGraphNetwork(input_dim=5, hidden_dim=hidden_dim, global_dim=9, heads=heads)
@@ -163,15 +190,19 @@ def objective(trial):
         features_extractor_kwargs=dict(gnn_model=gnn_model, features_dim=hidden_dim)
     )
     
-    # 4. PPO Modell erstellen
+    # 4. PPO Modell erstellen (n_steps Vielfaches von n_envs für VecEnv)
+    target_rollout = 2048
+    n_steps = max((target_rollout // args.n_envs) * args.n_envs, args.n_envs)
+
     model = PPO(
-        "MultiInputPolicy", 
-        env, 
+        "MultiInputPolicy",
+        env,
         learning_rate=learning_rate,
         gamma=gamma,
         ent_coef=ent_coef,
-        policy_kwargs=policy_kwargs, 
-        verbose=0
+        n_steps=n_steps,
+        policy_kwargs=policy_kwargs,
+        verbose=0,
     )
     
     # 5. Training
@@ -184,20 +215,29 @@ def objective(trial):
         model.learn(total_timesteps=args.timesteps, callback=optuna_callback)
         
         # 6. Handle Episode State after training (or pruning)
-        # Check if we need to flush the environment (Mathematica blocked mid-episode)
-        unwrapped_env = env.unwrapped
-        if unwrapped_env.current_state_dict is not None:
-            status = unwrapped_env.current_state_dict.get("status")
-            if status not in ["reward_calc", "finished"]:
-                print("[Main] Flushing unfinished Mathematica episode...")
-                while unwrapped_env.current_state_dict.get("status") not in ["reward_calc", "finished"]:
-                    obs, reward, term, trunc, info = env.step(env.action_space.sample())
-                    if term or trunc:
-                        break
-        
-        # Clean up any leftover replay buffer entries
-        if unwrapped_env.current_uuid and unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid):
-            unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
+        if args.n_envs == 1:
+            unwrapped_env = env.unwrapped
+            if unwrapped_env.current_state_dict is not None:
+                status = unwrapped_env.current_state_dict.get("status")
+                if status not in ["reward_calc", "finished"]:
+                    print("[Main] Flushing unfinished Mathematica episode...")
+                    while unwrapped_env.current_state_dict.get("status") not in [
+                        "reward_calc",
+                        "finished",
+                    ]:
+                        obs, reward, term, trunc, info = env.step(
+                            env.action_space.sample()
+                        )
+                        if term or trunc:
+                            break
+            if unwrapped_env.current_uuid and unwrapped_env.replay_buffer.has_episode(
+                unwrapped_env.current_uuid
+            ):
+                unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
+        else:
+            if vec_for_flush is not None:
+                print("[Main] Flushing unfinished VecEnv slots (falls nötig)...")
+                vec_for_flush.flush_unfinished_slots()
         
         # Handle Pruning
         if optuna_callback.is_pruned:
