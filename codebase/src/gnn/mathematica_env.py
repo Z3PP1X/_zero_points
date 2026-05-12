@@ -106,6 +106,9 @@ class MathematicaGraphEnv(gym.Env):
         while True:
             try:
                 channel, payload = self.gateway.event_queue.get(timeout=0.1)
+                # Skip legacy terminal states sent on the state port
+                if channel == CHANNEL_STATE and payload.get("status") in ("reward_calc", "finished"):
+                    continue
                 return channel, payload
             except queue.Empty:
                 if not self.gateway.running:
@@ -216,9 +219,7 @@ class MathematicaGraphEnv(gym.Env):
 
         # 4. Wait for next observation (state port) or terminal (reward port)
         next_channel, next_state_dict = self._wait_for_next_event()
-        is_terminal = next_channel == CHANNEL_TERMINAL or next_state_dict.get(
-            "status"
-        ) in ["reward_calc", "finished"]
+        is_terminal = next_channel == CHANNEL_TERMINAL
 
         # 5. Set next_state on the last transition
         self.replay_buffer.set_next_state(self.current_uuid, next_state_dict)

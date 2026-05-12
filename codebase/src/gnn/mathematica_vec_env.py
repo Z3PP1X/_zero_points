@@ -34,7 +34,7 @@ import numpy as np
 from gymnasium import spaces
 from stable_baselines3.common.vec_env import VecEnv
 
-from network_gateway import CHANNEL_TERMINAL
+from network_gateway import CHANNEL_STATE, CHANNEL_TERMINAL
 from replay_buffer import EpisodeReplayBuffer
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,10 @@ class MathematicaVecEnv(VecEnv):
         # or events received during reset). Kept here until step_wait drains.
         self._pending_step_responses: Dict[str, Event] = {}
 
+        # Terminal events that arrived for a UUID which is in _fresh_states
+        # (received but not yet assigned to a slot). Consumed in _fill_slot.
+        self._pending_terminals: Dict[str, Event] = {}
+
         # Shared episode replay buffer (UUID-keyed); reused across slots.
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
 
@@ -176,10 +180,7 @@ class MathematicaVecEnv(VecEnv):
 
     @staticmethod
     def _is_terminal(channel: str, payload: Dict[str, Any]) -> bool:
-        return channel == CHANNEL_TERMINAL or payload.get("status") in (
-            "reward_calc",
-            "finished",
-        )
+        return channel == CHANNEL_TERMINAL
 
     @staticmethod
     def _payload_uuid(payload: Dict[str, Any]) -> str:
@@ -192,7 +193,11 @@ class MathematicaVecEnv(VecEnv):
         """Block until the next ``(channel, payload)`` arrives from the gateway."""
         while True:
             try:
-                return self.gateway.event_queue.get(timeout=0.1)
+                channel, payload = self.gateway.event_queue.get(timeout=0.1)
+                # Skip legacy terminal states sent on the state port
+                if channel == CHANNEL_STATE and payload.get("status") in ("reward_calc", "finished"):
+                    continue
+                return channel, payload
             except queue.Empty:
                 if not self.gateway.running:
                     raise InterruptedError("Gateway stopped running.")
@@ -212,9 +217,19 @@ class MathematicaVecEnv(VecEnv):
             return
 
         if self._is_terminal(channel, payload):
-            logger.warning(
-                "Dropping terminal/reward event for unknown UUID %s", uuid
-            )
+            if uuid in self._fresh_uuids:
+                # Problem completed before Python assigned it to a slot.
+                # Buffer the terminal so _fill_slot can handle it immediately.
+                logger.debug(
+                    "Buffering early terminal for fresh UUID %s", uuid
+                )
+                self._pending_terminals[uuid] = (channel, payload)
+            else:
+                logger.debug(
+                    "Dropping terminal/reward event for untracked UUID %s "
+                    "(Mathematica processed more problems than num_envs slots).",
+                    uuid,
+                )
             return
 
         if uuid in self._fresh_uuids:
@@ -246,6 +261,13 @@ class MathematicaVecEnv(VecEnv):
         pyg_data, _ = self.preprocessor.process(state_dict, dataloader=None)
         self._slot_obs[slot] = self._pad_graph(pyg_data)
 
+        # If Mathematica already sent a terminal for this UUID before we slotted
+        # it, move it to pending_step_responses so step_wait handles it on the
+        # very first response cycle for this slot.
+        if uuid in self._pending_terminals:
+            logger.debug("Recovering buffered terminal for newly-slotted UUID %s", uuid)
+            self._pending_step_responses[uuid] = self._pending_terminals.pop(uuid)
+
     def _stack_obs(self) -> Dict[str, np.ndarray]:
         return {
             key: np.stack(
@@ -267,6 +289,7 @@ class MathematicaVecEnv(VecEnv):
         self._fresh_states.clear()
         self._fresh_uuids.clear()
         self._pending_step_responses.clear()
+        self._pending_terminals.clear()
 
     # ------------------------------------------------------------------ #
     # VecEnv API
