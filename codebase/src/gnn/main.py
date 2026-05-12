@@ -127,12 +127,22 @@ def objective(trial):
     alpha = trial.suggest_float("alpha", 0.1, 5.0)
     basis_reward = trial.suggest_float("basis_reward", 0.1, 2.0)
     reward_gamma = trial.suggest_float("reward_gamma", 0.9, 0.999)
-    
+    step_cost_lambda = trial.suggest_float("step_cost_lambda", 1e-4, 0.5, log=True)
+    time_bad_penalty = trial.suggest_float("time_bad_penalty", 0.1, 5.0)
+    solver_mismatch_penalty = trial.suggest_float("solver_mismatch_penalty", 0.05, 2.0)
+    solver_match_bonus = trial.suggest_float("solver_match_bonus", 0.0, 0.5)
+    solver_wrong_slow_coef = trial.suggest_float("solver_wrong_slow_coef", 0.0, 2.0)
+
     # 2. RewardCalculator und Environment initialisieren
     reward_calc = RewardCalculator(
         basis_reward=basis_reward,
         gamma=reward_gamma,
-        alpha=alpha
+        alpha=alpha,
+        step_cost_lambda=step_cost_lambda,
+        time_bad_penalty=time_bad_penalty,
+        solver_mismatch_penalty=solver_mismatch_penalty,
+        solver_match_bonus=solver_match_bonus,
+        solver_wrong_slow_coef=solver_wrong_slow_coef,
     )
     
     base_env = MathematicaGraphEnv(
