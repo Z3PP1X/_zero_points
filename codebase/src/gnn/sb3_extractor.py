@@ -1,7 +1,7 @@
 import torch
-import torch.nn as nn
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch_geometric.data import Batch, Data
+
 
 class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
     """
@@ -17,9 +17,19 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
     def forward(self, observations):
         # observations is a dict of batched tensors
         # SB3 automatically batches the inputs (batch_size, ...)
-        
+        device = next(self.gnn.parameters()).device
         batch_size = observations["x"].shape[0]
-        
+
+        # Single-env (batch_size == 1): skip PyG Batch construction overhead.
+        if batch_size == 1:
+            num_nodes = int(observations["num_nodes"][0].item())
+            num_edges = int(observations["num_edges"][0].item())
+            x = observations["x"][0, :num_nodes, :].to(device)
+            edge_index = observations["edge_index"][0, :, :num_edges].long().to(device)
+            global_features = observations["global_features"][0, :].unsqueeze(0).to(device)
+            batch_index = torch.zeros(x.size(0), dtype=torch.long, device=device)
+            return self.gnn(x, edge_index, batch_index, global_features)
+
         data_list = []
         for i in range(batch_size):
             # Extract the actual number of nodes and edges for this sample
@@ -36,11 +46,7 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
             data = Data(x=x, edge_index=edge_index, global_features=global_features)
             data_list.append(data)
             
-        # Create a PyTorch Geometric batch
         pyg_batch = Batch.from_data_list(data_list)
-        
-        # Ensure devices match
-        device = next(self.gnn.parameters()).device
         pyg_batch = pyg_batch.to(device)
         
         # Forward pass through the GNN

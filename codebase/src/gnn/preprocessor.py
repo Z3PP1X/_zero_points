@@ -60,16 +60,20 @@ class Preprocessor:
             template = self.converter.convert(raw_graph, heterogeneous=False)
             self._static_template_cache[cache_key] = template
 
-        data = self._static_template_cache[cache_key].clone()
-
-        # 4. Globale Features als Tensor an das Data-Objekt hängen 
-        # (wird im Batch automatisch korrekt zusammengefasst)
+        template = self._static_template_cache[cache_key]
+        # Share static topology tensors (no clone): only global_features vary per message.
+        # Downstream must not mutate template.x / edge_index in-place.
         feat_list = [extracted_features[k] for k in keys_to_extract]
-        raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0) # Shape [1, 9]
+        raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0)  # Shape [1, 9]
         
         # Symmetrische logarithmische Normalisierung: y = sign(x) * ln(1 + |x|)
         # Verhindert, dass extrem große Werte das neuronale Netz übersättigen.
-        data.global_features = torch.sign(raw_tensor) * torch.log1p(torch.abs(raw_tensor))
+        global_features = torch.sign(raw_tensor) * torch.log1p(torch.abs(raw_tensor))
+        data = Data(
+            x=template.x,
+            edge_index=template.edge_index,
+            global_features=global_features,
+        )
 
         # Metadaten anhängen
         data.uuid = message.get("uuid")
