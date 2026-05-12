@@ -35,7 +35,11 @@ from replay_buffer import EpisodeReplayBuffer
 logger = logging.getLogger(__name__)
 
 try:
-    from stable_baselines3.common.vec_env.base_vec_env import VecEnv, VecEnvObs, VecEnvStepReturn
+    from stable_baselines3.common.vec_env.base_vec_env import (
+        VecEnv,
+        VecEnvObs,
+        VecEnvStepReturn,
+    )
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "stable_baselines3 wird für AsyncMathematicaVecEnv benötigt."
@@ -129,6 +133,13 @@ class AsyncMathematicaVecEnv(VecEnv):
 
     def env_method(self, method_name: str, *method_args, indices=None, **method_kwargs) -> list[Any]:
         raise NotImplementedError("AsyncMathematicaVecEnv unterstützt env_method nicht.")
+
+    def env_is_wrapped(self, wrapper_class: type, indices=None) -> list[bool]:
+        """
+        SB3 VecEnv-API: Keine eingebetteten gym.Wrapper pro Slot — Wrapping passiert
+        außerhalb (z. B. VecMonitor).
+        """
+        return [False for _ in self._indices_to_list(indices)]
 
     def close(self) -> None:
         self._step_async_pending = False
