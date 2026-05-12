@@ -54,6 +54,8 @@ python main.py [OPTIONEN]
 | `--timesteps` | `10000` | PPO-Umgebungsschritte pro Optuna-Trial. |
 | `--n_trials` | `50` | Anzahl Optuna-Trials pro Studien-Lauf. |
 | `--no-torch-compile` | aus | Wenn gesetzt: kein `torch.compile` auf dem GNN (sonst Versuch mit dynamischen Shapes, bei Fehler Fallback laut `maybe_torch_compile`). |
+| `--num_envs` | `1` | Anzahl gleichzeitig aktiver Slots (= in-flight UUIDs) in der **vektorisierten** Umgebung. `1` = bisheriges synchrones Verhalten. Höhere Werte lassen Mathematica mehrere Probleme parallel bearbeiten und bündeln die Policy-Inferenz pro PPO-Step. Sollte ≤ Mathematica-Batchgröße sein. |
+| `--n_steps` | PPO-Default (2048) | PPO-Rolloutlänge **pro Slot**. Mit `--num_envs > 1` wächst der Rollout-Buffer auf `n_steps * num_envs`; entsprechend `n_steps` reduzieren, um Speicher und Update-Frequenz vernünftig zu halten. |
 
 Hilfe anzeigen:
 
@@ -106,7 +108,8 @@ Weitere gesampelte Netz-Hyperparameter: `hidden_dim` ∈ {64, 128, 256}, `heads`
 | Datei | Rolle |
 |-------|--------|
 | `main.py` | Einstieg, Argumente, Gateway/Preprocessor, Optuna-Objective, MLflow-Runs |
-| `mathematica_env.py` | Gymnasium-Env, Beobachtungsraum, Episode-Logik |
+| `mathematica_env.py` | Gymnasium-Env, Beobachtungsraum, Episode-Logik (single-stream) |
+| `mathematica_vec_env.py` | Slot-basierte SB3-`VecEnv` über denselben Gateway: hält `num_envs` UUIDs gleichzeitig in-flight, sendet pro PPO-Step `num_envs` Actions als Batch, routet Antworten per UUID auf Slots zurück und füllt fertige Slots aus dem Pool frischer Initial-States nach. |
 | `network_gateway.py` | ZeroMQ-Bridge, Event-Queue |
 | `preprocessor.py` | Graph laden/cachen, Features aus Nachricht |
 | `reward.py` | Episode-Reward-Shaping |
@@ -141,4 +144,10 @@ Anderes Graph-Set, Torch-Compile deaktivieren (Debugging / ältere GPUs):
 
 ```bash
 python main.py --experiment f_fp_roh --no-torch-compile
+```
+
+Vectorized-Run mit 64 parallelen Slots und kürzerem Rollout pro Slot (Mathematica muss mind. 64 Probleme gleichzeitig liefern können):
+
+```bash
+python main.py --num_envs 64 --n_steps 64 --timesteps 50000
 ```
