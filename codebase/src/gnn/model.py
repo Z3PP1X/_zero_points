@@ -19,19 +19,10 @@ class TestGraphNetwork(nn.Module):
             nn.Dropout(0.2),
         )
         
-        # Head 1: Solver (Binäre Entscheidung 0 oder 1)
-        self.solver_head = nn.Sequential(
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
-        )
-        
-        # Head 2: Tolerance Skalierungsfaktor (0 bis 1)
-        self.tolerance_head = nn.Sequential(
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()
-        )
-        
         self.activation = LeakyReLU()
+        
+        # Output dimension for SB3
+        self.output_dim = hidden_dim
 
     @classmethod
     def from_pipeline(cls, pipeline, **kwargs):
@@ -54,9 +45,5 @@ class TestGraphNetwork(nn.Module):
 
         # Durch das gemeinsame MLP
         shared_rep = self.shared(x)
-        
-        # Beide Heads berechnen
-        solver_prob = self.solver_head(shared_rep)
-        tolerance_scale = self.tolerance_head(shared_rep)
 
-        return solver_prob, tolerance_scale
+        return shared_rep

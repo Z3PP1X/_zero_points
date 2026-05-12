@@ -2,7 +2,7 @@ import os
 import json
 import networkx as nx
 from typing import Dict, Any
-from graph_construction import ExpressionGraphConverter
+from graph_utils import ExpressionGraphConverter
 
 class Preprocessor:
     def __init__(self, graphs_dir: str):

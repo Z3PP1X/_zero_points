@@ -66,14 +66,12 @@ class NetworkGateway():
                 socks = dict(self.poller.poll(timeout=100))
                 if self.receiver in socks and socks[self.receiver] == zmq.POLLIN:
                     message = self.receiver.recv_json()
-                    # print(f"[Gateway] Received on 5650: {message.get('status', 'NO_STATUS')} (id={message.get('id', 'NO_ID')})")
                     self.network_queue.put(message)
                 if (
                     self.reward_receiver in socks
                     and socks[self.reward_receiver] == zmq.POLLIN
                 ):
                     reward_state = self.reward_receiver.recv_json()
-                    # print(f"[Gateway] Received on reward port: {reward_state.get('status', 'NO_STATUS')} (id={reward_state.get('id', 'NO_ID')})")
                     self.network_queue.put(reward_state)
 
         except Exception as e:

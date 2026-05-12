@@ -1,25 +1,89 @@
+import os
+import argparse
+import mlflow
 import torch
+import numpy as np
+import optuna
+from optuna.pruners import MedianPruner
+
 from network_gateway import NetworkGateway
 from preprocessor import Preprocessor
-from dataloader import GraphDataLoader
-from replay_buffer import ReplayBuffer
 from model import TestGraphNetwork
-from reward import RewardCalculator
-import time
-import queue
-import mlflow
-import argparse
-import os
 
-# --- Argument Parsing ---
-parser = argparse.ArgumentParser(description="Start GNN RL Pipeline")
-parser.add_argument(
-    "--experiment", 
-    type=str, 
-    default="nur_f", 
-    choices=["nur_f", "f_fp_roh", "kein_inv"], 
-    help="Welcher Graph-Struktur-Ordner verwendet werden soll."
-)
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.monitor import Monitor
+
+from mathematica_env import MathematicaGraphEnv
+from sb3_extractor import CustomGNNFeaturesExtractor
+from reward import RewardCalculator
+
+# --- Custom Optuna Callback ---
+class CustomOptunaCallback(BaseCallback):
+    """
+    SB3 Callback that reports metrics to Optuna and prints live
+    training statistics to the console.
+
+    Args:
+        trial: The current Optuna trial.
+        study: The Optuna study (used to show best-so-far).
+        check_freq: How often (in timesteps) to print and report.
+    """
+    def __init__(self, trial: optuna.Trial, study: optuna.Study, check_freq: int = 500):
+        super().__init__()
+        self.trial = trial
+        self.study = study
+        self.check_freq = check_freq
+        self.is_pruned = False
+    
+    def _on_step(self) -> bool:
+        if self.n_calls % self.check_freq == 0:
+            ep_buf = self.model.ep_info_buffer
+            n_episodes = len(ep_buf)
+
+            if n_episodes > 0:
+                rewards = [ep["r"] for ep in ep_buf]
+                mean_reward = np.mean(rewards)
+                best_ep_reward = np.max(rewards)
+                worst_ep_reward = np.min(rewards)
+
+                # Report to Optuna
+                self.trial.report(mean_reward, self.num_timesteps)
+
+                # Best study value so far
+                try:
+                    study_best = self.study.best_value
+                except ValueError:
+                    study_best = float('nan')
+
+                print(
+                    f"  [Trial {self.trial.number:>3}] "
+                    f"Steps: {self.num_timesteps:>6} | "
+                    f"Episodes: {n_episodes:>3} | "
+                    f"Mean R: {mean_reward:>8.3f} | "
+                    f"Best Ep: {best_ep_reward:>8.3f} | "
+                    f"Worst Ep: {worst_ep_reward:>8.3f} | "
+                    f"Study Best: {study_best:>8.3f}"
+                )
+
+                # Check for pruning
+                if self.trial.should_prune():
+                    print(f"  [Trial {self.trial.number}] PRUNED at step {self.num_timesteps}")
+                    self.is_pruned = True
+                    return False  # Stops training gracefully
+            else:
+                print(
+                    f"  [Trial {self.trial.number:>3}] "
+                    f"Steps: {self.num_timesteps:>6} | "
+                    f"No episodes completed yet..."
+                )
+        return True
+
+# --- Globals and Argument Parsing ---
+parser = argparse.ArgumentParser(description="Start GNN RL Pipeline with SB3 & Optuna")
+parser.add_argument("--experiment", type=str, default="nur_f", choices=["nur_f", "f_fp_roh", "kein_inv"])
+parser.add_argument("--timesteps", type=int, default=10000, help="Timesteps per trial")
+parser.add_argument("--n_trials", type=int, default=50, help="Number of optuna trials")
 args = parser.parse_args()
 
 RECEIVER_PORT = 5650
@@ -27,199 +91,150 @@ RESULTS_PORT = 5693
 SENDER_PORT = 5651
 CONTROL_PORT = 6000
 
-# mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment(f"GNN_RL_Pipeline_{args.experiment}")
+# Setup MLflow
+mlflow.set_experiment(f"GNN_RL_Optuna_{args.experiment}")
 
 # Initialisierung aller Pipeline-Komponenten
-pipeline = NetworkGateway(receiver_port=RECEIVER_PORT, sender_port=SENDER_PORT, reward_port=RESULTS_PORT, control_port=CONTROL_PORT)
+pipeline = NetworkGateway(
+    receiver_port=RECEIVER_PORT, 
+    sender_port=SENDER_PORT, 
+    reward_port=RESULTS_PORT, 
+    control_port=CONTROL_PORT
+)
 
 graphs_path = os.path.join("graphs", args.experiment)
 print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
-
 preprocessor = Preprocessor(graphs_dir=graphs_path) 
-# batch_size=1: Online-RL erfordert sofortige Verarbeitung pro State.
-# Jede Entscheidung muss zurück nach Mathematica, bevor der nächste State eintrifft.
-# Mit batch_size>1 entsteht ein Race Condition: Der Reward-State kann eintreffen,
-# bevor der Batch voll ist — dann ist der ReplayBuffer leer und das Training wird übersprungen.
-dataloader = GraphDataLoader(batch_size=1)
-replay_buffer = ReplayBuffer()
-reward_calculator = RewardCalculator(basis_reward=1.0, gamma=0.99, alpha=1.0)
-
-# Initialisierung des Netzwerks & Optimizers
-gnn_model = TestGraphNetwork(input_dim=5, hidden_dim=128, global_dim=9, heads=4)
-optimizer = torch.optim.Adam(gnn_model.parameters(), lr=1e-3)
-
-
-# RAM-Zwischenspeicher für States, während sie im Dataloader auf ihr Batch warten
-original_states = {}
-
 pipeline.init()
 
-try:
-    print("Gateway läuft. Warte auf Nachrichten von Mathematica...")
-    with mlflow.start_run():
-        mlflow.set_tag("graph_topology", args.experiment)
-        while pipeline.running:
-            try:
-                # 1. State vom Gateway empfangen (nicht-blockierend mit Timeout)
-                state_dict = pipeline.network_queue.get(timeout=0.1)
-                
-                # --- Terminal States (Training Loop) ---
-                if state_dict.get("status") in ["reward_calc", "finished"]:
-                    uuid = state_dict.get("uuid")
-                    
-                    print(f"\n[Main] Terminal State empfangen für UUID {uuid}")
-                    print(f"Status: {state_dict.get('status')}")
-                    print(f"Terminal State Content: networkStep={state_dict.get('networkStep')}, absTime={state_dict.get('absTime')}, recordAbsTime={state_dict.get('recordAbsTime')}, Benchmarksolver={state_dict.get('Benchmarksolver')}")
-                    
-                    # Episode aus dem Buffer holen
-                    episode = replay_buffer.get_episode(uuid)
-                    
-                    if len(episode) > 0:
-                        # Rewards für die Episode berechnen
-                        reward_calculator.calculate_episode_rewards(episode, state_dict)
-                        
-                        # Re-run Forward Pass for the whole episode to get fresh log_probs
-                        # This avoids the "inplace operation" error caused by shared batch graphs
-                        optimizer.zero_grad()
-                        episode_loss = 0.0
-                        total_reward = sum(t.get("reward", 0.0) for t in episode)
-                        
-                        from torch_geometric.data import Batch
-                        from torch.distributions import Bernoulli
-                        
-                        pyg_graphs = []
-                        valid_transitions = []
-                        for transition in episode:
-                            try:
-                                G, _ = preprocessor.process(transition["current_state"], None)
-                                pyg_graphs.append(G)
-                                valid_transitions.append(transition)
-                            except Exception as e:
-                                print(f"[Main] Error preprocessing state for backward pass: {e}")
-                                
-                        if len(pyg_graphs) > 0:
-                            batch = Batch.from_data_list(pyg_graphs)
-                            solver_probs, tol_scales = gnn_model(batch.x, batch.edge_index, batch.batch, batch.global_features)
-                            
-                            for i, transition in enumerate(valid_transitions):
-                                action = transition.get("action", {})
-                                reward = transition.get("reward", 0.0)
-                                chosen_solver = action.get("solver")
-                                
-                                if chosen_solver is not None:
-                                    solver_prob = solver_probs[i]
-                                    dist_solver = Bernoulli(solver_prob)
-                                    log_prob_solver = dist_solver.log_prob(torch.tensor(float(chosen_solver)))
-                                    
-                                    # REINFORCE: loss = -log_prob * reward
-                                    episode_loss = episode_loss - (log_prob_solver * reward)
-                                    
-                            if isinstance(episode_loss, torch.Tensor):
-                                episode_loss.backward()
-                                optimizer.step()
-                            
-                            # MLflow Logging
-                            mlflow.log_metric("episode_reward", total_reward)
-                            mlflow.log_metric("episode_loss", episode_loss.item())
-                            mlflow.log_metric("episode_length", len(episode))
-                            print(f"[Main] Training Step! Steps: {len(episode)}, Total Reward: {total_reward:.2f}, Loss: {episode_loss.item():.4f}")
-                        
-                        # Episode aus dem Buffer entfernen, um mehrfaches Training (und Crashes) zu vermeiden
-                        replay_buffer.remove_episode(uuid)
-                    
-                    continue # Diesen State nicht weiter durchs Netz jagen!
-                
-                # Überprüfen, ob es ein gültiger State ist
-                if "stateId" in state_dict:
-                    state_id = state_dict["stateId"]
-                    # Original im RAM parken
-                    original_states[state_id] = state_dict
-                    
-                    # 2. Preprocessing & Ab in den Dataloader
-                    G, features = preprocessor.process(state_dict, dataloader)
-                    dataloader.add_graph(G)
-                    
-            except queue.Empty:
-                # Wenn die Queue für 0.1s leer war, einfach weitermachen (verhindert Deadlocks)
-                pass
+# Will be set in __main__ before study.optimize()
+study = None
+
+def objective(trial):
+    print(f"\n--- Starting Trial {trial.number} ---")
+    
+    # 1. Sample Hyperparameters
+    # PPO Parameters
+    learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
+    gamma = trial.suggest_float("gamma", 0.9, 0.999)
+    ent_coef = trial.suggest_float("ent_coef", 1e-8, 1e-2, log=True)
+    
+    # GNN Parameters
+    hidden_dim = trial.suggest_categorical("hidden_dim", [64, 128, 256])
+    heads = trial.suggest_categorical("heads", [2, 4, 8])
+    
+    # Reward Shaping Parameters
+    alpha = trial.suggest_float("alpha", 0.1, 5.0)
+    basis_reward = trial.suggest_float("basis_reward", 0.1, 2.0)
+    reward_gamma = trial.suggest_float("reward_gamma", 0.9, 0.999)
+    
+    # 2. RewardCalculator und Environment initialisieren
+    reward_calc = RewardCalculator(
+        basis_reward=basis_reward,
+        gamma=reward_gamma,
+        alpha=alpha
+    )
+    
+    base_env = MathematicaGraphEnv(
+        gateway=pipeline, 
+        preprocessor=preprocessor, 
+        reward_calculator=reward_calc,
+        max_nodes=200,   
+        max_edges=1000
+    )
+    # Wrap in Monitor to track episode rewards in model.ep_info_buffer
+    env = Monitor(base_env)
+    
+    # 3. GNN Modell initialisieren
+    gnn_model = TestGraphNetwork(input_dim=5, hidden_dim=hidden_dim, global_dim=9, heads=heads)
+    
+    policy_kwargs = dict(
+        features_extractor_class=CustomGNNFeaturesExtractor,
+        features_extractor_kwargs=dict(gnn_model=gnn_model, features_dim=hidden_dim)
+    )
+    
+    # 4. PPO Modell erstellen
+    model = PPO(
+        "MultiInputPolicy", 
+        env, 
+        learning_rate=learning_rate,
+        gamma=gamma,
+        ent_coef=ent_coef,
+        policy_kwargs=policy_kwargs, 
+        verbose=0
+    )
+    
+    # 5. Training
+    optuna_callback = CustomOptunaCallback(trial, study, check_freq=500)
+    
+    with mlflow.start_run(run_name=f"Trial_{trial.number}"):
+        mlflow.log_params(trial.params)
+        
+        # Train
+        model.learn(total_timesteps=args.timesteps, callback=optuna_callback)
+        
+        # 6. Handle Episode State after training (or pruning)
+        # Check if we need to flush the environment (Mathematica blocked mid-episode)
+        unwrapped_env = env.unwrapped
+        if unwrapped_env.current_state_dict is not None:
+            status = unwrapped_env.current_state_dict.get("status")
+            if status not in ["reward_calc", "finished"]:
+                print("[Main] Flushing unfinished Mathematica episode...")
+                while unwrapped_env.current_state_dict.get("status") not in ["reward_calc", "finished"]:
+                    obs, reward, term, trunc, info = env.step(env.action_space.sample())
+                    if term or trunc:
+                        break
+        
+        # Clean up any leftover replay buffer entries
+        if unwrapped_env.current_uuid and unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid):
+            unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
+        
+        # Handle Pruning
+        if optuna_callback.is_pruned:
+            mlflow.set_tag("status", "pruned")
+            raise optuna.TrialPruned()
+        
+        # Calculate Final Metric
+        if len(model.ep_info_buffer) > 0:
+            final_mean_reward = np.mean([ep_info["r"] for ep_info in model.ep_info_buffer])
+        else:
+            final_mean_reward = -float('inf')
             
-            # 3. Wenn der Batch voll ist -> Forward Pass
-            if dataloader.has_batch():
-                batch = dataloader.get_batch()
-                
-                # Forward Pass durch das Modell
-                # batch.x, batch.edge_index und batch.batch werden vom Dataloader bereitgestellt
-                solver_probs, tol_scales = gnn_model(batch.x, batch.edge_index, batch.batch, batch.global_features)
-                
-                num_graphs = len(batch.state_id)
-                
-                # 4. Loop über die Ergebnisse im Batch
-                for i in range(num_graphs):
-                    sid = batch.state_id[i]
-                    
-                    # Originalen State wieder hervorholen und aus dem RAM löschen
-                    if sid in original_states:
-                        orig_state = original_states.pop(sid)
-                        
-                        # --- Entscheidung 1: Solver (Binär) ---
-                        from torch.distributions import Bernoulli, Normal
-                        
-                        solver_prob = solver_probs[i]
-                        # Deterministische Wahl via Schwellenwert
-                        chosen_solver = int(solver_prob.item() > 0.5)
-                        
-                        # Berechnung der Log-Wahrscheinlichkeit für Backpropagation
-                        dist_solver = Bernoulli(solver_prob)
-                        log_prob_solver = dist_solver.log_prob(torch.tensor(float(chosen_solver)))
-                        
-                        # --- Entscheidung 2: Tolerance (Log-Space Mapping) ---
-                        # Wir zentrieren den Log-Raum um die vom Problem gegebene globale Toleranz.
-                        import math
-                        base_tol = orig_state.get("tolerance", 1e-15)
-                        LOG_TOL_BASE = math.log10(base_tol) # z.B. -15.0
-                        
-                        # Das Netz darf die Toleranz um z.B. +/- 4 Größenordnungen variieren
-                        LOG_TOL_MIN = LOG_TOL_BASE - 4.0
-                        LOG_TOL_MAX = LOG_TOL_BASE + 4.0
-                        
-                        scale_factor = tol_scales[i]  # Sigmoid-Output in (0, 1)
-                        # Untrainiert (Sigmoid = 0.5) => log10_tol = LOG_TOL_BASE
-                        log10_tol = LOG_TOL_MIN + scale_factor.item() * (LOG_TOL_MAX - LOG_TOL_MIN)
-                        chosen_tol = 10.0 ** log10_tol
-                        
-                        # REINFORCE log_prob operiert auf dem Sigmoid-Output (dem echten Policy-Parameter).
-                        # Normal-Verteilung mit kleiner Varianz um den aktuellen Wert herum.
-                        dist_tol = Normal(scale_factor, 0.1)
-                        log_prob_tol = dist_tol.log_prob(scale_factor.detach())
-                        
-                        # Action als Dictionary im Replay Buffer speichern inkl. der log_probs
-                        action_dict = {
-                            "solver": chosen_solver, 
-                            "localMaxTolerance": chosen_tol,
-                            "log_prob_solver": log_prob_solver,
-                            "log_prob_tol": log_prob_tol
-                        }
-                        replay_buffer.store(state=orig_state, action=action_dict)
-                        
-                        response_state = orig_state.copy()
-                        response_state["solver"] = int(chosen_solver)
-                        response_state["localMaxTolerance"] = float(chosen_tol)
-                        
-                        import json
-                        print(f"\n--- STATE VOR SENDEN ---")
-                        # Nur die wichtigsten Metadaten und die Entscheidungen ausgeben, 
-                        # anstatt die riesigen Arrays (graphs) im Log zu spiegeln:
-                        print_state = {k: v for k, v in response_state.items() if k not in ["nodes", "edges"]}
-                        print(json.dumps(print_state, indent=2))
-                        print(f"------------------------\n")
-                        
-                        # Zurück nach Mathematica funken!
-                        pipeline.send_decision(orig_state, chosen_solver, chosen_tol)
-                        # print(f"[Main] Entscheidung für State {sid} gesendet: Solver={chosen_solver}, Tol={chosen_tol}")
-                        
-except KeyboardInterrupt:
-    print("\nBeende Gateway und räume auf...")
-finally:
-    pipeline.stop()
-    pipeline.cleanup()
+        mlflow.log_metric("final_mean_reward", final_mean_reward)
+        mlflow.set_tag("status", "completed")
+        
+        return final_mean_reward
+
+if __name__ == "__main__":
+    try:
+        # Create SQLite DB for Optuna to resume later
+        study_name = f"gnn_rl_{args.experiment}"
+        storage_name = f"sqlite:///optuna_{args.experiment}.db"
+        
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=storage_name,
+            direction="maximize",
+            load_if_exists=True,
+            pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=2000, interval_steps=1000)
+        )
+        
+        # Make study accessible in the objective function
+        import __main__
+        __main__.study = study
+        
+        study.optimize(objective, n_trials=args.n_trials)
+        
+        print("\n--- OPTUNA STUDY COMPLETED ---")
+        print("Best trial:")
+        trial = study.best_trial
+        print(f"  Value: {trial.value}")
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")
+
+    except KeyboardInterrupt:
+        print("\nAbbruch durch Benutzer. Gateway wird beendet...")
+    finally:
+        pipeline.stop()
+        pipeline.cleanup()
