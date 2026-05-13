@@ -46,7 +46,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--n-envs",
         type=int,
         default=1,
-        help="Anzahl paralleler Mathematica-Environments für SB3-Training.",
+        help=(
+            "Anzahl paralleler Mathematica-Slots für SB3-Training "
+            "(gemeinsames Senden/Sammeln pro VecEnv-Schritt)."
+        ),
     )
     return parser
 

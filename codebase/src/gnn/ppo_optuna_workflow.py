@@ -11,7 +11,7 @@ from optuna.pruners import MedianPruner
 from stable_baselines3 import PPO
 
 from gnn_policy_backbone import build_graph_policy_backbone
-from mathematica_vec_env import build_mathematica_training_env, iter_monitored_envs
+from mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
 from network_gateway import NetworkGateway
 from ppo_optuna_callback import (
     OptunaEpisodeRewardCallback,
@@ -180,8 +180,12 @@ class PpoOptunaWorkflow:
         )
 
     def _finalize_episode_state(self, env) -> None:
-        for monitored_env in iter_monitored_envs(env):
-            self._finalize_single_env_episode(monitored_env)
+        if isinstance(env, MathematicaVecEnv):
+            print("[PpoOptunaWorkflow] Flushing unfinished Mathematica episodes...")
+            env.finalize_open_episodes()
+            return
+
+        self._finalize_single_env_episode(env)
 
     def _finalize_single_env_episode(self, env) -> None:
         unwrapped_env = env.unwrapped
