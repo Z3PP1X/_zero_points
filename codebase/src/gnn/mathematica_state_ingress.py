@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import queue
+import time
+from collections import deque
+from typing import Deque, Dict, Optional
+
+_TERMINAL_STATUSES = frozenset({"reward_calc", "finished", "error", "non_converged"})
+
+
+def episode_uuid(message: dict) -> Optional[str]:
+    uuid = message.get("uuid")
+    if uuid is None:
+        return None
+    return str(uuid)
+
+
+class MathematicaStateIngress:
+    def __init__(self, gateway):
+        self.gateway = gateway
+        self._deferred_by_uuid: Dict[str, dict] = {}
+        self._waiting_init_order: Deque[str] = deque()
+
+    def take_next_training_start(self) -> dict:
+        while True:
+            message = self._take_waiting_init()
+            if message is None:
+                message = self._recv_blocking()
+            status = message.get("status")
+            if status in _TERMINAL_STATUSES:
+                continue
+            if episode_uuid(message) is None:
+                continue
+            return message
+
+    def take_next_for_episode(self, active_uuid: str, timeout_s: Optional[float] = None) -> Optional[dict]:
+        deferred = self._deferred_by_uuid.pop(active_uuid, None)
+        if deferred is not None:
+            self._remove_from_waiting_init(active_uuid)
+            return deferred
+
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        while True:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return None
+            try:
+                wait = 0.1 if remaining is None else min(0.1, remaining)
+                message = self.gateway.network_queue.get(timeout=wait)
+            except queue.Empty:
+                if not self.gateway.running:
+                    raise InterruptedError("Gateway stopped running.")
+                continue
+            message_uuid = episode_uuid(message)
+            if message_uuid == active_uuid:
+                return message
+            self._defer(message)
+
+    def _take_waiting_init(self) -> Optional[dict]:
+        while self._waiting_init_order:
+            uuid = self._waiting_init_order.popleft()
+            message = self._deferred_by_uuid.pop(uuid, None)
+            if message is None:
+                continue
+            if message.get("status") in _TERMINAL_STATUSES:
+                continue
+            if episode_uuid(message) is None:
+                continue
+            return message
+        return None
+
+    def _defer(self, message: dict) -> None:
+        uuid = episode_uuid(message)
+        if uuid is None:
+            return
+        if uuid not in self._deferred_by_uuid and message.get("status") not in _TERMINAL_STATUSES:
+            self._waiting_init_order.append(uuid)
+        self._deferred_by_uuid[uuid] = message
+
+    def _remove_from_waiting_init(self, uuid: str) -> None:
+        self._waiting_init_order = deque(
+            waiting_uuid
+            for waiting_uuid in self._waiting_init_order
+            if waiting_uuid != uuid
+        )
+
+    def _recv_blocking(self) -> dict:
+        while True:
+            try:
+                return self.gateway.network_queue.get(timeout=0.1)
+            except queue.Empty:
+                if not self.gateway.running:
+                    raise InterruptedError("Gateway stopped running.")

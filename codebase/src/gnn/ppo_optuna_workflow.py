@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import random
+from typing import Optional
+
+import mlflow
+import numpy as np
+import optuna
+import torch
+from optuna.pruners import MedianPruner
+from stable_baselines3 import PPO
+from stable_baselines3.common.monitor import Monitor
+
+from gnn_policy_backbone import build_graph_policy_backbone
+from mathematica_env import MathematicaGraphEnv
+from network_gateway import NetworkGateway
+from ppo_optuna_callback import OptunaEpisodeRewardCallback
+from ppo_optuna_search import sample_trial_configuration
+from ppo_trial_config import TrialConfiguration
+from preprocessor import Preprocessor
+from reward import RewardCalculator
+from sb3_extractor import CustomGNNFeaturesExtractor
+
+
+class PpoOptunaWorkflow:
+    def __init__(
+        self,
+        *,
+        gateway: NetworkGateway,
+        preprocessor: Preprocessor,
+        experiment_name: str,
+        timesteps_per_trial: int,
+        max_nodes: int = 200,
+        max_edges: int = 1000,
+        optuna_check_freq: int = 500,
+    ):
+        self.gateway = gateway
+        self.preprocessor = preprocessor
+        self.experiment_name = experiment_name
+        self.timesteps_per_trial = timesteps_per_trial
+        self.max_nodes = max_nodes
+        self.max_edges = max_edges
+        self.optuna_check_freq = optuna_check_freq
+        self.study: Optional[optuna.Study] = None
+
+    def create_study(self) -> optuna.Study:
+        study_name = f"gnn_rl_{self.experiment_name}"
+        storage_name = f"sqlite:///optuna_{self.experiment_name}.db"
+        self.study = optuna.create_study(
+            study_name=study_name,
+            storage=storage_name,
+            direction="maximize",
+            load_if_exists=True,
+            pruner=MedianPruner(
+                n_startup_trials=5,
+                n_warmup_steps=2000,
+                interval_steps=1000,
+            ),
+        )
+        return self.study
+
+    def objective(self, trial: optuna.Trial) -> float:
+        if self.study is None:
+            raise RuntimeError("create_study must be called before optimize.")
+
+        print(f"\n--- Starting Trial {trial.number} ---")
+        trial_config = sample_trial_configuration(trial)
+        self._set_random_seeds(trial_config.ppo.random_seed)
+
+        reward_calculator = self._build_reward_calculator(trial_config)
+        env = self._build_training_env(reward_calculator)
+        model = self._build_ppo_model(env, trial_config)
+        callback = OptunaEpisodeRewardCallback(
+            trial,
+            self.study,
+            check_freq=self.optuna_check_freq,
+        )
+
+        with mlflow.start_run(run_name=f"Trial_{trial.number}"):
+            mlflow.log_params(trial.params)
+            model.learn(total_timesteps=self.timesteps_per_trial, callback=callback)
+            self._finalize_episode_state(env)
+
+            if callback.is_pruned:
+                mlflow.set_tag("status", "pruned")
+                raise optuna.TrialPruned()
+
+            final_mean_reward = self._mean_episode_reward(model)
+            mlflow.log_metric("final_mean_reward", final_mean_reward)
+            mlflow.set_tag("status", "completed")
+            return final_mean_reward
+
+    def optimize(self, n_trials: int) -> optuna.Study:
+        study = self.create_study()
+        study.optimize(self.objective, n_trials=n_trials)
+        return study
+
+    @staticmethod
+    def _set_random_seeds(random_seed: int) -> None:
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+        torch.manual_seed(random_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(random_seed)
+
+    def _build_reward_calculator(self, trial_config: TrialConfiguration) -> RewardCalculator:
+        reward = trial_config.reward
+        return RewardCalculator(
+            basis_reward=reward.basis_reward,
+            gamma=reward.reward_gamma,
+            alpha=reward.alpha,
+            step_cost_lambda=reward.step_cost_lambda,
+            time_bad_penalty=reward.time_bad_penalty,
+            solver_mismatch_penalty=reward.solver_mismatch_penalty,
+            solver_match_bonus=reward.solver_match_bonus,
+            solver_wrong_slow_coef=reward.solver_wrong_slow_coef,
+        )
+
+    def _build_training_env(self, reward_calculator: RewardCalculator):
+        base_env = MathematicaGraphEnv(
+            gateway=self.gateway,
+            preprocessor=self.preprocessor,
+            reward_calculator=reward_calculator,
+            max_nodes=self.max_nodes,
+            max_edges=self.max_edges,
+        )
+        return Monitor(base_env)
+
+    def _build_ppo_model(self, env, trial_config: TrialConfiguration) -> PPO:
+        policy = trial_config.policy
+        ppo = trial_config.ppo
+        gnn_model = build_graph_policy_backbone(
+            layout=policy.layout,
+            architecture=policy.architecture,
+            hidden_dim=policy.hidden_dim,
+            num_layers=policy.num_layers,
+            heads=policy.heads,
+        )
+        policy_kwargs = {
+            "features_extractor_class": CustomGNNFeaturesExtractor,
+            "features_extractor_kwargs": {
+                "gnn_model": gnn_model,
+                "features_dim": policy.hidden_dim,
+            },
+        }
+        return PPO(
+            "MultiInputPolicy",
+            env,
+            learning_rate=ppo.learning_rate,
+            gamma=ppo.gamma,
+            ent_coef=ppo.ent_coef,
+            n_steps=ppo.n_steps,
+            policy_kwargs=policy_kwargs,
+            verbose=0,
+            seed=ppo.random_seed,
+        )
+
+    def _finalize_episode_state(self, env) -> None:
+        unwrapped_env = env.unwrapped
+        if unwrapped_env.current_state_dict is None:
+            return
+
+        status = unwrapped_env.current_state_dict.get("status")
+        if status not in ["reward_calc", "finished"]:
+            print("[PpoOptunaWorkflow] Flushing unfinished Mathematica episode...")
+            while unwrapped_env.current_state_dict.get("status") not in [
+                "reward_calc",
+                "finished",
+            ]:
+                _, _, terminated, truncated, _ = env.step(env.action_space.sample())
+                if terminated or truncated:
+                    break
+
+        if (
+            unwrapped_env.current_uuid
+            and unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid)
+        ):
+            unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
+
+    @staticmethod
+    def _mean_episode_reward(model: PPO) -> float:
+        if len(model.ep_info_buffer) == 0:
+            return -float("inf")
+        return float(np.mean([episode["r"] for episode in model.ep_info_buffer]))
