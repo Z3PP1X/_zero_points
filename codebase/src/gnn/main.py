@@ -40,6 +40,10 @@ def main() -> None:
     )
     graphs_path = os.path.join("graphs", args.experiment)
     print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
+    print(
+        f"Optuna: {args.n_trials} Trials × {args.timesteps} Schritte | "
+        f"Experiment: {args.experiment}"
+    )
     preprocessor = Preprocessor(graphs_dir=graphs_path)
     gateway.init()
 
@@ -60,7 +64,22 @@ def main() -> None:
         for key, value in best_trial.params.items():
             print(f"    {key}: {value}")
     except KeyboardInterrupt:
-        print("\nAbbruch durch Benutzer. Gateway wird beendet...")
+        print("\nAbbruch durch Benutzer.")
+        try:
+            study = workflow.study
+            if study is not None:
+                completed = sum(
+                    1
+                    for trial in study.trials
+                    if trial.state.name == "COMPLETE"
+                )
+                print(
+                    f"Letzter Stand: {completed} abgeschlossene Trials | "
+                    f"Study Best: {study.best_value:.3f} (Trial {study.best_trial.number})"
+                )
+        except (AttributeError, ValueError):
+            pass
+        print("Gateway wird beendet...")
     finally:
         gateway.stop()
         gateway.cleanup()

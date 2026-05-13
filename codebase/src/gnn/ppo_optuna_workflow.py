@@ -14,7 +14,11 @@ from stable_baselines3.common.monitor import Monitor
 from gnn_policy_backbone import build_graph_policy_backbone
 from mathematica_env import MathematicaGraphEnv
 from network_gateway import NetworkGateway
-from ppo_optuna_callback import OptunaEpisodeRewardCallback
+from ppo_optuna_callback import (
+    OptunaEpisodeRewardCallback,
+    OptunaStudyProgressCallback,
+    _format_study_best,
+)
 from ppo_optuna_search import sample_trial_configuration
 from ppo_trial_config import TrialConfiguration
 from preprocessor import Preprocessor
@@ -42,6 +46,7 @@ class PpoOptunaWorkflow:
         self.max_edges = max_edges
         self.optuna_check_freq = optuna_check_freq
         self.study: Optional[optuna.Study] = None
+        self.total_trials = 0
 
     def create_study(self) -> optuna.Study:
         study_name = f"gnn_rl_{self.experiment_name}"
@@ -63,8 +68,20 @@ class PpoOptunaWorkflow:
         if self.study is None:
             raise RuntimeError("create_study must be called before optimize.")
 
-        print(f"\n--- Starting Trial {trial.number} ---")
+        trial_index = trial.number + 1
+        print(
+            f"\n--- Trial {trial.number} startet "
+            f"({trial_index}/{self.total_trials}) | "
+            f"Study Best: {_format_study_best(self.study)} ---"
+        )
         trial_config = sample_trial_configuration(trial)
+        print(
+            f"  Hyperparameter: lr={trial_config.ppo.learning_rate:.2e}, "
+            f"gamma={trial_config.ppo.gamma:.3f}, "
+            f"ent_coef={trial_config.ppo.ent_coef:.2e}, "
+            f"arch={trial_config.policy.architecture}, "
+            f"hidden={trial_config.policy.hidden_dim}"
+        )
         self._set_random_seeds(trial_config.ppo.random_seed)
 
         reward_calculator = self._build_reward_calculator(trial_config)
@@ -73,6 +90,7 @@ class PpoOptunaWorkflow:
         callback = OptunaEpisodeRewardCallback(
             trial,
             self.study,
+            total_timesteps=self.timesteps_per_trial,
             check_freq=self.optuna_check_freq,
         )
 
@@ -91,8 +109,13 @@ class PpoOptunaWorkflow:
             return final_mean_reward
 
     def optimize(self, n_trials: int) -> optuna.Study:
+        self.total_trials = n_trials
         study = self.create_study()
-        study.optimize(self.objective, n_trials=n_trials)
+        study.optimize(
+            self.objective,
+            n_trials=n_trials,
+            callbacks=[OptunaStudyProgressCallback(total_trials=n_trials)],
+        )
         return study
 
     @staticmethod
