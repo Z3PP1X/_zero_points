@@ -2,15 +2,28 @@ import time
 import zmq
 import threading
 from queue import Queue
+from typing import Optional
+
+from gateway_traffic_monitor import GatewayTrafficMonitor
+
 
 class NetworkGateway():
 
-    def __init__(self, receiver_port, sender_port, control_port, reward_port):
+    def __init__(
+        self,
+        receiver_port,
+        sender_port,
+        control_port,
+        reward_port,
+        *,
+        traffic_monitor: Optional[GatewayTrafficMonitor] = None,
+    ):
         self.context = zmq.Context()
         self.receiver_port = receiver_port
         self.sender_port = sender_port
         self.control_port = control_port
         self.reward_port = reward_port
+        self.traffic_monitor = traffic_monitor
         self.receiver = None
         self.sender = None
         self.controller = None
@@ -66,22 +79,25 @@ class NetworkGateway():
                 socks = dict(self.poller.poll(timeout=100))
                 if self.receiver in socks and socks[self.receiver] == zmq.POLLIN:
                     message = self.receiver.recv_json()
-                    if isinstance(message, dict):
-                        message["_gateway_channel"] = "training"
-                    self.network_queue.put(message)
+                    self._enqueue_message(message, "training")
                 if (
                     self.reward_receiver in socks
                     and socks[self.reward_receiver] == zmq.POLLIN
                 ):
                     reward_state = self.reward_receiver.recv_json()
-                    if isinstance(reward_state, dict):
-                        reward_state["_gateway_channel"] = "reward"
-                    self.network_queue.put(reward_state)
+                    self._enqueue_message(reward_state, "reward")
 
         except Exception as e:
             print(f"[Gateway] CRITICAL ERROR IN POLL LOOP: {e}")
         finally:
             self._cleanup_receivers()
+
+    def _enqueue_message(self, message, channel: str) -> None:
+        if isinstance(message, dict):
+            message["_gateway_channel"] = channel
+            if self.traffic_monitor is not None:
+                self.traffic_monitor.observe(message, channel)
+        self.network_queue.put(message)
 
     def stop(self):
         control_parameter = {"pipeline_status": 0}

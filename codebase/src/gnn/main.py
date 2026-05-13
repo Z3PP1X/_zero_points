@@ -4,6 +4,7 @@ import os
 import mlflow
 
 from network_gateway import NetworkGateway
+from gateway_traffic_monitor import GatewayTrafficMonitor
 from ppo_optuna_workflow import PpoOptunaWorkflow
 from preprocessor import Preprocessor
 
@@ -32,11 +33,13 @@ def main() -> None:
 
     mlflow.set_experiment(f"GNN_RL_Optuna_{args.experiment}")
 
+    traffic_monitor = GatewayTrafficMonitor()
     gateway = NetworkGateway(
         receiver_port=RECEIVER_PORT,
         sender_port=SENDER_PORT,
         reward_port=RESULTS_PORT,
         control_port=CONTROL_PORT,
+        traffic_monitor=traffic_monitor,
     )
     graphs_path = os.path.join("graphs", args.experiment)
     print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
@@ -50,6 +53,7 @@ def main() -> None:
         f"lazy LRU-Cache aktiv"
     )
     gateway.init()
+    traffic_monitor.start()
 
     workflow = PpoOptunaWorkflow(
         gateway=gateway,
@@ -85,6 +89,7 @@ def main() -> None:
             pass
         print("Gateway wird beendet...")
     finally:
+        traffic_monitor.stop()
         gateway.stop()
         gateway.cleanup()
 

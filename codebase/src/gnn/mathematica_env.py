@@ -83,6 +83,7 @@ class MathematicaGraphEnv(gym.Env):
         self.current_state_dict = None
         self.current_obs = None
         self.current_uuid = None
+        self.total_timeouts = 0
 
     def _pad_graph(self, pyg_data):
         x = pyg_data.x.numpy()
@@ -145,17 +146,17 @@ class MathematicaGraphEnv(gym.Env):
         self.gateway.send_decision(self.current_state_dict, chosen_solver, chosen_tol)
         next_state_dict = self._wait_for_next_state(timeout_s=self.step_timeout_s)
         if next_state_dict is None:
-            logger.error(
-                "Step Timeout nach %.1fs (UUID: %s). Episode wird abgebrochen.",
-                self.step_timeout_s,
-                self.current_uuid,
-            )
+            self.total_timeouts += 1
+            traffic_monitor = getattr(self.gateway, "traffic_monitor", None)
+            if traffic_monitor is not None:
+                traffic_monitor.record_timeout()
             if self.replay_buffer.has_episode(self.current_uuid):
                 self.replay_buffer.clear_episode(self.current_uuid)
-            return self.current_obs, float(self.timeout_penalty), True, False, {
+            return self.current_obs, 0.0, True, False, {
                 "episode_steps": 0,
-                "total_reward": float(self.timeout_penalty),
+                "total_reward": 0.0,
                 "timeout": True,
+                "total_timeouts": self.total_timeouts,
             }
 
         self.replay_buffer.set_next_state(self.current_uuid, next_state_dict)
