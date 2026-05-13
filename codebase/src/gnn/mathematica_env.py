@@ -3,6 +3,7 @@ import numpy as np
 from gymnasium import spaces
 import math
 import queue
+import time
 import logging
 
 from replay_buffer import EpisodeReplayBuffer
@@ -51,13 +52,24 @@ class MathematicaGraphEnv(gym.Env):
         max_edges: Maximum number of edges for padded observation space.
     """
 
-    def __init__(self, gateway, preprocessor, reward_calculator, max_nodes=50, max_edges=100):
+    def __init__(
+        self,
+        gateway,
+        preprocessor,
+        reward_calculator,
+        max_nodes=50,
+        max_edges=100,
+        step_timeout_s: float = 30.0,
+        timeout_penalty: float = -10.0,
+    ):
         super().__init__()
         self.gateway = gateway
         self.preprocessor = preprocessor
         self.reward_calculator = reward_calculator
         self.max_nodes = max_nodes
         self.max_edges = max_edges
+        self.step_timeout_s = step_timeout_s
+        self.timeout_penalty = timeout_penalty
 
         # Action Space: [Solver (Continuous >0.0 is 1), Tolerance (Continuous -1 to 1)]
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -108,20 +120,27 @@ class MathematicaGraphEnv(gym.Env):
             "num_edges": np.array([num_edges], dtype=np.int64)
         }
 
-    def _wait_for_next_state(self):
+    def _wait_for_next_state(self, timeout_s: float = None):
         """
         Blocks until the next state arrives from the NetworkGateway queue.
 
+        Args:
+            timeout_s: Optional wall-clock timeout. ``None`` blocks forever.
+
         Returns:
-            State dict from Mathematica.
+            State dict from Mathematica, or ``None`` if timeout_s elapses without one.
 
         Raises:
             InterruptedError: If the gateway stops running.
         """
+        deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while True:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return None
             try:
-                state_dict = self.gateway.network_queue.get(timeout=0.1)
-                return state_dict
+                wait = 0.1 if remaining is None else min(0.1, remaining)
+                return self.gateway.network_queue.get(timeout=wait)
             except queue.Empty:
                 if not self.gateway.running:
                     raise InterruptedError("Gateway stopped running.")
@@ -146,21 +165,25 @@ class MathematicaGraphEnv(gym.Env):
         if self.current_uuid and self.replay_buffer.has_episode(self.current_uuid):
             self.replay_buffer.clear_episode(self.current_uuid)
 
-        # Block until we receive a new state from Mathematica
-        state_dict = self._wait_for_next_state()
-
-        # Skip legacy terminal states from previously interrupted episodes
-        while state_dict.get("status") in ["reward_calc", "finished"]:
-            msg_id = state_dict.get("id", "UNKNOWN")
-            logger.info("Skipping legacy terminal state (ID: %s) during reset.", msg_id)
+        # Block until we receive a new non-terminal, uuid-bearing state from Mathematica.
+        while True:
             state_dict = self._wait_for_next_state()
+            status = state_dict.get("status")
+            if status in ("reward_calc", "finished", "error", "non_converged"):
+                logger.info(
+                    "Skipping legacy/terminal state (ID: %s, status=%s) during reset.",
+                    state_dict.get("id", "UNKNOWN"), status,
+                )
+                continue
+            if state_dict.get("uuid") is None:
+                logger.warning(
+                    "Reset: State ohne UUID verworfen (id=%s, status=%s).",
+                    state_dict.get("id"), status,
+                )
+                continue
+            break
 
-        # Extract UUID and start new episode in replay buffer
         self.current_uuid = state_dict.get("uuid")
-        if self.current_uuid is None:
-            logger.warning("State hat keine UUID. Verwende id=%s als Fallback.", state_dict.get("id"))
-            self.current_uuid = str(state_dict.get("id", "unknown"))
-
         self.replay_buffer.start_episode(self.current_uuid)
 
         self.current_state_dict = state_dict
@@ -201,13 +224,40 @@ class MathematicaGraphEnv(gym.Env):
         # 3. Send decision to Mathematica
         self.gateway.send_decision(self.current_state_dict, chosen_solver, chosen_tol)
 
-        # 4. Wait for next state
-        next_state_dict = self._wait_for_next_state()
+        # 4. Wait for next state (with wall-clock timeout to avoid deadlock if
+        # Mathematica drops a response).
+        next_state_dict = self._wait_for_next_state(timeout_s=self.step_timeout_s)
+        if next_state_dict is None:
+            logger.error(
+                "Step Timeout nach %.1fs (UUID: %s). Episode wird abgebrochen.",
+                self.step_timeout_s, self.current_uuid,
+            )
+            if self.replay_buffer.has_episode(self.current_uuid):
+                self.replay_buffer.clear_episode(self.current_uuid)
+            return self.current_obs, float(self.timeout_penalty), True, False, {
+                "episode_steps": 0,
+                "total_reward": float(self.timeout_penalty),
+                "timeout": True,
+            }
 
         # 5. Set next_state on the last transition
         self.replay_buffer.set_next_state(self.current_uuid, next_state_dict)
 
-        if next_state_dict.get("status") in ["reward_calc", "finished"]:
+        status = next_state_dict.get("status")
+        if status in ("error", "non_converged"):
+            logger.warning(
+                "Solver-Error (UUID: %s, status=%s): %s",
+                self.current_uuid, status, next_state_dict.get("errorMessage"),
+            )
+            if self.replay_buffer.has_episode(self.current_uuid):
+                self.replay_buffer.clear_episode(self.current_uuid)
+            return self.current_obs, float(self.timeout_penalty), True, False, {
+                "episode_steps": 0,
+                "total_reward": float(self.timeout_penalty),
+                "error": status,
+            }
+
+        if status in ("reward_calc", "finished"):
             # ── TERMINAL ──
             # Compute ALL per-step rewards retroactively
             transitions = self.replay_buffer.get_transitions(self.current_uuid)

@@ -102,12 +102,43 @@ $resultsPORT = 5693;
 $running = True; 
 
 
+(*
+  Event-driven dispatch (replaces the 8ms polling ScheduledTask).
+
+  We keep `$inflight` as a counter of jobs between "pushed to Python" and
+  "back at the orchestrator". `drainToTarget[]` pushes from $activeProblems
+  to Python until $inflight reaches $inflightTarget or the queue is empty.
+
+  drainToTarget[] is invoked at every event that can change either side of
+  the invariant:
+    - new training state arrives (pushtoactiveProblems)
+    - reward calc finished and new epoch state queued (bumpEpochandPush)
+    - a solver error cleared a slot (handleSolverError)
+    - initial pipeline start
+  A low-frequency safety-net ScheduledTask (1 Hz) catches any missed wakeups
+  caused by listener-thread races.
+*)
+
+$inflight = 0;
+$inflightTarget = $batchSize;
+
+drainToTarget[] := Module[{prob},
+    While[$inflight < $inflightTarget && !$activeProblems["EmptyQ"],
+        prob = $activeProblems["Pop"];
+        $inflight = $inflight + 1;
+        jobPush[$nnProvider, prob];
+    ];
+];
+
 startPipelineTask[] := (
     If[$pipelineTask =!= None, TaskRemove[$pipelineTask]];
+    (* Safety net only -- the event-driven calls in handleState do the real work. *)
     $pipelineTask = SessionSubmit[
         ScheduledTask[
-            If[!$activeProblems["EmptyQ"], pushToPython[]], 
-            0.008
+            If[!$activeProblems["EmptyQ"] && $inflight < $inflightTarget,
+                drainToTarget[]
+            ],
+            1.0
         ]
     ];
 );
@@ -149,24 +180,119 @@ pullfromrewardQueue[] := If[$rewardQueue["EmptyQ"], $Failed, $rewardQueue["Pop"]
 
 
 (** Pipeline Push Functions **)
-handleState[state_Association] := 
+(*
+  handleState: dispatch a state returned by a solver.
 
+  Every branch except the in-reward-calc legs decrements $inflight (the
+  job's round-trip with Python is complete) and calls drainToTarget[] to
+  push the next pending problem(s). Reward-calc *legs* (inRewardCalc==1)
+  never went through Python in the first place, so $inflight is unchanged
+  for them.
+*)
+handleState[state_Association] :=
     If[FailureQ[state],
         writeErrorLog[state, $failedLogStream]
     ,
-        If[state["status"] == "reward_calc",
-            handleRewardCalc[state],
-            
-            If[state["status"] == "training", 
-                pushtoactiveProblems[state]
+        Module[{wasInflight = !TrueQ[Lookup[state, "inRewardCalc", 0] == 1]},
+            Which[
+                state["status"] == "error" || state["status"] == "non_converged",
+                    handleSolverError[state],
+                state["status"] == "reward_calc",
+                    handleRewardCalc[state],
+                state["status"] == "training",
+                    (
+                        If[wasInflight, $inflight = Max[0, $inflight - 1]];
+                        pushtoactiveProblems[state];
+                        drainToTarget[]
+                    ),
+                True,
+                    writeErrorLog[<|"reason" -> "unknown_status", "state" -> state|>, $failedLogStream]
             ]
         ]
     ];
 
+(*
+  handleSolverError: a solver returned a state with status=error or non_converged.
+  We log it, clean up registries so the orchestrator does not leak state,
+  and (a) if it was a reward-calc leg, fail the comparison cleanly,
+       (b) otherwise re-queue a fresh problem so the worker pool stays full.
+
+  $inflight is decremented only for the non-reward-calc case (the
+  reward-calc legs never went through Python).
+*)
+handleSolverError[state_Association] := Module[
+    {uuid, compID, inReward, parentState, parentUuid},
+    writeErrorLog[state, $failedLogStream];
+    uuid     = Lookup[state, "uuid", None];
+    compID   = Lookup[state, "comparisonID", None];
+    inReward = TrueQ[Lookup[state, "inRewardCalc", 0] == 1];
+
+    parentState = If[uuid =!= None && $rewardRegistry["KeyExistsQ", uuid],
+        $rewardRegistry["Lookup", uuid]
+        ,
+        None
+    ];
+
+    If[uuid =!= None && $rewardRegistry["KeyExistsQ", uuid],
+        $rewardRegistry["KeyDrop", uuid]
+    ];
+
+    If[inReward && compID =!= None,
+        (*
+          Reward-calc leg failed. The other leg may already have arrived
+          (in $stateComparison) or may still be running. Either way, spoil
+          the comparison: drop any pending partner, mark the ID so a future
+          partner gets dropped on arrival, and free the parent's outer
+          uuid in $activeRunningProblems so the training pool stays full.
+        *)
+        If[$stateComparison["KeyExistsQ", compID],
+            With[{partner = $stateComparison["Lookup", compID]},
+                If[$rewardRegistry["KeyExistsQ", partner["uuid"]],
+                    $rewardRegistry["KeyDrop", partner["uuid"]]
+                ];
+                $stateComparison["KeyDrop", compID];
+            ],
+            $spoiledComparisons["Insert", compID]
+        ];
+
+        parentUuid = If[parentState =!= None, Lookup[parentState, "uuid", None], None];
+        If[parentUuid =!= None,
+            $activeRunningProblems["Delete", parentUuid];
+            addFromProblemsPool[];
+        ];
+    ];
+
+    If[!inReward,
+        $inflight = Max[0, $inflight - 1];
+        If[uuid =!= None,
+            $activeRunningProblems["Delete", uuid];
+            addFromProblemsPool[];
+        ];
+    ];
+    drainToTarget[];
+    state
+];
+
+(*
+  handleRewardCalc: a converged state arrived.
+
+  Two cases share this entry point:
+    1. inRewardCalc == 0: a training step converged. This *did* round-trip
+       through Python, so $inflight is decremented and a fresh slot is
+       opened up via drainToTarget[]. The state is then handed to the
+       reward-comparison initialization (prepareRewardCalculation).
+    2. inRewardCalc == 1: a reward-calc *leg* converged. Those legs never
+       went through Python, so $inflight is left unchanged. The state is
+       handed to the reward-comparison aggregator (incomingStateComparison).
+*)
 handleRewardCalc[state_Association]:= (
-	If[state["inRewardCalc"] === 1, jobPush[$calculatedRewardPush, state],
-	jobPush[$rewardPush, state]];
-	pushToPython[];
+	If[TrueQ[state["inRewardCalc"] == 1],
+		jobPush[$calculatedRewardPush, state]
+	,
+		$inflight = Max[0, $inflight - 1];
+		jobPush[$rewardPush, state];
+		drainToTarget[];
+	];
 )
     
 pushtoactiveProblems[data_Association] := (
@@ -176,9 +302,15 @@ pushtoactiveProblems[data_Association] := (
 );
 
 
-pushToPython[] := Module[{prob}, 
+(*
+  pushToPython: legacy single-shot push, kept for compatibility. Prefer
+  drainToTarget[] which respects the $inflight invariant.
+*)
+pushToPython[] := Module[{prob},
+	If[$inflight >= $inflightTarget, Return[Null]];
 	prob = pullfromactiveProblems[];
 	If[prob =!= $Failed,
+		$inflight = $inflight + 1;
 		jobPush[$nnProvider, prob]
 	]
 ];
@@ -190,10 +322,16 @@ jobPush[socket_, state_Association] := Module[{jsonString, bytes},
     BinaryWrite[socket, bytes];
 ];
 
+(*
+  pushToSolver: route a state to either the Newton or gMGF solver.
+  Solver==0 -> Newton, anything else -> gMGF. Uses numeric (==) comparison
+  so a JSON-round-tripped Real (1.0) is treated the same as Integer (1).
+*)
 pushToSolver[state_Association] := Module[{solver},
-	solver = state["solver"];
-	If[solver == 0, jobPush[$newtonProvider, state], 
-	jobPush[$gmgfProvider, state]
+	solver = Lookup[state, "solver", 1];
+	If[TrueQ[solver == 0],
+		jobPush[$newtonProvider, state],
+		jobPush[$gmgfProvider, state]
 	]
 ]
 
@@ -202,6 +340,12 @@ pushToSolver[state_Association] := Module[{solver},
 $rewardsQueue = CreateDataStructure["Queue"];
 $rewardRegistry = CreateDataStructure["HashTable"];
 $stateComparison = CreateDataStructure["HashTable"];
+(*
+  $spoiledComparisons tracks comparisonIDs whose first leg failed in the
+  solver. When the surviving leg arrives we know to discard it cleanly
+  rather than wait forever for a partner that will never come.
+*)
+$spoiledComparisons = CreateDataStructure["HashSet"];
 
 (*Step 1: Incoming reward_calc from solver*)
 
@@ -259,8 +403,22 @@ setRewardState[data_Association, control_Integer, comparisonID_String] := Module
 
 (* Step 2: Send reward calc step to solvers and wait for result *)
 
-incomingStateComparison[state_Association] := Module[{compuuid},
+(*
+  incomingStateComparison: pair up the two reward-calc legs by comparisonID.
+
+  If the comparison is already spoiled (the other leg errored in the solver),
+  drop this surviving leg cleanly. Otherwise insert into pending or finalize.
+*)
+incomingStateComparison[state_Association] := Module[{compuuid, uuid},
     compuuid = state["comparisonID"];
+    uuid = state["uuid"];
+    If[$spoiledComparisons["MemberQ", compuuid],
+        $spoiledComparisons["Remove", compuuid];
+        If[$rewardRegistry["KeyExistsQ", uuid],
+            $rewardRegistry["KeyDrop", uuid]
+        ];
+        Return[Null]
+    ];
     If[$stateComparison["KeyExistsQ", compuuid],
         absTimeComparison[state, compuuid] // finalizeTrainingStep,
         $stateComparison["Insert", compuuid -> state]
@@ -298,6 +456,15 @@ finalizeState[state_Association] := Module[{finalState, delete1, delete2, Benchm
     updatedState
 ]
 
+(*
+  resetToInit: prepare a finished state for the next epoch.
+
+  IMPORTANT: A fresh ``uuid`` (CreateUUID[]) is generated per epoch so that
+  the Python replay buffer (keyed by uuid) never overwrites a still-in-flight
+  episode of the same (id, yTarget). The old deterministic template UUID
+  caused silent episode-buffer corruption whenever the new epoch state hit
+  Python while a prior epoch was still mid-step.
+*)
 resetToInit[data_Association] := Module[{
     id = data["id"],
     yT = data["yTarget"],
@@ -314,10 +481,9 @@ resetToInit[data_Association] := Module[{
     Join[data, <|
         "status" -> "init",
         "initialx0" -> data["x0"],
-        "uuid" -> TemplateApply["_id_``_yTarget_``_x0_", {id, yT, x}],
+        "uuid" -> CreateUUID[],
         "networkStep" -> ns,
         "parentStateId" -> "initialState",
-        "rewardSolver" -> 0,
         "networkJobId" -> "init",
         "tolerance" -> 0.000000000000001,
         "maxIter" -> 1500,
@@ -341,8 +507,14 @@ resetToInit[data_Association] := Module[{
     |>]
 ]
 
+(*
+  bumpEpochandPush: finalize epoch N for this state and queue epoch N+1.
+
+  Calls addFromProblemsPool[] to keep the batch full and then drainToTarget[]
+  so the next pending problem is dispatched to Python immediately rather
+  than waiting for the 1Hz safety task.
+*)
 bumpEpochandPush[state_Association] := Module[{currentEpoch, nextEpochState}, 
-	
 	currentEpoch = state["epoch"];
 	currentEpoch++;
 	$activeRunningProblems["Delete", state["uuid"]];
@@ -350,7 +522,11 @@ bumpEpochandPush[state_Association] := Module[{currentEpoch, nextEpochState},
 	nextEpochState = Join[state, <|
 		"epoch" -> currentEpoch
 	|>];
-	If[currentEpoch <= $maxEpoch, ProblemProvider`PushToDataQueue[nextEpochState], Print["[PIPELINE] Training Finished - not pushing new states!"]];
+	If[currentEpoch <= $maxEpoch,
+		ProblemProvider`PushToDataQueue[nextEpochState],
+		Print["[PIPELINE] Training Finished - not pushing new states!"]
+	];
+	drainToTarget[];
 ]
 
 rewardPushPython[state_Association] := Module[{}, 
@@ -368,20 +544,29 @@ finalizeTrainingStep[state_] := (
 
 
 (*Communication*)
+(*
+  parseMessage / internalparseMessage: ZMQ event -> Association.
+  Print[] calls were removed from the hot path; failures surface via
+  the unknown-status branch of handleState which logs to $failedLogStream.
+*)
 parseMessage[event_] := Module[{rawMsg, jsonString, jsonObject},
     rawMsg = event["DataByteArray"];
     jsonString = ByteArrayToString[rawMsg, "UTF-8"];
-    jsonObject = Association @ ImportString[jsonString, "JSON"];
-    Print["PARSE_MSG Received json Object: ", jsonObject];
-    jsonObject   
+    jsonObject = Quiet @ Check[Association @ ImportString[jsonString, "JSON"], $Failed];
+    If[jsonObject === $Failed,
+        Return[<|"status" -> "error", "errorMessage" -> "Invalid JSON from Python"|>]
+    ];
+    jsonObject
 ]
 
 internalparseMessage[event_] := Module[{rawMsg, jsonString, jsonObject},
     rawMsg = event["DataByteArray"];
     jsonString = ByteArrayToString[rawMsg, "UTF-8"];
-    jsonObject = Association @ ImportString[jsonString, "JSON"];
-    Print["Internal Received json Object: ", jsonObject];
-    jsonObject   
+    jsonObject = Quiet @ Check[Association @ ImportString[jsonString, "JSON"], $Failed];
+    If[jsonObject === $Failed,
+        Return[<|"status" -> "error", "errorMessage" -> "Invalid JSON from solver"|>]
+    ];
+    jsonObject
 ]
 
 
@@ -439,8 +624,8 @@ StartPipeline[] := (
 	Print["[gMGF-DAEMON] Ready!"];
 	Print["[NEWTON-DAEMON] Ready!"];
 	setUpExperiment[$batchSize];
-	pushToPython[];
-	Print["[SYSTEM] Active Problems Initialised"];
+	drainToTarget[];
+	Print["[SYSTEM] Active Problems Initialised; inflight target=", $inflightTarget];
 	startPipelineTask[];
 	While[TrueQ[$running],
     Pause[10];

@@ -18,11 +18,18 @@ Voraussetzungen:
     **Neustart-States** von Mathematica in **aufsteigender Slot-Reihenfolge** gesendet
     werden (zuerst niedrigster Slot-Index), da sonst die Zuordnung ohne zusätzliches
     Routing-Feld nicht eindeutig wäre.
+
+Robustheit:
+    - ``step_wait`` hat einen Wall-Clock-Timeout. Falls Mathematica eine erwartete
+      Antwort verliert (Throw ohne Catch, Socket-Stall, Solver-Crash), wird der
+      betroffene Slot als Episode-Fehler beendet (done=True, negativer Reward),
+      damit die SB3-Trainings-Loop nicht deadlockt.
 """
 from __future__ import annotations
 
 import logging
 import queue
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -46,11 +53,19 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 
-def _norm_uuid(msg: dict) -> str:
+def _norm_uuid(msg: dict) -> Optional[str]:
+    """
+    Returns the episode UUID for an incoming message, or ``None`` if absent.
+
+    Important: We DO NOT fall back to ``msg["id"]`` because problem ``id`` (e.g.
+    "P1") is shared across thousands of episodes — that fallback would route
+    arbitrary problem messages to the first slot expecting that problem,
+    silently corrupting episode boundaries.
+    """
     u = msg.get("uuid")
     if u is None:
-        u = msg.get("id")
-    return str(u) if u is not None else "unknown"
+        return None
+    return str(u)
 
 
 @dataclass
@@ -76,6 +91,8 @@ class AsyncMathematicaVecEnv(VecEnv):
         num_envs: int,
         max_nodes: int = 200,
         max_edges: int = 1000,
+        step_timeout_s: float = 30.0,
+        timeout_penalty: float = -10.0,
     ):
         if num_envs < 1:
             raise ValueError("num_envs muss >= 1 sein.")
@@ -85,6 +102,8 @@ class AsyncMathematicaVecEnv(VecEnv):
         self.reward_calculator = reward_calculator
         self.max_nodes = max_nodes
         self.max_edges = max_edges
+        self.step_timeout_s = step_timeout_s
+        self.timeout_penalty = timeout_penalty
 
         self._slots: List[_Slot] = [_Slot() for _ in range(num_envs)]
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
@@ -183,12 +202,28 @@ class AsyncMathematicaVecEnv(VecEnv):
                 if not self.gateway.running:
                     raise InterruptedError("Gateway stopped running.")
 
+    def _recv_state_with_deadline(self, deadline: float) -> Optional[dict]:
+        """Returns a state dict if one arrives before `deadline`, else ``None``."""
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                return self.gateway.network_queue.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                if not self.gateway.running:
+                    raise InterruptedError("Gateway stopped running.")
+
     def _stack_obs(self, obs_list: List[dict]) -> dict:
         keys = obs_list[0].keys()
         return {k: np.stack([np.asarray(o[k]) for o in obs_list]) for k in keys}
 
     def _assign_initial_state(self, slot_idx: int, state_dict: dict) -> None:
         uid = _norm_uuid(state_dict)
+        if uid is None:
+            raise RuntimeError(
+                f"Initial state für Slot {slot_idx} hat keine uuid: {state_dict}"
+            )
         slot = self._slots[slot_idx]
         slot.current_uuid = uid
         self.replay_buffer.start_episode(uid)
@@ -204,13 +239,19 @@ class AsyncMathematicaVecEnv(VecEnv):
         slot_idx = 0
         while slot_idx < self.num_envs:
             msg = self._recv_state_blocking()
-            if msg.get("status") in ["reward_calc", "finished"]:
+            if msg.get("status") in ["reward_calc", "finished", "error", "non_converged"]:
                 logger.info(
-                    "Überspringe Terminal/Legacy-State uuid=%s beim Vec-Reset.",
+                    "Überspringe Terminal/Legacy/Error-State uuid=%s beim Vec-Reset.",
                     msg.get("uuid"),
                 )
                 continue
             uid = _norm_uuid(msg)
+            if uid is None:
+                logger.warning(
+                    "Reset: Nachricht ohne uuid verworfen (id=%s, status=%s).",
+                    msg.get("id"), msg.get("status"),
+                )
+                continue
             if uid in seen_uuids:
                 logger.warning("Doppelte uuid %s beim Reset — überspringe.", uid)
                 continue
@@ -251,6 +292,14 @@ class AsyncMathematicaVecEnv(VecEnv):
         self._step_async_pending = True
 
     def step_wait(self) -> VecEnvStepReturn:
+        """
+        Wait for one response per slot, identified by the slot's expected uuid.
+
+        Hardened against Mathematica losing/dropping a state:
+          * each slot has its own wall-clock deadline (``step_timeout_s``);
+          * if a slot times out, its episode is terminated with ``timeout_penalty``
+            and the slot is reset against the next non-terminal state that arrives.
+        """
         if not self._step_async_pending or self._saved_actions is None:
             raise RuntimeError("step_wait ohne step_async.")
 
@@ -264,10 +313,26 @@ class AsyncMathematicaVecEnv(VecEnv):
             expected[uid] = k
 
         received: List[Optional[dict]] = [None] * self.num_envs
+        timed_out_slots: List[int] = []
+        deadline = time.monotonic() + self.step_timeout_s
 
         while any(r is None for r in received):
-            msg = self._recv_state_blocking()
+            msg = self._recv_state_with_deadline(deadline)
+            if msg is None:
+                missing = [k for k in range(self.num_envs) if received[k] is None]
+                missing_uuids = [self._slots[k].current_uuid for k in missing]
+                logger.error(
+                    "step_wait Timeout nach %.1fs — Slots ohne Antwort: %s (uuids=%s).",
+                    self.step_timeout_s, missing, missing_uuids,
+                )
+                timed_out_slots = missing
+                break
             uid = _norm_uuid(msg)
+            if uid is None:
+                logger.warning(
+                    "Nachricht ohne uuid (status=%s) — verworfen.", msg.get("status")
+                )
+                continue
             if uid not in expected:
                 logger.warning(
                     "Nachricht uuid=%s passt zu keinem erwarteten Slot — verworfen.",
@@ -286,12 +351,41 @@ class AsyncMathematicaVecEnv(VecEnv):
         terminal_slots: List[int] = []
 
         for k in range(self.num_envs):
-            next_state = received[k]
-            assert next_state is not None
             slot = self._slots[k]
-            self.replay_buffer.set_next_state(slot.current_uuid, next_state)
+            next_state = received[k]
 
-            if next_state.get("status") in ["reward_calc", "finished"]:
+            if next_state is None:
+                # Slot timed out: synthesize a terminal failure transition.
+                if self.replay_buffer.has_episode(slot.current_uuid):
+                    self.replay_buffer.clear_episode(slot.current_uuid)
+                rews[k] = self.timeout_penalty
+                dones[k] = True
+                infos[k] = {
+                    "episode_steps": 0,
+                    "total_reward": float(self.timeout_penalty),
+                    "timeout": True,
+                }
+                terminal_slots.append(k)
+                continue
+
+            self.replay_buffer.set_next_state(slot.current_uuid, next_state)
+            status = next_state.get("status")
+
+            if status in ("error", "non_converged"):
+                n_steps_err = self.replay_buffer.get_episode_length(slot.current_uuid)
+                if self.replay_buffer.has_episode(slot.current_uuid):
+                    self.replay_buffer.clear_episode(slot.current_uuid)
+                rews[k] = self.timeout_penalty
+                dones[k] = True
+                infos[k] = {
+                    "episode_steps": n_steps_err,
+                    "total_reward": float(self.timeout_penalty),
+                    "error": status,
+                }
+                terminal_slots.append(k)
+                continue
+
+            if status in ("reward_calc", "finished"):
                 transitions = self.replay_buffer.get_transitions(slot.current_uuid)
                 self.reward_calculator.calculate_episode_rewards(transitions, next_state)
                 total_reward = float(sum(t.get("reward", 0.0) for t in transitions))
@@ -323,8 +417,17 @@ class AsyncMathematicaVecEnv(VecEnv):
     def _wait_non_terminal_state_after_done(self) -> dict:
         while True:
             msg = self._recv_state_blocking()
-            if msg.get("status") in ["reward_calc", "finished"]:
-                logger.info("Terminal/Legacy nach Episode — warte auf neuen Start-State.")
+            if msg.get("status") in ("reward_calc", "finished", "error", "non_converged"):
+                logger.info(
+                    "Terminal/Error nach Episode — warte auf neuen Start-State (status=%s).",
+                    msg.get("status"),
+                )
+                continue
+            uid = _norm_uuid(msg)
+            if uid is None:
+                logger.warning(
+                    "Neustart-Nachricht ohne uuid — verworfen (id=%s).", msg.get("id")
+                )
                 continue
             return msg
 

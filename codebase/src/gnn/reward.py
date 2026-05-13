@@ -42,6 +42,11 @@ class RewardCalculator:
             Zusatz-Solver-Shaping ab der zweiten Transition (optional).
     """
 
+    # Values >= this threshold are treated as "no record yet" sentinel from
+    # Mathematica's setInitStateConfig (1.0e9). Keeps r_learn = 0 on the
+    # first epoch instead of paying out a huge artificial bonus.
+    RECORD_SENTINEL_THRESHOLD = 1.0e8
+
     def __init__(
         self,
         basis_reward: float = 1.0,
@@ -158,7 +163,11 @@ class RewardCalculator:
 
         record_abs_time = self._to_float(reward_state.get("recordAbsTime"), 0.0)
         final_abs_time = self._to_float(reward_state.get("absTime"), 0.0)
-        r_learn = self.alpha * (record_abs_time - final_abs_time)
+        # First epoch: recordAbsTime is the sentinel (>=1e8); don't reward against it.
+        if record_abs_time >= self.RECORD_SENTINEL_THRESHOLD:
+            r_learn = 0.0
+        else:
+            r_learn = self.alpha * (record_abs_time - final_abs_time)
 
         time_scale = self._terminal_time_scale(reward_state)
 

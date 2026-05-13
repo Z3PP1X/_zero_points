@@ -25,6 +25,13 @@ $dataPattern::usage = "Global Datapattern for ML-Pipeline States";
 $functionRegistry::usage = "Function registry for used problems!";
 $problemList::usage ="Global problemList";
 
+GetBenchmarkTime::usage = "GetBenchmarkTime[solver, id, yTarget] looks up a cached \
+benchmark wall-clock time for the *opposing* solver on (id, yTarget). Returns Missing[] if unknown.";
+SetBenchmarkTime::usage = "SetBenchmarkTime[solver, id, yTarget, t] stores a benchmark time. \
+solver is the OPPOSING solver (the one being timed: 0=Newton, 1=gMGF).";
+HasBenchmarkTime::usage = "HasBenchmarkTime[solver, id, yTarget] returns True if a cached \
+benchmark time exists.";
+
 
 SetProblemList::usage = "SetProblemList[list] \[UDoubleDot]berschreibt die interne Problem-Liste.";
 AddToQueue::usage = "AddToQueue[data] pusht einen State manuell in die Problem-Queue.";
@@ -35,6 +42,23 @@ Begin["`Private`"]
 
 $dataQueue = CreateDataStructure["Queue"];
 $functionRegistry = CreateDataStructure["HashTable"];
+$benchmarkRegistry = CreateDataStructure["HashTable"];
+
+benchmarkKey[solver_, id_, yTarget_] := {solver, id, N[yTarget]};
+
+GetBenchmarkTime[solver_, id_, yTarget_] := Module[{key, val},
+    key = benchmarkKey[solver, id, yTarget];
+    val = $benchmarkRegistry["Lookup", key];
+    If[MissingQ[val], Missing[], val]
+];
+
+HasBenchmarkTime[solver_, id_, yTarget_] := 
+    $benchmarkRegistry["KeyExistsQ", benchmarkKey[solver, id, yTarget]];
+
+SetBenchmarkTime[solver_, id_, yTarget_, t_?NumericQ] := (
+    $benchmarkRegistry["Insert", benchmarkKey[solver, id, yTarget] -> t];
+    t
+);
 
 $problemList = {
 <| "id" -> "P1", "function" -> Function[x, x*Exp[x^2] - Sin[x]^2 + 3 Cos[x] + 5],
@@ -103,6 +127,16 @@ PushToDataQueue[data_Association] := (
 GetProblemfunction[id_String] := $functionRegistry["Lookup", id];
 
 
+(*
+  setInitStateConfig: build the initial state for a (problem, yTarget) pair.
+  Each state gets a fresh ``CreateUUID[]`` to keep the Python replay buffer
+  keyed uniquely per episode, even across epochs of the same problem.
+
+  ``recordAbsTime`` is initialized to a large sentinel (1.0e9 seconds) so the
+  first epoch's ``r_learn`` term doesn't see a fake "record" of 1 second.
+  Python's RewardCalculator treats values above ``record_abs_time_sentinel``
+  as "no record yet" (see reward.py).
+*)
 setInitStateConfig[data_Association, yMin_?NumericQ, yMax_?NumericQ] := Module[{
     id = data["id"],
     yT = data["yTarget"],
@@ -113,11 +147,10 @@ setInitStateConfig[data_Association, yMin_?NumericQ, yMax_?NumericQ] := Module[{
     Join[data, <|
         "status" -> "init",
         "initialx0" -> data["x0"],
-        "uuid" -> TemplateApply["_id_``_yTarget_``_x0_", {id, yT, x}],
+        "uuid" -> CreateUUID[],
         "epoch" -> ep,
         "networkStep" -> ns,
         "parentStateId" -> "initialState",
-        "rewardSolver" -> 0,
         "networkJobId" -> "init",
         "tolerance" -> 0.000000000000001,
         "inRewardCalc" -> 0,
@@ -129,7 +162,7 @@ setInitStateConfig[data_Association, yMin_?NumericQ, yMax_?NumericQ] := Module[{
         "mask" -> 1,
         "solver" -> 1,
         "absTime" -> 0,
-        "recordAbsTime" -> 1,
+        "recordAbsTime" -> 1.0*^9,
         "currentX" -> data["x0"],
         "iterSteps" -> 0,
         "localMaxTolerance" -> 1.0,

@@ -49,60 +49,63 @@ $gmgftaskReceiver = None;
 $gmgfresultsProvider = None;
 $gmgflistenTask = None;
 
-parseMessage[event_] := Module[{jsonString, jsonObject, funcExpr},
-    Print["[DAEMON] Empfangenes Event-Objekt: ", Keys[event]];
-    
+(*
+  parseMessage: see analogous comment in newton_solver.wl. The function
+  field is always re-hydrated via ProblemProvider`GetProblemfunction[id],
+  so we no longer attempt to ToExpression[] it.
+*)
+parseMessage[event_] := Module[{jsonString, jsonObject},
     If[KeyExistsQ[event, "DataByteArray"],
         jsonString = ByteArrayToString[event["DataByteArray"], "UTF-8"];
     ,
         jsonString = Lookup[event, "Data", ""];
     ];
     If[!StringQ[jsonString] || StringLength[StringTrim[jsonString]] == 0,
-        Print["[\|01f6a8 DAEMON FEHLER] Der empfangene String ist leer oder kein Text!"];
+        Print["[GMGF-DAEMON] Empty socket data"];
         Return[<|"id" -> "UNKNOWN", "status" -> "error", "errorMessage" -> "Empty Socket Data"|>];
     ];
     jsonObject = Quiet @ Check[Association @ ImportString[jsonString, "JSON"], $Failed];
     If[jsonObject === $Failed,
-        Print["[\|01f6a8 DAEMON FEHLER] Das JSON konnte nicht geparst werden!"];
+        Print["[GMGF-DAEMON] Invalid JSON: ", StringTake[jsonString, UpTo[200]]];
         Return[<|"id" -> "UNKNOWN", "status" -> "error", "errorMessage" -> "Invalid JSON"|>];
-    ];
-    If[KeyExistsQ[jsonObject, "function"] && StringQ[jsonObject["function"]],
-        funcExpr = Quiet @ Check[ToExpression[jsonObject["function"]], $Failed];
-        If[funcExpr === $Failed,
-            Print["[\|01f6a8 DAEMON FEHLER] Funktion konnte nicht kompiliert werden: ", jsonObject["function"]];
-            Return[<|"id" -> Lookup[jsonObject, "id", "UNKNOWN"], "status" -> "error", "errorMessage" -> "Invalid Math Function"|>];
-        ];
-        jsonObject["function"] = funcExpr;
     ];
     jsonObject   
 ]
 
 jobPush[state_Association] := Module[{jsonString, bytes},
-	Echo[state, "State vor Export"];
 	jsonString = ExportString[state, "JSON", "Compact" -> True];
 	jsonString = StringDelete[jsonString, {"\n", "\r"}];
 	bytes = StringToByteArray[jsonString, "UTF-8"]; 
 	BinaryWrite[$gmgfresultsProvider, bytes];
 ];
 
-catchSolverErrors[state_Association] := Module[{evalData},
-  Print["[NEWTON-DAEMON] Starte Newton-Solver f\[UDoubleDot]r State ID: ", Lookup[state, "id", "UNKNOWN"]];
+catchSolverErrors[state_Association] := Module[{evalData, caught, baseState},
+  Print["[GMGF-DAEMON] Starte gMGF-Solver f\[UDoubleDot]r State ID: ", Lookup[state, "id", "UNKNOWN"]];
   evalData = EvaluationData[
-    GetGMGFResult[state]
+    Catch[GetGMGFResult[state], "nonConvergence"]
   ];
   If[Length[evalData["MessagesText"]] > 0,
-    Print["\n[\|01f6a8 NEWTON SOLVER CRASH / WARNUNG \|01f6a8]"];
+    Print["\n[\|01f6a8 GMGF SOLVER CRASH / WARNUNG \|01f6a8]"];
     Print[StringRiffle[evalData["MessagesText"], "\n"]];
     Print["[\|01f6a8 ============================== \|01f6a8]\n"];
   ];
-  If[!evalData["Success"],
-    Return[<|
-      "id" -> Lookup[state, "id", "UNKNOWN"], 
-      "status" -> "error", 
-      "errorMessage" -> evalData["MessagesText"]
-    |>]
+  caught = evalData["Result"];
+  baseState = KeyDrop[state,
+    {"f", "df", "ddf", "intervals", "kappaList", "hList",
+     "findIndex", "getKappa", "getH", "kappaLookup"}
   ];
-  evalData["Result"]
+  If[!evalData["Success"],
+    Return[Join[baseState, <|
+      "status"       -> "error",
+      "errorMessage" -> evalData["MessagesText"],
+      "absTime"      -> 100.0
+    |>]]
+  ];
+  If[AssociationQ[caught] && Lookup[caught, "status", ""] === "non_converged",
+    Return[Join[baseState, caught,
+      <|"status" -> "error", "errorMessage" -> "non_converged", "absTime" -> 100.0|>]]
+  ];
+  caught
 ]
 
 
@@ -516,8 +519,9 @@ newtoninit[config_Association] := Module[{function, yTarget},
             "iterSteps"         -> Lookup[config, "iterSteps", 0],
             "absTime"           -> Lookup[config, "absTime", 0.0],
             "lastStepError"     -> Lookup[config, "lastStepError", 1.0],
-            "df"                -> Lookup[config, "df", Derivative[1][function]],
-            "ddf"               -> Lookup[config, "df", Derivative[2][function]]
+            "f"                 -> Lookup[config, "f",   (function[#] - yTarget &)],
+            "df"                -> Lookup[config, "df",  Derivative[1][function]],
+            "ddf"               -> Lookup[config, "ddf", Derivative[2][function]]
         |>
     ]
 ]
@@ -590,22 +594,29 @@ newtonStep[state_?AssociationQ] :=
     ]
   ]
   
-newtonbenchmark[state_] := With[{
-    benchstate = NewtonBenchmarkResult[Append[state, "absTime" -> 0.0]]
-  },
-    Append[state, "timeBenchmarkSolver" -> benchstate["absTime"]]
-]
+(*
+  newtonbenchmark: compute (and cache) the opposing-solver (Newton) benchmark
+  time for THIS (id, yTarget) ONCE. See gmgfbenchmark in newton_solver.wl for
+  the symmetric path; both feed into the same shared $benchmarkRegistry.
+*)
+newtonbenchmark[state_] := Module[{cached, id, yT, t, benchstate},
+    id = state["id"];
+    yT = state["yTarget"];
+    cached = ProblemProvider`GetBenchmarkTime[0, id, yT];
+    If[!MissingQ[cached],
+        Return[Append[state, "timeBenchmarkSolver" -> cached]]
+    ];
+    benchstate = NewtonBenchmarkResult[Append[state, "absTime" -> 0.0]];
+    t = Lookup[benchstate, "absTime", 0.0];
+    ProblemProvider`SetBenchmarkTime[0, id, yT, t];
+    Append[state, "timeBenchmarkSolver" -> t]
+];
   
 NewtonBenchmarkResult[config_?AssociationQ] := 
     config //
     newtonresetRegistry //
     newtonensureInitialized //
     newtonStep
-
-
-EchoBeforeBenchmark[state_] := (Echo[state,"Before Benchmark: "]; state)
-EchoAfterBenchmark[state_] := (Echo[state, "After Benchmark: "]; state)
-EchoAfterStep[state_] := (Echo[state, "After Step, "]; state)
 
 
 GetGMGFResult[config_?AssociationQ] := 
@@ -616,11 +627,8 @@ GetGMGFResult[config_?AssociationQ] :=
     rotateStateIds    //
     changetoTraining  //
     bumpNetworkStep   //
-    EchoBeforeBenchmark //
-    NewtonBenchmarkResult //
-    EchoAfterBenchmark //
+    newtonbenchmark   //
     gMGFStep          //
-    EchoAfterStep    //
     updateStatus      //
     removeFromActiveRegistry //
     dehydrate
