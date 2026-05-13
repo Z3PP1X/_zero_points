@@ -9,10 +9,9 @@ import optuna
 import torch
 from optuna.pruners import MedianPruner
 from stable_baselines3 import PPO
-from stable_baselines3.common.monitor import Monitor
 
 from gnn_policy_backbone import build_graph_policy_backbone
-from mathematica_env import MathematicaGraphEnv
+from mathematica_vec_env import build_mathematica_training_env, iter_monitored_envs
 from network_gateway import NetworkGateway
 from ppo_optuna_callback import (
     OptunaEpisodeRewardCallback,
@@ -37,6 +36,7 @@ class PpoOptunaWorkflow:
         max_nodes: int = 200,
         max_edges: int = 1000,
         optuna_check_freq: int = 500,
+        n_envs: int = 1,
     ):
         self.gateway = gateway
         self.preprocessor = preprocessor
@@ -45,6 +45,7 @@ class PpoOptunaWorkflow:
         self.max_nodes = max_nodes
         self.max_edges = max_edges
         self.optuna_check_freq = optuna_check_freq
+        self.n_envs = n_envs
         self.study: Optional[optuna.Study] = None
         self.total_trials = 0
 
@@ -140,14 +141,14 @@ class PpoOptunaWorkflow:
         )
 
     def _build_training_env(self, reward_calculator: RewardCalculator):
-        base_env = MathematicaGraphEnv(
+        return build_mathematica_training_env(
             gateway=self.gateway,
             preprocessor=self.preprocessor,
             reward_calculator=reward_calculator,
+            n_envs=self.n_envs,
             max_nodes=self.max_nodes,
             max_edges=self.max_edges,
         )
-        return Monitor(base_env)
 
     def _build_ppo_model(self, env, trial_config: TrialConfiguration) -> PPO:
         policy = trial_config.policy
@@ -179,6 +180,10 @@ class PpoOptunaWorkflow:
         )
 
     def _finalize_episode_state(self, env) -> None:
+        for monitored_env in iter_monitored_envs(env):
+            self._finalize_single_env_episode(monitored_env)
+
+    def _finalize_single_env_episode(self, env) -> None:
         unwrapped_env = env.unwrapped
         if (
             unwrapped_env.current_uuid is None

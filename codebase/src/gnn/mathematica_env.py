@@ -44,6 +44,7 @@ class MathematicaGraphEnv(gym.Env):
         timeout_cushion_s: float = 2.0,
         timeout_window_size: int = 100,
         timeout_penalty: float = -10.0,
+        state_ingress=None,
     ):
         super().__init__()
         self.gateway = gateway
@@ -91,7 +92,9 @@ class MathematicaGraphEnv(gym.Env):
             }
         )
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
-        self.state_ingress = MathematicaStateIngress(gateway)
+        self.state_ingress = (
+            state_ingress if state_ingress is not None else MathematicaStateIngress(gateway)
+        )
         self.current_state_dict = None
         self.current_obs = None
         self.current_uuid = None

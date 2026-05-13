@@ -42,6 +42,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=100,
         help="Anzahl erfolgreicher Roundtrips für den gleitenden Durchschnitt.",
     )
+    parser.add_argument(
+        "--n-envs",
+        type=int,
+        default=1,
+        help="Anzahl paralleler Mathematica-Environments für SB3-Training.",
+    )
     return parser
 
 
@@ -67,7 +73,7 @@ def main() -> None:
     print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
     print(
         f"Optuna: {args.n_trials} Trials × {args.timesteps} Schritte | "
-        f"Experiment: {args.experiment}"
+        f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs}"
     )
     preprocessor = Preprocessor(graphs_dir=graphs_path)
     print(
@@ -82,6 +88,7 @@ def main() -> None:
         preprocessor=preprocessor,
         experiment_name=args.experiment,
         timesteps_per_trial=args.timesteps,
+        n_envs=args.n_envs,
     )
 
     try:
