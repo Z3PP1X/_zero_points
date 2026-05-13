@@ -98,6 +98,7 @@ class MathematicaVecEnv(VecEnv):
         self._fresh_states: deque[Dict[str, Any]] = deque()
         self._fresh_uuids: set[str] = set()
         self._pending_step_responses: Dict[str, Dict[str, Any]] = {}
+        self._slots_pending_refill: set[int] = set()
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
         self._actions: Optional[np.ndarray] = None
 
@@ -211,6 +212,33 @@ class MathematicaVecEnv(VecEnv):
         self._fresh_states.clear()
         self._fresh_uuids.clear()
         self._pending_step_responses.clear()
+        self._slots_pending_refill.clear()
+
+    def _schedule_slot_refill(self, slot: int) -> None:
+        self._slots_pending_refill.add(slot)
+
+    def _refill_pending_slots(self) -> None:
+        for slot in sorted(self._slots_pending_refill):
+            self._fill_slot(slot)
+        self._slots_pending_refill.clear()
+
+    def _consume_pending_step_responses(
+        self,
+        rewards: np.ndarray,
+        dones: np.ndarray,
+        infos: List[Dict[str, Any]],
+        slots_done_this_step: List[bool],
+    ) -> int:
+        consumed = 0
+        for uuid in list(self._pending_step_responses.keys()):
+            slot = self._uuid_to_slot.get(uuid)
+            if slot is None or slots_done_this_step[slot]:
+                continue
+            payload = self._pending_step_responses.pop(uuid)
+            self._handle_response(slot, payload, rewards, dones, infos)
+            slots_done_this_step[slot] = True
+            consumed += 1
+        return consumed
 
     def _has_open_episodes(self) -> bool:
         return any(
@@ -242,17 +270,7 @@ class MathematicaVecEnv(VecEnv):
             self._handle_response(slot, payload, rewards, dones, infos)
             progressed = True
 
-        for uuid in list(self._pending_step_responses.keys()):
-            slot = self._uuid_to_slot.get(uuid)
-            if slot is None:
-                continue
-            payload = self._pending_step_responses.pop(uuid)
-            rewards = np.zeros(self.num_envs, dtype=np.float32)
-            dones = np.zeros(self.num_envs, dtype=bool)
-            infos = [{} for _ in range(self.num_envs)]
-            self._handle_response(slot, payload, rewards, dones, infos)
-            progressed = True
-
+        self._refill_pending_slots()
         return progressed
 
     def finalize_open_episodes(self, max_flush_steps: int = 128) -> None:
@@ -316,18 +334,18 @@ class MathematicaVecEnv(VecEnv):
         dones = np.zeros(self.num_envs, dtype=bool)
         infos: List[Dict[str, Any]] = [{} for _ in range(self.num_envs)]
         slots_done_this_step = [False] * self.num_envs
-
-        for uuid in list(self._pending_step_responses.keys()):
-            slot = self._uuid_to_slot.get(uuid)
-            if slot is None or slots_done_this_step[slot]:
-                continue
-            payload = self._pending_step_responses.pop(uuid)
-            self._handle_response(slot, payload, rewards, dones, infos)
-            slots_done_this_step[slot] = True
-
-        remaining = sum(1 for done in slots_done_this_step if not done)
+        remaining = self.num_envs
 
         while remaining > 0:
+            remaining -= self._consume_pending_step_responses(
+                rewards,
+                dones,
+                infos,
+                slots_done_this_step,
+            )
+            if remaining <= 0:
+                break
+
             payload = self._next_payload()
             uuid = _payload_uuid(payload)
             slot = self._uuid_to_slot.get(uuid) if uuid is not None else None
@@ -344,6 +362,7 @@ class MathematicaVecEnv(VecEnv):
             slots_done_this_step[slot] = True
             remaining -= 1
 
+        self._refill_pending_slots()
         return self._stack_obs(), rewards, dones, infos
 
     def _handle_response(
@@ -383,7 +402,7 @@ class MathematicaVecEnv(VecEnv):
             self._slot_state[slot] = None
             self._slot_obs[slot] = None
             self._slot_episode_steps[slot] = 0
-            self._fill_slot(slot)
+            self._schedule_slot_refill(slot)
             return
 
         self.replay_buffer.set_next_state(uuid, payload)
@@ -411,7 +430,7 @@ class MathematicaVecEnv(VecEnv):
             self._slot_state[slot] = None
             self._slot_obs[slot] = None
             self._slot_episode_steps[slot] = 0
-            self._fill_slot(slot)
+            self._schedule_slot_refill(slot)
             return
 
         self._slot_state[slot] = payload

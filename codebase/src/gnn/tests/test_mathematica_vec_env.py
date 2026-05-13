@@ -47,13 +47,13 @@ def _build_preprocessor():
 
 def _build_vec_env(gateway, *, n_envs=2):
     return MathematicaVecEnv(
-      num_envs=n_envs,
-      gateway=gateway,
-      preprocessor=_build_preprocessor(),
-      reward_calculator=MagicMock(),
-      max_nodes=50,
-      max_edges=100,
-  )
+        num_envs=n_envs,
+        gateway=gateway,
+        preprocessor=_build_preprocessor(),
+        reward_calculator=MagicMock(),
+        max_nodes=50,
+        max_edges=100,
+    )
 
 
 def test_reset_fills_slots_from_fresh_state_pool():
@@ -114,6 +114,31 @@ def test_step_sends_all_decisions_before_waiting_for_responses():
         "episode-a",
         "episode-b",
     }
+
+
+def test_step_wait_finishes_other_slots_before_refill():
+    gateway = _GatewayStub(
+        [
+            {"uuid": "episode-a", "status": "running", "id": "P1"},
+            {"uuid": "episode-b", "status": "running", "id": "P2"},
+            {"uuid": "episode-c", "status": "running", "id": "P3"},
+        ]
+    )
+    env = _build_vec_env(gateway)
+    env.reset()
+    env.step_async(np.zeros((2, 2), dtype=np.float32))
+    gateway._enqueue(
+        {"uuid": "episode-a", "status": "finished", "id": "P1", "networkStep": 1}
+    )
+    gateway._enqueue(
+        {"uuid": "episode-b", "status": "running", "id": "P2", "networkStep": 1}
+    )
+    _, _, dones, _ = env.step_wait()
+
+    assert bool(dones[0]) is True
+    assert bool(dones[1]) is False
+    assert env._slot_uuid[0] == "episode-c"
+    assert env._slot_uuid[1] == "episode-b"
 
 
 def test_terminal_response_refills_slot_from_fresh_pool():
