@@ -45,6 +45,10 @@ def main() -> None:
         f"Experiment: {args.experiment}"
     )
     preprocessor = Preprocessor(graphs_dir=graphs_path)
+    print(
+        f"Graph-Templates: {len(preprocessor.known_problem_ids)} Problem-IDs indexiert, "
+        f"lazy LRU-Cache aktiv"
+    )
     gateway.init()
 
     workflow = PpoOptunaWorkflow(
