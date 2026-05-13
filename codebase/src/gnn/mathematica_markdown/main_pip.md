@@ -99,46 +99,20 @@ $rewardPushPORT = 5690;
 $calculatedRewardPushPORT = 5692;
 $resultsPORT = 5693;
 
-$running = True; 
-
-
 (*
-  Event-driven dispatch (replaces the 8ms polling ScheduledTask).
-
-  We keep `$inflight` as a counter of jobs between "pushed to Python" and
-  "back at the orchestrator". `drainToTarget[]` pushes from $activeProblems
-  to Python until $inflight reaches $inflightTarget or the queue is empty.
-
-  drainToTarget[] is invoked at every event that can change either side of
-  the invariant:
-    - new training state arrives (pushtoactiveProblems)
-    - reward calc finished and new epoch state queued (bumpEpochandPush)
-    - a solver error cleared a slot (handleSolverError)
-    - initial pipeline start
-  A low-frequency safety-net ScheduledTask (1 Hz) catches any missed wakeups
-  caused by listener-thread races.
+  `$batchSize` only seeds `$activeProblems` at startup. A periodic pump pops
+  one pending state per tick and pushes it to Python; there is no in-flight
+  cap tied to batch size. Training returns and epoch rollovers refill the queue.
 *)
 
-$inflight = 0;
-$inflightTarget = $batchSize;
-
-drainToTarget[] := Module[{prob},
-    While[$inflight < $inflightTarget && !$activeProblems["EmptyQ"],
-        prob = $activeProblems["Pop"];
-        $inflight = $inflight + 1;
-        jobPush[$nnProvider, prob];
-    ];
-];
+$pythonDispatchInterval = 0.2;
 
 startPipelineTask[] := (
     If[$pipelineTask =!= None, TaskRemove[$pipelineTask]];
-    (* Safety net only -- the event-driven calls in handleState do the real work. *)
     $pipelineTask = SessionSubmit[
         ScheduledTask[
-            If[!$activeProblems["EmptyQ"] && $inflight < $inflightTarget,
-                drainToTarget[]
-            ],
-            1.0
+            If[!$activeProblems["EmptyQ"], pushToPython[]],
+            $pythonDispatchInterval
         ]
     ];
 );
@@ -180,34 +154,19 @@ pullfromrewardQueue[] := If[$rewardQueue["EmptyQ"], $Failed, $rewardQueue["Pop"]
 
 
 (** Pipeline Push Functions **)
-(*
-  handleState: dispatch a state returned by a solver.
-
-  Every branch except the in-reward-calc legs decrements $inflight (the
-  job's round-trip with Python is complete) and calls drainToTarget[] to
-  push the next pending problem(s). Reward-calc *legs* (inRewardCalc==1)
-  never went through Python in the first place, so $inflight is unchanged
-  for them.
-*)
 handleState[state_Association] :=
     If[FailureQ[state],
         writeErrorLog[state, $failedLogStream]
     ,
-        Module[{wasInflight = !TrueQ[Lookup[state, "inRewardCalc", 0] == 1]},
-            Which[
-                state["status"] == "error" || state["status"] == "non_converged",
-                    handleSolverError[state],
-                state["status"] == "reward_calc",
-                    handleRewardCalc[state],
-                state["status"] == "training",
-                    (
-                        If[wasInflight, $inflight = Max[0, $inflight - 1]];
-                        pushtoactiveProblems[state];
-                        drainToTarget[]
-                    ),
-                True,
-                    writeErrorLog[<|"reason" -> "unknown_status", "state" -> state|>, $failedLogStream]
-            ]
+        Which[
+            state["status"] == "error" || state["status"] == "non_converged",
+                handleSolverError[state],
+            state["status"] == "reward_calc",
+                handleRewardCalc[state],
+            state["status"] == "training",
+                pushtoactiveProblems[state],
+            True,
+                writeErrorLog[<|"reason" -> "unknown_status", "state" -> state|>, $failedLogStream]
         ]
     ];
 
@@ -217,8 +176,6 @@ handleState[state_Association] :=
   and (a) if it was a reward-calc leg, fail the comparison cleanly,
        (b) otherwise re-queue a fresh problem so the worker pool stays full.
 
-  $inflight is decremented only for the non-reward-calc case (the
-  reward-calc legs never went through Python).
 *)
 handleSolverError[state_Association] := Module[
     {uuid, compID, inReward, parentState, parentUuid},
@@ -262,36 +219,18 @@ handleSolverError[state_Association] := Module[
         ];
     ];
 
-    If[!inReward,
-        $inflight = Max[0, $inflight - 1];
-        If[uuid =!= None,
-            $activeRunningProblems["Delete", uuid];
-            addFromProblemsPool[];
-        ];
+    If[!inReward && uuid =!= None,
+        $activeRunningProblems["Delete", uuid];
+        addFromProblemsPool[];
     ];
-    drainToTarget[];
     state
 ];
 
-(*
-  handleRewardCalc: a converged state arrived.
-
-  Two cases share this entry point:
-    1. inRewardCalc == 0: a training step converged. This *did* round-trip
-       through Python, so $inflight is decremented and a fresh slot is
-       opened up via drainToTarget[]. The state is then handed to the
-       reward-comparison initialization (prepareRewardCalculation).
-    2. inRewardCalc == 1: a reward-calc *leg* converged. Those legs never
-       went through Python, so $inflight is left unchanged. The state is
-       handed to the reward-comparison aggregator (incomingStateComparison).
-*)
 handleRewardCalc[state_Association]:= (
 	If[TrueQ[state["inRewardCalc"] == 1],
 		jobPush[$calculatedRewardPush, state]
 	,
-		$inflight = Max[0, $inflight - 1];
-		jobPush[$rewardPush, state];
-		drainToTarget[];
+		jobPush[$rewardPush, state]
 	];
 )
     
@@ -302,15 +241,9 @@ pushtoactiveProblems[data_Association] := (
 );
 
 
-(*
-  pushToPython: legacy single-shot push, kept for compatibility. Prefer
-  drainToTarget[] which respects the $inflight invariant.
-*)
 pushToPython[] := Module[{prob},
-	If[$inflight >= $inflightTarget, Return[Null]];
 	prob = pullfromactiveProblems[];
 	If[prob =!= $Failed,
-		$inflight = $inflight + 1;
 		jobPush[$nnProvider, prob]
 	]
 ];
@@ -507,26 +440,17 @@ resetToInit[data_Association] := Module[{
     |>]
 ]
 
-(*
-  bumpEpochandPush: finalize epoch N for this state and queue epoch N+1.
-
-  Calls addFromProblemsPool[] to keep the batch full and then drainToTarget[]
-  so the next pending problem is dispatched to Python immediately rather
-  than waiting for the 1Hz safety task.
-*)
 bumpEpochandPush[state_Association] := Module[{currentEpoch, nextEpochState}, 
 	currentEpoch = state["epoch"];
 	currentEpoch++;
 	$activeRunningProblems["Delete", state["uuid"]];
 	addFromProblemsPool[];
-	nextEpochState = Join[state, <|
-		"epoch" -> currentEpoch
-	|>];
+	nextEpochState = Join[state, <|"epoch" -> currentEpoch|>];
 	If[currentEpoch <= $maxEpoch,
+		state // pushtoactiveProblems // registertoHashTable;
 		ProblemProvider`PushToDataQueue[nextEpochState],
 		Print["[PIPELINE] Training Finished - not pushing new states!"]
 	];
-	drainToTarget[];
 ]
 
 rewardPushPython[state_Association] := Module[{}, 
@@ -624,16 +548,13 @@ StartPipeline[] := (
 	Print["[gMGF-DAEMON] Ready!"];
 	Print["[NEWTON-DAEMON] Ready!"];
 	setUpExperiment[$batchSize];
-	drainToTarget[];
-	Print["[SYSTEM] Active Problems Initialised; inflight target=", $inflightTarget];
+	Print["[SYSTEM] Active Problems Initialised"];
 	startPipelineTask[];
-	While[TrueQ[$running],
-    Pause[10];
-	];
 );
 
 
 StartPipeline[];
+waitForCompletion[];
 
 
 Print["--- DAEMON OUTPUT ---"];
