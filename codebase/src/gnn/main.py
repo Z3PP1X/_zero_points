@@ -24,6 +24,24 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--timesteps", type=int, default=10000)
     parser.add_argument("--n_trials", type=int, default=50)
+    parser.add_argument(
+        "--timeout-fallback",
+        type=float,
+        default=5.0,
+        help="Initiale Timeout-Wartezeit in Sekunden ohne Roundtrip-Historie.",
+    )
+    parser.add_argument(
+        "--timeout-cushion",
+        type=float,
+        default=2.0,
+        help="Puffer in Sekunden auf den gleitenden Roundtrip-Durchschnitt.",
+    )
+    parser.add_argument(
+        "--timeout-window",
+        type=int,
+        default=100,
+        help="Anzahl erfolgreicher Roundtrips für den gleitenden Durchschnitt.",
+    )
     return parser
 
 
@@ -33,7 +51,11 @@ def main() -> None:
 
     mlflow.set_experiment(f"GNN_RL_Optuna_{args.experiment}")
 
-    traffic_monitor = GatewayTrafficMonitor()
+    traffic_monitor = GatewayTrafficMonitor(
+        timeout_fallback_s=args.timeout_fallback,
+        timeout_cushion_s=args.timeout_cushion,
+        timeout_window_size=args.timeout_window,
+    )
     gateway = NetworkGateway(
         receiver_port=RECEIVER_PORT,
         sender_port=SENDER_PORT,

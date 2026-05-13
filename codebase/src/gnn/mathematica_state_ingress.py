@@ -33,11 +33,26 @@ class MathematicaStateIngress:
                 continue
             return message
 
-    def take_next_for_episode(self, active_uuid: str, timeout_s: Optional[float] = None) -> Optional[dict]:
+    def poll_next_for_episode(self, active_uuid: str) -> Optional[dict]:
         deferred = self._deferred_by_uuid.pop(active_uuid, None)
         if deferred is not None:
             self._remove_from_waiting_init(active_uuid)
             return deferred
+
+        while True:
+            try:
+                message = self.gateway.network_queue.get_nowait()
+            except queue.Empty:
+                return None
+            message_uuid = episode_uuid(message)
+            if message_uuid == active_uuid:
+                return message
+            self._defer(message)
+
+    def take_next_for_episode(self, active_uuid: str, timeout_s: Optional[float] = None) -> Optional[dict]:
+        message = self.poll_next_for_episode(active_uuid)
+        if message is not None:
+            return message
 
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while True:

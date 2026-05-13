@@ -180,24 +180,34 @@ class PpoOptunaWorkflow:
 
     def _finalize_episode_state(self, env) -> None:
         unwrapped_env = env.unwrapped
-        if unwrapped_env.current_state_dict is None:
+        if (
+            unwrapped_env.current_uuid is None
+            or not unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid)
+        ):
             return
 
-        status = unwrapped_env.current_state_dict.get("status")
-        if status not in ["reward_calc", "finished"]:
-            print("[PpoOptunaWorkflow] Flushing unfinished Mathematica episode...")
-            while unwrapped_env.current_state_dict.get("status") not in [
-                "reward_calc",
-                "finished",
-            ]:
-                _, _, terminated, truncated, _ = env.step(env.action_space.sample())
-                if terminated or truncated:
-                    break
-
-        if (
-            unwrapped_env.current_uuid
-            and unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid)
+        print("[PpoOptunaWorkflow] Flushing unfinished Mathematica episode...")
+        unwrapped_env.drain_buffered_states()
+        max_flush_steps = 128
+        flush_steps = 0
+        while (
+            unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid)
+            and flush_steps < max_flush_steps
         ):
+            unwrapped_env.drain_buffered_states()
+            if not unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid):
+                return
+
+            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
+            flush_steps += 1
+            if terminated or truncated:
+                return
+
+        if unwrapped_env.replay_buffer.has_episode(unwrapped_env.current_uuid):
+            print(
+                "[PpoOptunaWorkflow] Could not finish Mathematica episode after "
+                f"{flush_steps} flush steps; clearing replay buffer."
+            )
             unwrapped_env.replay_buffer.clear_episode(unwrapped_env.current_uuid)
 
     @staticmethod
