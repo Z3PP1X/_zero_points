@@ -30,8 +30,9 @@ from __future__ import annotations
 import logging
 import queue
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import numpy as np
 from gymnasium import spaces
@@ -66,6 +67,9 @@ def _norm_uuid(msg: dict) -> Optional[str]:
     if u is None:
         return None
     return str(u)
+
+
+_TERMINAL_STATUSES = frozenset({"reward_calc", "finished", "error", "non_converged"})
 
 
 @dataclass
@@ -135,6 +139,8 @@ class AsyncMathematicaVecEnv(VecEnv):
 
         self._saved_actions: Optional[np.ndarray] = None
         self._step_async_pending = False
+        self._deferred_by_uuid: Dict[str, dict] = {}
+        self._deferred_order: Deque[str] = deque()
 
     # --- VecEnv: render_mode für super().__init__ ---
     def get_attr(self, attr_name: str, indices=None) -> list[Any]:
@@ -163,6 +169,8 @@ class AsyncMathematicaVecEnv(VecEnv):
     def close(self) -> None:
         self._step_async_pending = False
         self._saved_actions = None
+        self._deferred_by_uuid.clear()
+        self._deferred_order.clear()
 
     # --- Hilfen ---
     def _indices_to_list(self, indices) -> List[int]:
@@ -194,7 +202,54 @@ class AsyncMathematicaVecEnv(VecEnv):
             "num_edges": np.array([num_edges], dtype=np.int64),
         }
 
+    def _defer_incoming(self, msg: dict) -> None:
+        uid = _norm_uuid(msg)
+        if uid is None:
+            logger.warning(
+                "Nachricht ohne uuid (status=%s, channel=%s) — verworfen.",
+                msg.get("status"),
+                msg.get("_gateway_channel"),
+            )
+            return
+        if uid not in self._deferred_by_uuid:
+            self._deferred_order.append(uid)
+        self._deferred_by_uuid[uid] = msg
+
+    def _pop_deferred(self, uid: str) -> Optional[dict]:
+        msg = self._deferred_by_uuid.pop(uid, None)
+        if msg is None:
+            return None
+        self._deferred_order = deque(u for u in self._deferred_order if u != uid)
+        return msg
+
+    def _pull_deferred_start_state(self) -> Optional[dict]:
+        for uid in list(self._deferred_order):
+            msg = self._deferred_by_uuid.get(uid)
+            if msg is None:
+                continue
+            if msg.get("status") in _TERMINAL_STATUSES:
+                continue
+            if _norm_uuid(msg) is None:
+                continue
+            return self._pop_deferred(uid)
+        return None
+
+    def _fill_received_from_deferred(
+        self,
+        expected: Dict[str, int],
+        received: List[Optional[dict]],
+    ) -> None:
+        for uid, slot_idx in expected.items():
+            if received[slot_idx] is not None:
+                continue
+            deferred = self._pop_deferred(uid)
+            if deferred is not None:
+                received[slot_idx] = deferred
+
     def _recv_state_blocking(self) -> dict:
+        deferred = self._pull_deferred_start_state()
+        if deferred is not None:
+            return deferred
         while True:
             try:
                 return self.gateway.network_queue.get(timeout=0.1)
@@ -238,8 +293,13 @@ class AsyncMathematicaVecEnv(VecEnv):
         seen_uuids: set[str] = set()
         slot_idx = 0
         while slot_idx < self.num_envs:
-            msg = self._recv_state_blocking()
+            msg = self._pull_deferred_start_state()
+            if msg is None:
+                msg = self._recv_state_blocking()
             if msg.get("status") in ["reward_calc", "finished", "error", "non_converged"]:
+                uid = _norm_uuid(msg)
+                if uid is not None:
+                    self._defer_incoming(msg)
                 logger.info(
                     "Überspringe Terminal/Legacy/Error-State uuid=%s beim Vec-Reset.",
                     msg.get("uuid"),
@@ -317,6 +377,10 @@ class AsyncMathematicaVecEnv(VecEnv):
         deadline = time.monotonic() + self.step_timeout_s
 
         while any(r is None for r in received):
+            self._fill_received_from_deferred(expected, received)
+            if not any(r is None for r in received):
+                break
+
             msg = self._recv_state_with_deadline(deadline)
             if msg is None:
                 missing = [k for k in range(self.num_envs) if received[k] is None]
@@ -334,9 +398,13 @@ class AsyncMathematicaVecEnv(VecEnv):
                 )
                 continue
             if uid not in expected:
-                logger.warning(
-                    "Nachricht uuid=%s passt zu keinem erwarteten Slot — verworfen.",
+                self._defer_incoming(msg)
+                logger.debug(
+                    "Nachricht uuid=%s (status=%s, channel=%s) zwischengespeichert — "
+                    "passt nicht zu den erwarteten Slots dieses step_wait.",
                     uid,
+                    msg.get("status"),
+                    msg.get("_gateway_channel"),
                 )
                 continue
             slot_idx = expected[uid]
@@ -416,8 +484,13 @@ class AsyncMathematicaVecEnv(VecEnv):
 
     def _wait_non_terminal_state_after_done(self) -> dict:
         while True:
-            msg = self._recv_state_blocking()
+            msg = self._pull_deferred_start_state()
+            if msg is None:
+                msg = self._recv_state_blocking()
             if msg.get("status") in ("reward_calc", "finished", "error", "non_converged"):
+                uid = _norm_uuid(msg)
+                if uid is not None:
+                    self._defer_incoming(msg)
                 logger.info(
                     "Terminal/Error nach Episode — warte auf neuen Start-State (status=%s).",
                     msg.get("status"),
