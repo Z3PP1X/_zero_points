@@ -141,6 +141,30 @@ def test_step_wait_finishes_other_slots_before_refill():
     assert env._slot_uuid[1] == "episode-b"
 
 
+def test_reward_port_update_is_routed_without_ending_episode():
+    gateway = _GatewayStub(
+        [
+            {"uuid": "episode-a", "status": "running", "id": "P1"},
+            {"uuid": "episode-b", "status": "running", "id": "P2"},
+        ]
+    )
+    env = _build_vec_env(gateway)
+    env.reset()
+    env.step_async(np.zeros((2, 2), dtype=np.float32))
+    gateway._enqueue(
+        {"uuid": "episode-a", "status": "running", "id": "P1", "networkStep": 1},
+        channel="reward",
+    )
+    gateway._enqueue(
+        {"uuid": "episode-b", "status": "running", "id": "P2", "networkStep": 1},
+    )
+    _, _, dones, _ = env.step_wait()
+
+    assert not bool(dones[0])
+    assert not bool(dones[1])
+    assert env._slot_uuid == ["episode-a", "episode-b"]
+
+
 def test_terminal_response_refills_slot_from_fresh_pool():
     gateway = _GatewayStub(
         [
