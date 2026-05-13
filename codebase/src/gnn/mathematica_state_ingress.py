@@ -15,6 +15,14 @@ def episode_uuid(message: dict) -> Optional[str]:
     return str(uuid)
 
 
+def gateway_channel(message: dict) -> str:
+    return message.get("_gateway_channel", "training")
+
+
+def is_reward_port_message(message: dict) -> bool:
+    return gateway_channel(message) == "reward"
+
+
 class MathematicaStateIngress:
     def __init__(self, gateway):
         self.gateway = gateway
@@ -26,6 +34,8 @@ class MathematicaStateIngress:
             message = self._take_waiting_init()
             if message is None:
                 message = self._recv_blocking()
+            if is_reward_port_message(message):
+                continue
             status = message.get("status")
             if status in _TERMINAL_STATUSES:
                 continue
@@ -77,6 +87,8 @@ class MathematicaStateIngress:
             message = self._deferred_by_uuid.pop(uuid, None)
             if message is None:
                 continue
+            if is_reward_port_message(message):
+                continue
             if message.get("status") in _TERMINAL_STATUSES:
                 continue
             if episode_uuid(message) is None:
@@ -88,7 +100,11 @@ class MathematicaStateIngress:
         uuid = episode_uuid(message)
         if uuid is None:
             return
-        if uuid not in self._deferred_by_uuid and message.get("status") not in _TERMINAL_STATUSES:
+        if (
+            uuid not in self._deferred_by_uuid
+            and message.get("status") not in _TERMINAL_STATUSES
+            and not is_reward_port_message(message)
+        ):
             self._waiting_init_order.append(uuid)
         self._deferred_by_uuid[uuid] = message
 

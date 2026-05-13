@@ -141,28 +141,35 @@ def test_step_wait_finishes_other_slots_before_refill():
     assert env._slot_uuid[1] == "episode-b"
 
 
-def test_reward_port_update_is_routed_without_ending_episode():
+def test_reward_port_state_completes_episode():
     gateway = _GatewayStub(
         [
             {"uuid": "episode-a", "status": "running", "id": "P1"},
             {"uuid": "episode-b", "status": "running", "id": "P2"},
+            {"uuid": "episode-c", "status": "running", "id": "P3"},
         ]
     )
-    env = _build_vec_env(gateway)
+    reward_calculator = MagicMock()
+    env = MathematicaVecEnv(
+        num_envs=1,
+        gateway=gateway,
+        preprocessor=_build_preprocessor(),
+        reward_calculator=reward_calculator,
+        max_nodes=50,
+        max_edges=100,
+    )
     env.reset()
-    env.step_async(np.zeros((2, 2), dtype=np.float32))
+    env.step_async(np.zeros((1, 2), dtype=np.float32))
     gateway._enqueue(
         {"uuid": "episode-a", "status": "running", "id": "P1", "networkStep": 1},
         channel="reward",
     )
-    gateway._enqueue(
-        {"uuid": "episode-b", "status": "running", "id": "P2", "networkStep": 1},
-    )
-    _, _, dones, _ = env.step_wait()
+    _, _, dones, infos = env.step_wait()
 
-    assert not bool(dones[0])
-    assert not bool(dones[1])
-    assert env._slot_uuid == ["episode-a", "episode-b"]
+    assert bool(dones[0]) is True
+    assert infos[0]["episode"]["l"] == 1
+    assert env._slot_uuid == ["episode-b"]
+    reward_calculator.calculate_episode_rewards.assert_called_once()
 
 
 def test_terminal_response_refills_slot_from_fresh_pool():

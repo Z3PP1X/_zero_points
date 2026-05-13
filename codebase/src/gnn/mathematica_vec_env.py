@@ -23,6 +23,16 @@ from state_wait_timeout import StateRoundtripTimeout
 logger = logging.getLogger(__name__)
 
 
+def _gateway_channel(payload: Dict[str, Any]) -> str:
+    return payload.get("_gateway_channel", "training")
+
+
+def _is_terminal_response(payload: Dict[str, Any]) -> bool:
+    if _gateway_channel(payload) == "reward":
+        return True
+    return payload.get("status") in ("reward_calc", "finished")
+
+
 class MathematicaVecEnv(VecEnv):
     def __init__(
         self,
@@ -406,7 +416,7 @@ class MathematicaVecEnv(VecEnv):
 
         self._attach_observed_state(slot, payload)
 
-        if status in ("reward_calc", "finished"):
+        if _is_terminal_response(payload):
             transitions = self.replay_buffer.get_transitions(uuid)
             self.reward_calculator.calculate_episode_rewards(transitions, payload)
             total_reward = float(
