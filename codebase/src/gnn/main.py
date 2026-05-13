@@ -3,6 +3,7 @@ import os
 
 import mlflow
 
+from gateway_state_logger import GatewayStateLogger
 from network_gateway import NetworkGateway
 from gateway_traffic_monitor import GatewayTrafficMonitor
 from ppo_optuna_workflow import PpoOptunaWorkflow
@@ -65,12 +66,14 @@ def main() -> None:
         timeout_cushion_s=args.timeout_cushion,
         timeout_window_size=args.timeout_window,
     )
+    state_logger = GatewayStateLogger()
     gateway = NetworkGateway(
         receiver_port=RECEIVER_PORT,
         sender_port=SENDER_PORT,
         reward_port=RESULTS_PORT,
         control_port=CONTROL_PORT,
         traffic_monitor=traffic_monitor,
+        state_logger=state_logger,
     )
     graphs_path = os.path.join("graphs", args.experiment)
     print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
@@ -124,6 +127,7 @@ def main() -> None:
         traffic_monitor.stop()
         gateway.stop()
         gateway.cleanup()
+        state_logger.close()
 
 
 if __name__ == "__main__":

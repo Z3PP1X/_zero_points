@@ -4,6 +4,7 @@ import threading
 from queue import Queue
 from typing import Optional
 
+from gateway_state_logger import GatewayStateLogger
 from gateway_traffic_monitor import GatewayTrafficMonitor
 
 
@@ -17,6 +18,7 @@ class NetworkGateway():
         reward_port,
         *,
         traffic_monitor: Optional[GatewayTrafficMonitor] = None,
+        state_logger: Optional[GatewayStateLogger] = None,
     ):
         self.context = zmq.Context()
         self.receiver_port = receiver_port
@@ -24,6 +26,7 @@ class NetworkGateway():
         self.control_port = control_port
         self.reward_port = reward_port
         self.traffic_monitor = traffic_monitor
+        self.state_logger = state_logger
         self.receiver = None
         self.sender = None
         self.controller = None
@@ -94,6 +97,8 @@ class NetworkGateway():
 
     def _enqueue_message(self, message, channel: str) -> None:
         if isinstance(message, dict):
+            if self.state_logger is not None:
+                self.state_logger.log_incoming(message, channel)
             message["_gateway_channel"] = channel
             if self.traffic_monitor is not None:
                 self.traffic_monitor.observe(message, channel)
@@ -108,6 +113,8 @@ class NetworkGateway():
 
     def send(self, message):
         if self.sender:
+            if self.state_logger is not None:
+                self.state_logger.log_outgoing(message)
             self.sender.send_json(message)
 
     def send_decision(self, original_state: dict, solver: int, local_max_tolerance: float):
@@ -120,6 +127,8 @@ class NetworkGateway():
         response_state["localMaxTolerance"] = float(local_max_tolerance)
         
         if self.sender:
+            if self.state_logger is not None:
+                self.state_logger.log_outgoing(response_state)
             self.sender.send_json(response_state)
 
     def _cleanup_receivers(self):
