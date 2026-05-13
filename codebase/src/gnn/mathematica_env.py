@@ -59,7 +59,7 @@ class MathematicaGraphEnv(gym.Env):
         reward_calculator,
         max_nodes=50,
         max_edges=100,
-        step_timeout_s: float = 30.0,
+        step_timeout_s: float = 2.0,
         timeout_penalty: float = -10.0,
     ):
         super().__init__()
@@ -125,17 +125,19 @@ class MathematicaGraphEnv(gym.Env):
         Blocks until the next state arrives from the NetworkGateway queue.
 
         Args:
-            timeout_s: Optional wall-clock timeout. ``None`` blocks forever.
+            timeout_s: Optional inactivity timeout in seconds. ``None`` blocks
+                forever. With a finite value, returns ``None`` if no message
+                arrives within that window.
 
         Returns:
-            State dict from Mathematica, or ``None`` if timeout_s elapses without one.
+            State dict from Mathematica, or ``None`` if the idle timeout elapses.
 
         Raises:
             InterruptedError: If the gateway stops running.
         """
-        deadline = None if timeout_s is None else time.monotonic() + timeout_s
+        idle_deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while True:
-            remaining = None if deadline is None else deadline - time.monotonic()
+            remaining = None if idle_deadline is None else idle_deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 return None
             try:
@@ -224,12 +226,11 @@ class MathematicaGraphEnv(gym.Env):
         # 3. Send decision to Mathematica
         self.gateway.send_decision(self.current_state_dict, chosen_solver, chosen_tol)
 
-        # 4. Wait for next state (with wall-clock timeout to avoid deadlock if
-        # Mathematica drops a response).
+        # 4. Wait for next state (idle timeout avoids deadlock if Mathematica drops a response).
         next_state_dict = self._wait_for_next_state(timeout_s=self.step_timeout_s)
         if next_state_dict is None:
             logger.error(
-                "Step Timeout nach %.1fs (UUID: %s). Episode wird abgebrochen.",
+                "Step Idle-Timeout nach %.1fs ohne Antwort (UUID: %s). Episode wird abgebrochen.",
                 self.step_timeout_s, self.current_uuid,
             )
             if self.replay_buffer.has_episode(self.current_uuid):

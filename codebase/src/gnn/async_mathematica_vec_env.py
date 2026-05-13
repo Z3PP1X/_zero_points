@@ -20,10 +20,12 @@ Voraussetzungen:
     Routing-Feld nicht eindeutig wäre.
 
 Robustheit:
-    - ``step_wait`` hat einen Wall-Clock-Timeout. Falls Mathematica eine erwartete
-      Antwort verliert (Throw ohne Catch, Socket-Stall, Solver-Crash), wird der
-      betroffene Slot als Episode-Fehler beendet (done=True, negativer Reward),
-      damit die SB3-Trainings-Loop nicht deadlockt.
+    - ``step_wait`` nutzt einen Inaktivitäts-Timeout (Standard 2 s): fehlende Slots
+      werden nur beendet, wenn für diese Dauer keine weitere passende Antwort
+      eintrifft. Jede erwartete Antwort setzt den Timer zurück.
+    - Falls Mathematica eine erwartete Antwort verliert, wird der betroffene Slot
+      als Episode-Fehler beendet (done=True, negativer Reward), damit die
+      SB3-Trainings-Loop nicht deadlockt.
 """
 from __future__ import annotations
 
@@ -95,7 +97,7 @@ class AsyncMathematicaVecEnv(VecEnv):
         num_envs: int,
         max_nodes: int = 200,
         max_edges: int = 1000,
-        step_timeout_s: float = 30.0,
+        step_timeout_s: float = 2.0,
         timeout_penalty: float = -10.0,
     ):
         if num_envs < 1:
@@ -355,10 +357,12 @@ class AsyncMathematicaVecEnv(VecEnv):
         """
         Wait for one response per slot, identified by the slot's expected uuid.
 
-        Hardened against Mathematica losing/dropping a state:
-          * each slot has its own wall-clock deadline (``step_timeout_s``);
-          * if a slot times out, its episode is terminated with ``timeout_penalty``
-            and the slot is reset against the next non-terminal state that arrives.
+        Uses an inactivity timeout (``step_timeout_s``): the wait ends only after
+        that many seconds without a newly matched response for this step. Each
+        matched reply resets the timer.
+
+        If slots are still missing after the idle period, they are terminated
+        with ``timeout_penalty`` and replaced with the next start state.
         """
         if not self._step_async_pending or self._saved_actions is None:
             raise RuntimeError("step_wait ohne step_async.")
@@ -373,23 +377,25 @@ class AsyncMathematicaVecEnv(VecEnv):
             expected[uid] = k
 
         received: List[Optional[dict]] = [None] * self.num_envs
-        timed_out_slots: List[int] = []
-        deadline = time.monotonic() + self.step_timeout_s
+        last_progress = time.monotonic()
 
         while any(r is None for r in received):
+            pending_before = sum(1 for r in received if r is None)
             self._fill_received_from_deferred(expected, received)
-            if not any(r is None for r in received):
-                break
+            if sum(1 for r in received if r is None) < pending_before:
+                last_progress = time.monotonic()
+                if not any(r is None for r in received):
+                    break
 
-            msg = self._recv_state_with_deadline(deadline)
+            msg = self._recv_state_with_deadline(last_progress + self.step_timeout_s)
             if msg is None:
                 missing = [k for k in range(self.num_envs) if received[k] is None]
                 missing_uuids = [self._slots[k].current_uuid for k in missing]
                 logger.error(
-                    "step_wait Timeout nach %.1fs — Slots ohne Antwort: %s (uuids=%s).",
+                    "step_wait Idle-Timeout nach %.1fs ohne neue passende Antwort — "
+                    "Slots ohne Antwort: %s (uuids=%s).",
                     self.step_timeout_s, missing, missing_uuids,
                 )
-                timed_out_slots = missing
                 break
             uid = _norm_uuid(msg)
             if uid is None:
@@ -412,6 +418,7 @@ class AsyncMathematicaVecEnv(VecEnv):
                 logger.warning("Doppelte Antwort für Slot %s — überspringe.", slot_idx)
                 continue
             received[slot_idx] = msg
+            last_progress = time.monotonic()
 
         rews = np.zeros(self.num_envs, dtype=np.float32)
         dones = np.zeros(self.num_envs, dtype=np.bool_)
