@@ -108,6 +108,7 @@ class MathematicaVecEnv(VecEnv):
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
         self._actions: Optional[np.ndarray] = None
         self.total_timeouts = 0
+        self._is_finalizing = False
 
     def _pad_graph(self, pyg_data) -> Dict[str, np.ndarray]:
         x = pyg_data.x.numpy()
@@ -171,13 +172,22 @@ class MathematicaVecEnv(VecEnv):
         self._slot_obs[slot] = self._pad_graph(pyg_data)
 
     def _stack_obs(self) -> Dict[str, np.ndarray]:
-        return {
-            key: np.stack(
-                [self._slot_obs[slot][key] for slot in range(self.num_envs)],
-                axis=0,
-            )
-            for key in ("x", "edge_index", "global_features", "num_nodes", "num_edges")
-        }
+        obs_keys = ("x", "edge_index", "global_features", "num_nodes", "num_edges")
+        stacked: Dict[str, np.ndarray] = {}
+        for key in obs_keys:
+            arrays = []
+            for slot in range(self.num_envs):
+                slot_obs = self._slot_obs[slot]
+                if slot_obs is not None:
+                    arrays.append(slot_obs[key])
+                else:
+                    arrays.append(
+                        np.zeros_like(
+                            self.observation_space[key].sample()
+                        )
+                    )
+            stacked[key] = np.stack(arrays, axis=0)
+        return stacked
 
     def _clear_all_slots(self) -> None:
         for slot in range(self.num_envs):
@@ -195,6 +205,9 @@ class MathematicaVecEnv(VecEnv):
         self._slots_pending_refill.add(slot)
 
     def _refill_pending_slots(self) -> None:
+        if self._is_finalizing:
+            self._slots_pending_refill.clear()
+            return
         for slot in sorted(self._slots_pending_refill):
             self._fill_slot(slot)
         self._slots_pending_refill.clear()
@@ -265,28 +278,42 @@ class MathematicaVecEnv(VecEnv):
         return progressed
 
     def finalize_open_episodes(self, max_flush_steps: int = 128) -> None:
-        self.drain_pending_responses()
-        if not self._has_open_episodes():
-            return
+        """Drain all in-flight episodes without consuming fresh states.
 
-        flush_steps = 0
-        while self._has_open_episodes() and flush_steps < max_flush_steps:
+        Sets ``_is_finalizing`` so that ``_refill_pending_slots`` becomes a
+        no-op.  This prevents the flush loop from pulling fresh training
+        states out of the shared queue — states that the *next* Optuna trial
+        needs.
+
+        Args:
+            max_flush_steps: Safety cap to avoid infinite flushes.
+        """
+        self._is_finalizing = True
+        try:
             self.drain_pending_responses()
             if not self._has_open_episodes():
                 return
 
-            actions = np.stack(
-                [self.action_space.sample() for _ in range(self.num_envs)],
-                axis=0,
-            )
-            self.step_async(actions)
-            self.step_wait()
-            flush_steps += 1
+            flush_steps = 0
+            while self._has_open_episodes() and flush_steps < max_flush_steps:
+                self.drain_pending_responses()
+                if not self._has_open_episodes():
+                    return
 
-        for slot in range(self.num_envs):
-            uuid = self._slot_uuid[slot]
-            if uuid is not None and self.replay_buffer.has_episode(uuid):
-                self.replay_buffer.clear_episode(uuid)
+                actions = np.stack(
+                    [self.action_space.sample() for _ in range(self.num_envs)],
+                    axis=0,
+                )
+                self.step_async(actions)
+                self.step_wait()
+                flush_steps += 1
+
+            for slot in range(self.num_envs):
+                uuid = self._slot_uuid[slot]
+                if uuid is not None and self.replay_buffer.has_episode(uuid):
+                    self.replay_buffer.clear_episode(uuid)
+        finally:
+            self._is_finalizing = False
 
     def reset(self):
         self._clear_all_slots()
@@ -310,6 +337,8 @@ class MathematicaVecEnv(VecEnv):
         for slot in range(self.num_envs):
             state_dict = self._slot_state[slot]
             uuid = self._slot_uuid[slot]
+            if uuid is None or state_dict is None:
+                continue
             chosen_solver, chosen_tol, action_dict = decode_action_to_solver_tol(
                 actions[slot], state_dict
             )
@@ -446,7 +475,19 @@ class MathematicaVecEnv(VecEnv):
         infos[slot] = {}
 
     def close(self) -> None:
+        """Release all slots and return deferred messages to the shared queue.
+
+        This **must** be called between Optuna trials so that training states
+        consumed by this env's ``MathematicaStateIngress`` are returned to
+        ``gateway.network_queue`` and available for the next trial's env.
+        """
         self._clear_all_slots()
+        returned = self.state_ingress.drain_to_queue()
+        if returned > 0:
+            logger.info(
+                "VecEnv close: returned %d deferred messages to the queue.",
+                returned,
+            )
 
     def get_attr(self, attr_name, indices=None):
         indices = self._get_indices(indices)

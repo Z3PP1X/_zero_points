@@ -108,6 +108,32 @@ class MathematicaStateIngress:
             self._waiting_init_order.append(uuid)
         self._deferred_by_uuid[uuid] = message
 
+    def drain_to_queue(self) -> int:
+        """Return all deferred messages back into the shared gateway queue.
+
+        This must be called before the ingress is destroyed (e.g. between
+        Optuna trials) to prevent message loss.  Messages that were consumed
+        from ``network_queue`` during ``poll_next_for_episode`` or
+        ``take_next_for_episode`` but belonged to a different UUID are stored
+        locally in ``_deferred_by_uuid``.  Without draining, they would be
+        silently lost when the ingress goes out of scope.
+
+        Returns:
+            The number of messages returned to the queue.
+        """
+        returned = 0
+        for uuid in list(self._waiting_init_order):
+            message = self._deferred_by_uuid.pop(uuid, None)
+            if message is not None:
+                self.gateway.network_queue.put(message)
+                returned += 1
+        for uuid, message in self._deferred_by_uuid.items():
+            self.gateway.network_queue.put(message)
+            returned += 1
+        self._deferred_by_uuid.clear()
+        self._waiting_init_order.clear()
+        return returned
+
     def _remove_from_waiting_init(self, uuid: str) -> None:
         self._waiting_init_order = deque(
             waiting_uuid

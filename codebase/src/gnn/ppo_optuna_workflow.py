@@ -99,6 +99,7 @@ class PpoOptunaWorkflow:
             mlflow.log_params(trial.params)
             model.learn(total_timesteps=self.timesteps_per_trial, callback=callback)
             self._finalize_episode_state(env)
+            env.close()
 
             if callback.is_pruned:
                 mlflow.set_tag("status", "pruned")
