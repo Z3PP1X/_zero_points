@@ -105,25 +105,6 @@ class ExpressionGraphConverter:
             )
         return G
 
-    @staticmethod
-    def _parse_coeffs(raw_list) -> Union[torch.Tensor, None]:
-        if raw_list is None:
-            return None
-        if isinstance(raw_list, str):
-            raw_list = json.loads(raw_list)
-        numeric_coeffs = []
-        for c in raw_list:
-            if isinstance(c, (int, float)):
-                numeric_coeffs.append(float(c))
-            elif isinstance(c, str):
-                try:
-                    numeric_coeffs.append(float(c))
-                except ValueError:
-                    numeric_coeffs.append(0.0)
-        if not numeric_coeffs:
-            return None
-        return torch.tensor(numeric_coeffs, dtype=torch.float)
-
     def _to_homogeneous(self, G: nx.DiGraph, raw: dict) -> Data:
         data = from_networkx(
             G,
@@ -136,15 +117,6 @@ class ExpressionGraphConverter:
             ],
             group_edge_attrs=["edge_type"],
         )
-        taylor = self._parse_coeffs(raw.get("taylorCoeffs"))
-        inv_taylor = self._parse_coeffs(raw.get("inverseTaylorCoeffs"))
-
-        default_len = 11
-        data.taylor_coeffs = taylor if taylor is not None else torch.zeros(default_len)
-        data.inv_taylor_coeffs = (
-            inv_taylor if inv_taylor is not None else torch.zeros(default_len)
-        )
-
         return data
 
     def _to_hetero(self, G: nx.DiGraph, raw: dict) -> HeteroData:
@@ -186,13 +158,6 @@ class ExpressionGraphConverter:
             hetero["node", etype, "node"].edge_index = torch.tensor(
                 [list(src_ids), list(tgt_ids)], dtype=torch.long
             )
-
-        taylor = self._parse_coeffs(raw.get("taylorCoeffs"))
-        inv_taylor = self._parse_coeffs(raw.get("inverseTaylorCoeffs"))
-        if taylor is not None:
-            hetero.taylor_coeffs = taylor
-        if inv_taylor is not None:
-            hetero.inv_taylor_coeffs = inv_taylor
 
         return hetero
 
