@@ -7,6 +7,7 @@ import torch
 from torch_geometric.data import Data
 
 from graph_utils import ExpressionGraphConverter
+from observation_sanitize import finite_float, sanitize_torch_features
 
 STATE_GLOBAL_FEATURE_KEYS = (
     "currentX",
@@ -112,16 +113,18 @@ class Preprocessor:
         if graph_id is None:
             raise ValueError("Nachricht enthält keine 'id', Graph kann nicht geladen werden.")
 
-        extracted_features = {}
-        for key in STATE_GLOBAL_FEATURE_KEYS:
-            val = message.get(key)
-            extracted_features[key] = float(val) if val is not None else 0.0
+        extracted_features = {
+            key: finite_float(message.get(key))
+            for key in STATE_GLOBAL_FEATURE_KEYS
+        }
 
         data = self._graph_template_for_problem_id(graph_id)
 
         feat_list = [extracted_features[key] for key in STATE_GLOBAL_FEATURE_KEYS]
         raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0)
-        data.global_features = torch.sign(raw_tensor) * torch.log1p(torch.abs(raw_tensor))
+        data.global_features = sanitize_torch_features(
+            torch.sign(raw_tensor) * torch.log1p(torch.abs(raw_tensor))
+        )
 
         data.uuid = message.get("uuid")
         data.state_id = message.get("stateId")

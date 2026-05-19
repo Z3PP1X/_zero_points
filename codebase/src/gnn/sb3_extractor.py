@@ -1,6 +1,12 @@
+import logging
+
 import torch
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from torch_geometric.data import Batch, Data
+
+from observation_sanitize import sanitize_torch_features
+
+logger = logging.getLogger(__name__)
 
 
 class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
@@ -19,7 +25,8 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
             edge_index = observations["edge_index"][0, :, :num_edges].long().to(device)
             global_features = observations["global_features"][0, :].unsqueeze(0).to(device)
             batch_index = torch.zeros(x.size(0), dtype=torch.long, device=device)
-            return self.gnn(x, edge_index, batch_index, global_features)
+            features = self.gnn(x, edge_index, batch_index, global_features)
+            return self._sanitize_features(features)
 
         data_list = []
         for index in range(batch_size):
@@ -33,9 +40,20 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
             )
 
         pyg_batch = Batch.from_data_list(data_list).to(device)
-        return self.gnn(
+        features = self.gnn(
             pyg_batch.x,
             pyg_batch.edge_index,
             pyg_batch.batch,
             pyg_batch.global_features,
         )
+        return self._sanitize_features(features)
+
+    def _sanitize_features(self, features: torch.Tensor) -> torch.Tensor:
+        if torch.isfinite(features).all():
+            return features
+        bad_rows = (~torch.isfinite(features)).any(dim=1).nonzero(as_tuple=False).flatten()
+        logger.warning(
+            "Non-finite GNN features for batch indices %s; replacing with zeros.",
+            bad_rows.tolist(),
+        )
+        return sanitize_torch_features(features)

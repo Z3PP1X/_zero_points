@@ -16,6 +16,7 @@ from feature_layout import (
 )
 from mathematica_env import decode_action_to_solver_tol
 from mathematica_state_ingress import MathematicaStateIngress
+from observation_sanitize import sanitize_numpy_features
 from replay_buffer import EpisodeReplayBuffer
 from reward import RewardCalculator
 from state_wait_timeout import StateRoundtripTimeout
@@ -111,12 +112,19 @@ class MathematicaVecEnv(VecEnv):
         self._is_finalizing = False
 
     def _pad_graph(self, pyg_data) -> Dict[str, np.ndarray]:
-        x = pyg_data.x.numpy()
+        x = sanitize_numpy_features(pyg_data.x.numpy())
         edge_index = pyg_data.edge_index.numpy()
-        global_features = pyg_data.global_features.numpy().flatten()
+        global_features = sanitize_numpy_features(
+            pyg_data.global_features.numpy().flatten()
+        )
 
         num_nodes = min(x.shape[0], self.max_nodes)
         num_edges = min(edge_index.shape[1], self.max_edges)
+        if num_nodes == 0:
+            logger.warning(
+                "Graph observation has 0 nodes; using one zero node to keep GNN pooling finite."
+            )
+            num_nodes = 1
 
         padded_x = np.zeros((self.max_nodes, PADDED_NODE_FEATURE_COUNT), dtype=np.float32)
         node_width = min(x.shape[1], NATIVE_NODE_FEATURE_COUNT, PADDED_NODE_FEATURE_COUNT)

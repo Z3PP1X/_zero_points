@@ -9,6 +9,14 @@ PADDED_GLOBAL_FEATURE_COUNT = NATIVE_GLOBAL_FEATURE_COUNT
 
 NODE_INPUT_DIM_CHOICES = (4, 5)
 GLOBAL_INPUT_DIM_CHOICES = (6, 9)
+
+# Suffix for Optuna study/DB names. Bump (or change choices) when categorical search
+# spaces change so load_if_exists does not reuse incompatible distributions.
+OPTUNA_SEARCH_SPACE_SUFFIX = (
+    f"n{''.join(str(choice) for choice in NODE_INPUT_DIM_CHOICES)}"
+    f"g{''.join(str(choice) for choice in GLOBAL_INPUT_DIM_CHOICES)}"
+)
+
 HIDDEN_DIM_CHOICES = (64, 128, 256)
 GNN_ARCHITECTURE_CHOICES = (
     "gatv2_stack",

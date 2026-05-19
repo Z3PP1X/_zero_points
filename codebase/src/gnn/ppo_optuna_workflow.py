@@ -10,6 +10,7 @@ import torch
 from optuna.pruners import MedianPruner
 from stable_baselines3 import PPO
 
+from feature_layout import OPTUNA_SEARCH_SPACE_SUFFIX
 from gnn_policy_backbone import build_graph_policy_backbone
 from mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
 from network_gateway import CONTROL_FRESH_TRIAL_ENV, NetworkGateway
@@ -50,8 +51,13 @@ class PpoOptunaWorkflow:
         self.total_trials = 0
 
     def create_study(self) -> optuna.Study:
-        study_name = f"gnn_rl_{self.experiment_name}"
-        storage_name = f"sqlite:///optuna_{self.experiment_name}.db"
+        study_name = f"gnn_rl_{self.experiment_name}_{OPTUNA_SEARCH_SPACE_SUFFIX}"
+        storage_name = (
+            f"sqlite:///optuna_{self.experiment_name}_{OPTUNA_SEARCH_SPACE_SUFFIX}.db"
+        )
+        print(
+            f"[PpoOptunaWorkflow] Optuna study={study_name!r} storage={storage_name}"
+        )
         self.study = optuna.create_study(
             study_name=study_name,
             storage=storage_name,
