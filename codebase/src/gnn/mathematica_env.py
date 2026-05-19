@@ -1,76 +1,105 @@
+import math
+import logging
+import time
+
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-import math
-import queue
-import logging
 
+from feature_layout import (
+    NATIVE_GLOBAL_FEATURE_COUNT,
+    NATIVE_NODE_FEATURE_COUNT,
+    PADDED_GLOBAL_FEATURE_COUNT,
+    PADDED_NODE_FEATURE_COUNT,
+)
+from mathematica_state_ingress import MathematicaStateIngress
 from replay_buffer import EpisodeReplayBuffer
-from network_gateway import CHANNEL_STATE, CHANNEL_TERMINAL
+from state_wait_timeout import StateRoundtripTimeout
 
 logger = logging.getLogger(__name__)
 
 
+def decode_action_to_solver_tol(action, state_dict: dict) -> tuple:
+    chosen_solver = 1 if action[0] > 0 else 0
+    base_tol = state_dict.get("tolerance", 1e-15)
+    log_tol_min = math.log10(base_tol)
+    log_tol_max = log_tol_min + 14.0
+    scale_factor = (action[1] + 1.0) / 2.0
+    log10_tol = log_tol_min + scale_factor * (log_tol_max - log_tol_min)
+    chosen_tol = 10.0 ** log10_tol
+    action_dict = {"solver": chosen_solver, "localMaxTolerance": chosen_tol}
+    return chosen_solver, chosen_tol, action_dict
+
+
 class MathematicaGraphEnv(gym.Env):
-    """
-    Gymnasium environment for interacting with Mathematica via ZeroMQ.
-
-    Manages the communication cycle:
-        1. Receive states from Mathematica (state ZeroMQ port)
-        2. Process graph via Preprocessor
-        3. Record transition in EpisodeReplayBuffer
-        4. Send action decision back to Mathematica
-        5. At episode end: receive terminal / benchmark payload on the reward port,
-           compute rewards retroactively via RewardCalculator
-
-    Terminal episodes are recognized when the next event arrives on the reward
-    port (``CHANNEL_TERMINAL``). For backward compatibility, a terminal dict on the
-    state port with ``status`` in ``reward_calc`` / ``finished`` is still accepted.
-
-    Args:
-        gateway: NetworkGateway instance for ZeroMQ communication.
-        preprocessor: Preprocessor instance for graph loading and feature injection.
-        reward_calculator: RewardCalculator instance for episode reward computation.
-        max_nodes: Maximum number of nodes for padded observation space.
-        max_edges: Maximum number of edges for padded observation space.
-    """
-
-    def __init__(self, gateway, preprocessor, reward_calculator, max_nodes=50, max_edges=100):
+    def __init__(
+        self,
+        gateway,
+        preprocessor,
+        reward_calculator,
+        max_nodes=50,
+        max_edges=100,
+        timeout_fallback_s: float = 5.0,
+        timeout_cushion_s: float = 2.0,
+        timeout_window_size: int = 100,
+        timeout_penalty: float = -10.0,
+        state_ingress=None,
+    ):
         super().__init__()
         self.gateway = gateway
         self.preprocessor = preprocessor
         self.reward_calculator = reward_calculator
         self.max_nodes = max_nodes
         self.max_edges = max_edges
-
-        # Action Space: [Solver (Continuous >0.0 is 1), Tolerance (Continuous -1 to 1)]
+        self.timeout_penalty = timeout_penalty
+        traffic_monitor = getattr(gateway, "traffic_monitor", None)
+        if traffic_monitor is not None and hasattr(traffic_monitor, "roundtrip_timeout"):
+            self._roundtrip_timeout = traffic_monitor.roundtrip_timeout
+        else:
+            self._roundtrip_timeout = StateRoundtripTimeout(
+                window_size=timeout_window_size,
+                cushion_s=timeout_cushion_s,
+                fallback_s=timeout_fallback_s,
+            )
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
-
-        # Observation Space: Padded Graph Dictionary
-        self.observation_space = spaces.Dict({
-            "x": spaces.Box(low=-np.inf, high=np.inf, shape=(self.max_nodes, 5), dtype=np.float32),
-            "edge_index": spaces.Box(low=0, high=self.max_nodes-1, shape=(2, self.max_edges), dtype=np.int64),
-            "global_features": spaces.Box(low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32),
-            # Also keep track of valid nodes/edges to unpad in the extractor
-            "num_nodes": spaces.Box(low=0, high=self.max_nodes, shape=(1,), dtype=np.int64),
-            "num_edges": spaces.Box(low=0, high=self.max_edges, shape=(1,), dtype=np.int64)
-        })
-
+        self.observation_space = spaces.Dict(
+            {
+                "x": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(self.max_nodes, PADDED_NODE_FEATURE_COUNT),
+                    dtype=np.float32,
+                ),
+                "edge_index": spaces.Box(
+                    low=0,
+                    high=self.max_nodes - 1,
+                    shape=(2, self.max_edges),
+                    dtype=np.int64,
+                ),
+                "global_features": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(PADDED_GLOBAL_FEATURE_COUNT,),
+                    dtype=np.float32,
+                ),
+                "num_nodes": spaces.Box(
+                    low=0, high=self.max_nodes, shape=(1,), dtype=np.int64
+                ),
+                "num_edges": spaces.Box(
+                    low=0, high=self.max_edges, shape=(1,), dtype=np.int64
+                ),
+            }
+        )
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
+        self.state_ingress = (
+            state_ingress if state_ingress is not None else MathematicaStateIngress(gateway)
+        )
         self.current_state_dict = None
         self.current_obs = None
         self.current_uuid = None
+        self.total_timeouts = 0
 
     def _pad_graph(self, pyg_data):
-        """
-        Pads a PyG Data object to fixed dimensions for SB3 compatibility.
-
-        Args:
-            pyg_data: PyTorch Geometric Data object from the Preprocessor.
-
-        Returns:
-            Dict with padded numpy arrays matching the observation_space.
-        """
         x = pyg_data.x.numpy()
         edge_index = pyg_data.edge_index.numpy()
         global_features = pyg_data.global_features.numpy().flatten()
@@ -78,180 +107,141 @@ class MathematicaGraphEnv(gym.Env):
         num_nodes = min(x.shape[0], self.max_nodes)
         num_edges = min(edge_index.shape[1], self.max_edges)
 
-        padded_x = np.zeros((self.max_nodes, 5), dtype=np.float32)
-        padded_x[:num_nodes, :] = x[:num_nodes, :]
+        padded_x = np.zeros((self.max_nodes, PADDED_NODE_FEATURE_COUNT), dtype=np.float32)
+        node_width = min(x.shape[1], NATIVE_NODE_FEATURE_COUNT, PADDED_NODE_FEATURE_COUNT)
+        padded_x[:num_nodes, :node_width] = x[:num_nodes, :node_width]
 
         padded_edge_index = np.zeros((2, self.max_edges), dtype=np.int64)
         padded_edge_index[:, :num_edges] = edge_index[:, :num_edges]
 
+        padded_global = np.zeros((PADDED_GLOBAL_FEATURE_COUNT,), dtype=np.float32)
+        global_width = min(
+            global_features.shape[0],
+            NATIVE_GLOBAL_FEATURE_COUNT,
+            PADDED_GLOBAL_FEATURE_COUNT,
+        )
+        padded_global[:global_width] = global_features[:global_width]
+
         return {
             "x": padded_x,
             "edge_index": padded_edge_index,
-            "global_features": global_features.astype(np.float32),
+            "global_features": padded_global,
             "num_nodes": np.array([num_nodes], dtype=np.int64),
-            "num_edges": np.array([num_edges], dtype=np.int64)
+            "num_edges": np.array([num_edges], dtype=np.int64),
         }
 
-    def _wait_for_next_event(self):
-        """
-        Blocks until the next (channel, payload) arrives from the gateway.
-
-        Channels:
-            CHANNEL_STATE: observation from the state port.
-            CHANNEL_TERMINAL: terminal / reward payload from the reward port.
-
-        Raises:
-            InterruptedError: If the gateway stops running.
-        """
-        while True:
-            try:
-                channel, payload = self.gateway.event_queue.get(timeout=0.1)
-                # Skip legacy terminal states sent on the state port
-                if channel == CHANNEL_STATE and payload.get("status") in ("reward_calc", "finished"):
-                    continue
-                return channel, payload
-            except queue.Empty:
-                if not self.gateway.running:
-                    raise InterruptedError("Gateway stopped running.")
-
-    def _wait_for_initial_state(self):
-        """
-        Blocks until a non-terminal observation arrives on the **state** port.
-
-        Terminal-only messages on the reward port while waiting are consumed
-        and logged so they cannot corrupt episode start.
-        """
-        while True:
-            channel, state_dict = self._wait_for_next_event()
-            if channel == CHANNEL_TERMINAL:
-                logger.info(
-                    "Ignoring terminal/reward message on reward port while waiting for reset state."
-                )
-                continue
-            if state_dict.get("status") in ["reward_calc", "finished"]:
-                msg_id = state_dict.get("id", "UNKNOWN")
-                logger.info(
-                    "Skipping legacy terminal state on state port (ID: %s) during reset.",
-                    msg_id,
-                )
-                continue
-            return state_dict
+    def _wait_for_next_state(self, timeout_s: float = None):
+        if self.current_uuid is None:
+            return self.state_ingress.take_next_training_start()
+        return self.state_ingress.take_next_for_episode(self.current_uuid, timeout_s)
 
     def reset(self, seed=None, options=None):
-        """
-        Resets the environment for a new episode.
-
-        Waits for an initial (non-terminal) state from Mathematica,
-        extracts the UUID, and starts a new episode in the replay buffer.
-
-        Args:
-            seed: Optional random seed.
-            options: Optional reset options.
-
-        Returns:
-            Tuple of (observation, info_dict).
-        """
         super().reset(seed=seed)
-
-        # Clean up any leftover episode from a previous interrupted run
         if self.current_uuid and self.replay_buffer.has_episode(self.current_uuid):
             self.replay_buffer.clear_episode(self.current_uuid)
 
-        # Block until we receive a new state from Mathematica (state port only)
-        state_dict = self._wait_for_initial_state()
-
-        # Extract UUID and start new episode in replay buffer
+        state_dict = self.state_ingress.take_next_training_start()
         self.current_uuid = state_dict.get("uuid")
-        if self.current_uuid is None:
-            logger.warning("State hat keine UUID. Verwende id=%s als Fallback.", state_dict.get("id"))
-            self.current_uuid = str(state_dict.get("id", "unknown"))
-
         self.replay_buffer.start_episode(self.current_uuid)
-
         self.current_state_dict = state_dict
         pyg_data, _ = self.preprocessor.process(state_dict, dataloader=None)
         self.current_obs = self._pad_graph(pyg_data)
-
         return self.current_obs, {}
 
+    def _attach_observed_state(self, next_state_dict: dict) -> None:
+        if (
+            self.current_uuid
+            and self.replay_buffer.has_episode(self.current_uuid)
+            and self.replay_buffer.get_episode_length(self.current_uuid) > 0
+        ):
+            transitions = self.replay_buffer.get_transitions(self.current_uuid)
+            if transitions[-1].get("next_state") is None:
+                self.replay_buffer.set_next_state(self.current_uuid, next_state_dict)
+
+    def _ingest_observed_state(self, next_state_dict: dict):
+        self._attach_observed_state(next_state_dict)
+        status = next_state_dict.get("status")
+        if status in ("error", "non_converged"):
+            logger.warning(
+                "Solver-Error (UUID: %s, status=%s): %s",
+                self.current_uuid,
+                status,
+                next_state_dict.get("errorMessage"),
+            )
+            if self.replay_buffer.has_episode(self.current_uuid):
+                self.replay_buffer.clear_episode(self.current_uuid)
+            return self.current_obs, float(self.timeout_penalty), True, False, {
+                "episode_steps": 0,
+                "total_reward": float(self.timeout_penalty),
+                "error": status,
+            }
+
+        if status in ("reward_calc", "finished"):
+            transitions = self.replay_buffer.get_transitions(self.current_uuid)
+            self.reward_calculator.calculate_episode_rewards(transitions, next_state_dict)
+            total_reward = sum(t.get("reward", 0.0) for t in transitions)
+            n_steps = len(transitions)
+            logger.info(
+                "Episode done (UUID: %s) | Steps: %d | Total Reward: %.4f",
+                self.current_uuid,
+                n_steps,
+                total_reward,
+            )
+            self.replay_buffer.clear_episode(self.current_uuid)
+            return self.current_obs, total_reward, True, False, {
+                "episode_steps": n_steps,
+                "total_reward": total_reward,
+            }
+
+        self.current_state_dict = next_state_dict
+        pyg_data, _ = self.preprocessor.process(next_state_dict, dataloader=None)
+        self.current_obs = self._pad_graph(pyg_data)
+        return self.current_obs, 0.0, False, False, {}
+
+    def drain_buffered_states(self) -> bool:
+        episode_completed = False
+        while True:
+            next_state_dict = self.state_ingress.poll_next_for_episode(self.current_uuid)
+            if next_state_dict is None:
+                return episode_completed
+            _, _, terminated, _, _ = self._ingest_observed_state(next_state_dict)
+            if terminated:
+                episode_completed = True
+                return episode_completed
+
     def step(self, action):
-        """
-        Executes one step in the environment.
-
-        1. Decodes the continuous action into solver choice + tolerance.
-        2. Records the transition in the replay buffer.
-        3. Sends the decision to Mathematica.
-        4. Waits for the next observation (state port) or terminal payload (reward port).
-        5. If terminal: computes rewards retroactively via RewardCalculator
-           and returns the total episode reward.
-        6. If intermediate: returns reward=0.0 (sparse reward strategy).
-
-        Args:
-            action: numpy array of shape (2,) from SB3's policy.
-
-        Returns:
-            Tuple of (observation, reward, terminated, truncated, info).
-        """
-        # 1. Decode action
-        chosen_solver = 1 if action[0] > 0 else 0
-
-        # Tolerance mapping: Action [-1, 1] mapped to log-space around base tolerance
-        base_tol = self.current_state_dict.get("tolerance", 1e-15)
-        log_tol_base = math.log10(base_tol)
-        log_tol_min = log_tol_base - 4.0
-        log_tol_max = log_tol_base + 4.0
-
-        scale_factor = (action[1] + 1.0) / 2.0  # Map [-1, 1] to [0, 1]
-        log10_tol = log_tol_min + scale_factor * (log_tol_max - log_tol_min)
-        chosen_tol = 10.0 ** log10_tol
-
-        action_dict = {"solver": chosen_solver, "localMaxTolerance": chosen_tol}
-
-        # 2. Record transition in replay buffer (next_state still unknown)
+        chosen_solver, chosen_tol, action_dict = decode_action_to_solver_tol(
+            action, self.current_state_dict
+        )
         self.replay_buffer.add_transition(
             uuid=self.current_uuid,
             current_state=self.current_state_dict,
-            action=action_dict
+            action=action_dict,
         )
-
-        # 3. Send decision to Mathematica
         self.gateway.send_decision(self.current_state_dict, chosen_solver, chosen_tol)
-
-        # 4. Wait for next observation (state port) or terminal (reward port)
-        next_channel, next_state_dict = self._wait_for_next_event()
-        is_terminal = next_channel == CHANNEL_TERMINAL
-
-        # 5. Set next_state on the last transition
-        self.replay_buffer.set_next_state(self.current_uuid, next_state_dict)
-
-        if is_terminal:
-            # ── TERMINAL ──
-            # Compute ALL per-step rewards retroactively
-            transitions = self.replay_buffer.get_transitions(self.current_uuid)
-            self.reward_calculator.calculate_episode_rewards(transitions, next_state_dict)
-
-            # Total reward = sum of all per-step rewards
-            total_reward = sum(t.get("reward", 0.0) for t in transitions)
-            n_steps = len(transitions)
-
-            logger.info(
-                "Episode done (UUID: %s) | Steps: %d | Total Reward: %.4f",
-                self.current_uuid, n_steps, total_reward
-            )
-
-            # Clean up episode from buffer
-            self.replay_buffer.clear_episode(self.current_uuid)
-
-            return self.current_obs, total_reward, True, False, {
-                "episode_steps": n_steps,
-                "total_reward": total_reward
+        wait_started = time.monotonic()
+        next_state_dict = self._wait_for_next_state(
+            timeout_s=self._roundtrip_timeout.timeout_s()
+        )
+        if next_state_dict is not None:
+            roundtrip_s = time.monotonic() - wait_started
+            traffic_monitor = getattr(self.gateway, "traffic_monitor", None)
+            if traffic_monitor is not None:
+                traffic_monitor.record_roundtrip(roundtrip_s)
+            else:
+                self._roundtrip_timeout.record(roundtrip_s)
+        if next_state_dict is None:
+            self.total_timeouts += 1
+            traffic_monitor = getattr(self.gateway, "traffic_monitor", None)
+            if traffic_monitor is not None:
+                traffic_monitor.record_timeout()
+            if self.replay_buffer.has_episode(self.current_uuid):
+                self.replay_buffer.clear_episode(self.current_uuid)
+            return self.current_obs, 0.0, True, False, {
+                "episode_steps": 0,
+                "total_reward": 0.0,
+                "timeout": True,
+                "total_timeouts": self.total_timeouts,
             }
 
-        else:
-            # ── INTERMEDIATE ──
-            # Sparse reward: 0.0 until episode end
-            self.current_state_dict = next_state_dict
-            pyg_data, _ = self.preprocessor.process(next_state_dict, dataloader=None)
-            self.current_obs = self._pad_graph(pyg_data)
-
-            return self.current_obs, 0.0, False, False, {}
+        return self._ingest_observed_state(next_state_dict)

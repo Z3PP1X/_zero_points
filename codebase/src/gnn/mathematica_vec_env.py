@@ -1,73 +1,51 @@
-"""
-Vectorized environment for the Mathematica RL pipeline.
-
-Maintains ``num_envs`` slots, each holding one in-flight UUID/episode.
-
-Step semantics (per ``step``):
-    1. Send ``num_envs`` actions back to Mathematica in one batch
-       (one per slot, tagged with the slot's current state dict and UUID).
-    2. Receive exactly ``num_envs`` responses (state or terminal). Responses
-       may arrive in arbitrary order and are routed to slots via the UUID
-       carried in the payload.
-    3. Terminal slots have their episode reward computed retroactively and
-       are immediately refilled from the pool of fresh initial states that
-       Mathematica is streaming.
-
-This lets Mathematica process up to ``num_envs`` problems concurrently
-while the Python policy runs a single batched forward pass per step,
-hiding most of the Mathematica round-trip latency.
-
-The class deliberately keeps the synchronous SB3 ``VecEnv`` contract: a
-call to ``step_wait`` blocks until all slots have advanced once. A truly
-asynchronous "dump factory" runtime is a larger redesign and would only
-fit naturally with off-policy algorithms.
-"""
 from __future__ import annotations
 
 import logging
-import math
-import queue
-from collections import deque
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from gymnasium import spaces
 from stable_baselines3.common.vec_env import VecEnv
 
-from network_gateway import CHANNEL_STATE, CHANNEL_TERMINAL
+from feature_layout import (
+    NATIVE_GLOBAL_FEATURE_COUNT,
+    NATIVE_NODE_FEATURE_COUNT,
+    PADDED_GLOBAL_FEATURE_COUNT,
+    PADDED_NODE_FEATURE_COUNT,
+)
+from mathematica_env import decode_action_to_solver_tol
+from mathematica_state_ingress import MathematicaStateIngress
 from replay_buffer import EpisodeReplayBuffer
+from reward import RewardCalculator
+from state_wait_timeout import StateRoundtripTimeout
 
 logger = logging.getLogger(__name__)
 
-# Channel/payload tuple as published by NetworkGateway.event_queue.
-Event = Tuple[str, Dict[str, Any]]
+
+def _gateway_channel(payload: Dict[str, Any]) -> str:
+    return payload.get("_gateway_channel", "training")
+
+
+def _is_terminal_response(payload: Dict[str, Any]) -> bool:
+    if _gateway_channel(payload) == "reward":
+        return True
+    return payload.get("status") in ("reward_calc", "finished")
 
 
 class MathematicaVecEnv(VecEnv):
-    """
-    Slot-based vectorized environment over the existing ``NetworkGateway``.
-
-    Args:
-        num_envs: Number of concurrent slots = active in-flight UUIDs.
-            Mathematica must be able to keep at least ``num_envs`` problems
-            in its outgoing pool, otherwise ``reset`` / refills will block.
-        gateway: ``NetworkGateway`` instance (must already be ``init()``'d).
-        preprocessor: ``Preprocessor`` instance (graph cache + features).
-        reward_calculator: ``RewardCalculator`` for retroactive episode rewards.
-        max_nodes: Padding size for the node feature tensor.
-        max_edges: Padding size for the edge index tensor.
-    """
-
-    metadata = {"render_modes": []}
-
     def __init__(
         self,
         num_envs: int,
         gateway,
         preprocessor,
-        reward_calculator,
+        reward_calculator: RewardCalculator,
         max_nodes: int = 200,
         max_edges: int = 1000,
+        timeout_fallback_s: float = 5.0,
+        timeout_cushion_s: float = 2.0,
+        timeout_window_size: int = 100,
+        timeout_penalty: float = -10.0,
     ):
         if num_envs < 1:
             raise ValueError(f"num_envs must be >= 1, got {num_envs}")
@@ -77,6 +55,17 @@ class MathematicaVecEnv(VecEnv):
         self.reward_calculator = reward_calculator
         self.max_nodes = max_nodes
         self.max_edges = max_edges
+        self.timeout_penalty = timeout_penalty
+        self.state_ingress = MathematicaStateIngress(gateway)
+        traffic_monitor = getattr(gateway, "traffic_monitor", None)
+        if traffic_monitor is not None and hasattr(traffic_monitor, "roundtrip_timeout"):
+            self._roundtrip_timeout = traffic_monitor.roundtrip_timeout
+        else:
+            self._roundtrip_timeout = StateRoundtripTimeout(
+                window_size=timeout_window_size,
+                cushion_s=timeout_cushion_s,
+                fallback_s=timeout_fallback_s,
+            )
 
         action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         observation_space = spaces.Dict(
@@ -84,7 +73,7 @@ class MathematicaVecEnv(VecEnv):
                 "x": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(self.max_nodes, 5),
+                    shape=(self.max_nodes, PADDED_NODE_FEATURE_COUNT),
                     dtype=np.float32,
                 ),
                 "edge_index": spaces.Box(
@@ -96,7 +85,7 @@ class MathematicaVecEnv(VecEnv):
                 "global_features": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(9,),
+                    shape=(PADDED_GLOBAL_FEATURE_COUNT,),
                     dtype=np.float32,
                 ),
                 "num_nodes": spaces.Box(
@@ -110,51 +99,16 @@ class MathematicaVecEnv(VecEnv):
 
         super().__init__(num_envs, observation_space, action_space)
 
-        # Per-slot mutable state. Index = slot id.
         self._slot_uuid: List[Optional[str]] = [None] * num_envs
         self._slot_state: List[Optional[Dict[str, Any]]] = [None] * num_envs
         self._slot_obs: List[Optional[Dict[str, np.ndarray]]] = [None] * num_envs
         self._slot_episode_steps: List[int] = [0] * num_envs
-
-        # Reverse lookup: UUID currently in flight -> slot id.
         self._uuid_to_slot: Dict[str, int] = {}
-
-        # Pool of received but not yet assigned initial states. Mathematica
-        # may push more new problems than we currently have free slots; we
-        # buffer them here so refills can proceed without an extra round-trip.
-        self._fresh_states: deque = deque()
-        self._fresh_uuids: set = set()
-
-        # Step responses that arrived for a slot UUID before we were ready
-        # to consume them (e.g. multiple events for the same slot in a row,
-        # or events received during reset). Kept here until step_wait drains.
-        self._pending_step_responses: Dict[str, Event] = {}
-
-        # Terminal events that arrived for a UUID which is in _fresh_states
-        # (received but not yet assigned to a slot). Consumed in _fill_slot.
-        self._pending_terminals: Dict[str, Event] = {}
-
-        # Shared episode replay buffer (UUID-keyed); reused across slots.
+        self._slots_pending_refill: set[int] = set()
         self.replay_buffer = EpisodeReplayBuffer(keep_completed=False)
-
-        # Filled by step_async, consumed by step_wait.
         self._actions: Optional[np.ndarray] = None
-
-    # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
-    def _decode_action(
-        self, action: np.ndarray, state_dict: Dict[str, Any]
-    ) -> Tuple[int, float]:
-        chosen_solver = 1 if float(action[0]) > 0 else 0
-        base_tol = state_dict.get("tolerance", 1e-15)
-        log_tol_base = math.log10(base_tol)
-        log_tol_min = log_tol_base - 4.0
-        log_tol_max = log_tol_base + 4.0
-        scale = (float(action[1]) + 1.0) / 2.0
-        log10_tol = log_tol_min + scale * (log_tol_max - log_tol_min)
-        chosen_tol = 10.0 ** log10_tol
-        return chosen_solver, chosen_tol
+        self.total_timeouts = 0
+        self._is_finalizing = False
 
     def _pad_graph(self, pyg_data) -> Dict[str, np.ndarray]:
         x = pyg_data.x.numpy()
@@ -164,93 +118,49 @@ class MathematicaVecEnv(VecEnv):
         num_nodes = min(x.shape[0], self.max_nodes)
         num_edges = min(edge_index.shape[1], self.max_edges)
 
-        padded_x = np.zeros((self.max_nodes, 5), dtype=np.float32)
-        padded_x[:num_nodes, :] = x[:num_nodes, :]
+        padded_x = np.zeros((self.max_nodes, PADDED_NODE_FEATURE_COUNT), dtype=np.float32)
+        node_width = min(x.shape[1], NATIVE_NODE_FEATURE_COUNT, PADDED_NODE_FEATURE_COUNT)
+        padded_x[:num_nodes, :node_width] = x[:num_nodes, :node_width]
 
         padded_edge_index = np.zeros((2, self.max_edges), dtype=np.int64)
         padded_edge_index[:, :num_edges] = edge_index[:, :num_edges]
 
+        padded_global = np.zeros((PADDED_GLOBAL_FEATURE_COUNT,), dtype=np.float32)
+        global_width = min(
+            global_features.shape[0],
+            NATIVE_GLOBAL_FEATURE_COUNT,
+            PADDED_GLOBAL_FEATURE_COUNT,
+        )
+        padded_global[:global_width] = global_features[:global_width]
+
         return {
             "x": padded_x,
             "edge_index": padded_edge_index,
-            "global_features": global_features.astype(np.float32),
+            "global_features": padded_global,
             "num_nodes": np.array([num_nodes], dtype=np.int64),
             "num_edges": np.array([num_edges], dtype=np.int64),
         }
 
-    @staticmethod
-    def _is_terminal(channel: str, payload: Dict[str, Any]) -> bool:
-        return channel == CHANNEL_TERMINAL
+    def _record_roundtrip(self, wait_started: float) -> None:
+        roundtrip_s = time.monotonic() - wait_started
+        traffic_monitor = getattr(self.gateway, "traffic_monitor", None)
+        if traffic_monitor is not None:
+            traffic_monitor.record_roundtrip(roundtrip_s)
+        else:
+            self._roundtrip_timeout.record(roundtrip_s)
 
-    @staticmethod
-    def _payload_uuid(payload: Dict[str, Any]) -> str:
-        uuid = payload.get("uuid")
-        if uuid is None:
-            uuid = str(payload.get("id", "unknown"))
-        return uuid
-
-    def _next_event(self) -> Event:
-        """Block until the next ``(channel, payload)`` arrives from the gateway."""
-        while True:
-            try:
-                channel, payload = self.gateway.event_queue.get(timeout=0.1)
-                # Skip legacy terminal states sent on the state port
-                if channel == CHANNEL_STATE and payload.get("status") in ("reward_calc", "finished"):
-                    continue
-                return channel, payload
-            except queue.Empty:
-                if not self.gateway.running:
-                    raise InterruptedError("Gateway stopped running.")
-
-    def _route_event(self, channel: str, payload: Dict[str, Any]) -> None:
-        """
-        Classify an event that does not directly answer a step we sent:
-
-        - response for a UUID currently in a slot -> buffer for ``step_wait``
-        - new initial state for an unknown UUID   -> push into the fresh pool
-        - terminal/reward for an unknown UUID     -> drop with warning
-        """
-        uuid = self._payload_uuid(payload)
-
-        if uuid in self._uuid_to_slot:
-            self._pending_step_responses[uuid] = (channel, payload)
-            return
-
-        if self._is_terminal(channel, payload):
-            if uuid in self._fresh_uuids:
-                # Problem completed before Python assigned it to a slot.
-                # Buffer the terminal so _fill_slot can handle it immediately.
-                logger.debug(
-                    "Buffering early terminal for fresh UUID %s", uuid
-                )
-                self._pending_terminals[uuid] = (channel, payload)
-            else:
-                logger.debug(
-                    "Dropping terminal/reward event for untracked UUID %s "
-                    "(Mathematica processed more problems than num_envs slots).",
-                    uuid,
-                )
-            return
-
-        if uuid in self._fresh_uuids:
-            return  # duplicate fresh state for this UUID; ignore.
-
-        self._fresh_states.append(payload)
-        self._fresh_uuids.add(uuid)
-
-    def _get_fresh_state(self) -> Dict[str, Any]:
-        """Return the next non-terminal initial state, blocking if needed."""
-        while not self._fresh_states:
-            channel, payload = self._next_event()
-            self._route_event(channel, payload)
-        state_dict = self._fresh_states.popleft()
-        uuid = self._payload_uuid(state_dict)
-        self._fresh_uuids.discard(uuid)
-        return state_dict
+    def _record_timeout(self) -> None:
+        self.total_timeouts += 1
+        traffic_monitor = getattr(self.gateway, "traffic_monitor", None)
+        if traffic_monitor is not None:
+            traffic_monitor.record_timeout()
 
     def _fill_slot(self, slot: int) -> None:
-        state_dict = self._get_fresh_state()
-        uuid = self._payload_uuid(state_dict)
+        state_dict = self.state_ingress.take_next_training_start()
+        uuid = state_dict.get("uuid")
+        if uuid is None:
+            raise ValueError("Fresh Mathematica state is missing a UUID.")
+        uuid = str(uuid)
 
         self._slot_uuid[slot] = uuid
         self._slot_state[slot] = state_dict
@@ -261,20 +171,23 @@ class MathematicaVecEnv(VecEnv):
         pyg_data, _ = self.preprocessor.process(state_dict, dataloader=None)
         self._slot_obs[slot] = self._pad_graph(pyg_data)
 
-        # If Mathematica already sent a terminal for this UUID before we slotted
-        # it, move it to pending_step_responses so step_wait handles it on the
-        # very first response cycle for this slot.
-        if uuid in self._pending_terminals:
-            logger.debug("Recovering buffered terminal for newly-slotted UUID %s", uuid)
-            self._pending_step_responses[uuid] = self._pending_terminals.pop(uuid)
-
     def _stack_obs(self) -> Dict[str, np.ndarray]:
-        return {
-            key: np.stack(
-                [self._slot_obs[s][key] for s in range(self.num_envs)], axis=0
-            )
-            for key in ("x", "edge_index", "global_features", "num_nodes", "num_edges")
-        }
+        obs_keys = ("x", "edge_index", "global_features", "num_nodes", "num_edges")
+        stacked: Dict[str, np.ndarray] = {}
+        for key in obs_keys:
+            arrays = []
+            for slot in range(self.num_envs):
+                slot_obs = self._slot_obs[slot]
+                if slot_obs is not None:
+                    arrays.append(slot_obs[key])
+                else:
+                    arrays.append(
+                        np.zeros_like(
+                            self.observation_space[key].sample()
+                        )
+                    )
+            stacked[key] = np.stack(arrays, axis=0)
+        return stacked
 
     def _clear_all_slots(self) -> None:
         for slot in range(self.num_envs):
@@ -286,14 +199,122 @@ class MathematicaVecEnv(VecEnv):
             self._slot_obs[slot] = None
             self._slot_episode_steps[slot] = 0
         self._uuid_to_slot.clear()
-        self._fresh_states.clear()
-        self._fresh_uuids.clear()
-        self._pending_step_responses.clear()
-        self._pending_terminals.clear()
+        self._slots_pending_refill.clear()
 
-    # ------------------------------------------------------------------ #
-    # VecEnv API
-    # ------------------------------------------------------------------ #
+    def _schedule_slot_refill(self, slot: int) -> None:
+        self._slots_pending_refill.add(slot)
+
+    def _refill_pending_slots(self) -> None:
+        if self._is_finalizing:
+            self._slots_pending_refill.clear()
+            return
+        for slot in sorted(self._slots_pending_refill):
+            self._fill_slot(slot)
+        self._slots_pending_refill.clear()
+
+    def _has_open_episodes(self) -> bool:
+        return any(
+            uuid is not None and self.replay_buffer.has_episode(uuid)
+            for uuid in self._slot_uuid
+        )
+
+    def _attach_observed_state(self, slot: int, next_state_dict: dict) -> None:
+        uuid = self._slot_uuid[slot]
+        if (
+            uuid
+            and self.replay_buffer.has_episode(uuid)
+            and self.replay_buffer.get_episode_length(uuid) > 0
+        ):
+            transitions = self.replay_buffer.get_transitions(uuid)
+            if transitions[-1].get("next_state") is None:
+                self.replay_buffer.set_next_state(uuid, next_state_dict)
+
+    def _clear_slot(self, slot: int) -> None:
+        uuid = self._slot_uuid[slot]
+        if uuid is not None:
+            self._uuid_to_slot.pop(uuid, None)
+        self._slot_uuid[slot] = None
+        self._slot_state[slot] = None
+        self._slot_obs[slot] = None
+        self._slot_episode_steps[slot] = 0
+
+    def _timeout_slot(
+        self,
+        slot: int,
+        rewards: np.ndarray,
+        dones: np.ndarray,
+        infos: List[Dict[str, Any]],
+    ) -> None:
+        uuid = self._slot_uuid[slot]
+        self._record_timeout()
+        if uuid is not None and self.replay_buffer.has_episode(uuid):
+            self.replay_buffer.clear_episode(uuid)
+        rewards[slot] = 0.0
+        dones[slot] = True
+        infos[slot] = {
+            "episode_steps": 0,
+            "total_reward": 0.0,
+            "timeout": True,
+            "total_timeouts": self.total_timeouts,
+        }
+        self._clear_slot(slot)
+        self._schedule_slot_refill(slot)
+
+    def drain_pending_responses(self) -> bool:
+        progressed = False
+        rewards = np.zeros(self.num_envs, dtype=np.float32)
+        dones = np.zeros(self.num_envs, dtype=bool)
+        infos: List[Dict[str, Any]] = [{} for _ in range(self.num_envs)]
+        for slot in range(self.num_envs):
+            uuid = self._slot_uuid[slot]
+            if uuid is None:
+                continue
+            next_state_dict = self.state_ingress.poll_next_for_episode(uuid)
+            if next_state_dict is None:
+                continue
+            self._handle_response(slot, next_state_dict, rewards, dones, infos)
+            progressed = True
+        self._refill_pending_slots()
+        return progressed
+
+    def finalize_open_episodes(self, max_flush_steps: int = 128) -> None:
+        """Drain all in-flight episodes without consuming fresh states.
+
+        Sets ``_is_finalizing`` so that ``_refill_pending_slots`` becomes a
+        no-op.  This prevents the flush loop from pulling fresh training
+        states out of the shared queue — states that the *next* Optuna trial
+        needs.
+
+        Args:
+            max_flush_steps: Safety cap to avoid infinite flushes.
+        """
+        self._is_finalizing = True
+        try:
+            self.drain_pending_responses()
+            if not self._has_open_episodes():
+                return
+
+            flush_steps = 0
+            while self._has_open_episodes() and flush_steps < max_flush_steps:
+                self.drain_pending_responses()
+                if not self._has_open_episodes():
+                    return
+
+                actions = np.stack(
+                    [self.action_space.sample() for _ in range(self.num_envs)],
+                    axis=0,
+                )
+                self.step_async(actions)
+                self.step_wait()
+                flush_steps += 1
+
+            for slot in range(self.num_envs):
+                uuid = self._slot_uuid[slot]
+                if uuid is not None and self.replay_buffer.has_episode(uuid):
+                    self.replay_buffer.clear_episode(uuid)
+        finally:
+            self._is_finalizing = False
+
     def reset(self):
         self._clear_all_slots()
         for slot in range(self.num_envs):
@@ -303,8 +324,7 @@ class MathematicaVecEnv(VecEnv):
     def step_async(self, actions: np.ndarray) -> None:
         if actions.shape[0] != self.num_envs:
             raise ValueError(
-                f"Expected actions of shape ({self.num_envs}, ...), "
-                f"got {actions.shape}"
+                f"Expected actions of shape ({self.num_envs}, ...), got {actions.shape}"
             )
         self._actions = actions
 
@@ -314,17 +334,14 @@ class MathematicaVecEnv(VecEnv):
         actions = self._actions
         self._actions = None
 
-        # 1) Push all N decisions into the network in one go. Mathematica
-        #    can then progress the slots concurrently; we overlap solver
-        #    work across UUIDs for the duration of one step.
         for slot in range(self.num_envs):
             state_dict = self._slot_state[slot]
             uuid = self._slot_uuid[slot]
-            chosen_solver, chosen_tol = self._decode_action(actions[slot], state_dict)
-            action_dict = {
-                "solver": chosen_solver,
-                "localMaxTolerance": chosen_tol,
-            }
+            if uuid is None or state_dict is None:
+                continue
+            chosen_solver, chosen_tol, action_dict = decode_action_to_solver_tol(
+                actions[slot], state_dict
+            )
             self.replay_buffer.add_transition(
                 uuid=uuid,
                 current_state=state_dict,
@@ -336,62 +353,105 @@ class MathematicaVecEnv(VecEnv):
         rewards = np.zeros(self.num_envs, dtype=np.float32)
         dones = np.zeros(self.num_envs, dtype=bool)
         infos: List[Dict[str, Any]] = [{} for _ in range(self.num_envs)]
-        slots_done_this_step = [False] * self.num_envs
+        slots_done = [False] * self.num_envs
+        slot_wait_started = [time.monotonic() for _ in range(self.num_envs)]
 
-        # 2a) Drain anything that already arrived for active slots while we
-        #     were busy elsewhere (e.g. responses that landed during reset).
-        for uuid in list(self._pending_step_responses.keys()):
-            slot = self._uuid_to_slot.get(uuid)
-            if slot is None or slots_done_this_step[slot]:
+        while not all(slots_done):
+            for slot in range(self.num_envs):
+                if slots_done[slot]:
+                    continue
+                uuid = self._slot_uuid[slot]
+                if uuid is None:
+                    slots_done[slot] = True
+                    continue
+                next_state_dict = self.state_ingress.poll_next_for_episode(uuid)
+                if next_state_dict is None:
+                    continue
+                self._record_roundtrip(slot_wait_started[slot])
+                self._handle_response(slot, next_state_dict, rewards, dones, infos)
+                slots_done[slot] = True
+
+            if all(slots_done):
+                break
+
+            pending_slots = [slot for slot in range(self.num_envs) if not slots_done[slot]]
+            blocking_slot = min(pending_slots, key=lambda slot: slot_wait_started[slot])
+            uuid = self._slot_uuid[blocking_slot]
+            remaining = self._roundtrip_timeout.timeout_s() - (
+                time.monotonic() - slot_wait_started[blocking_slot]
+            )
+            if remaining <= 0:
+                self._timeout_slot(blocking_slot, rewards, dones, infos)
+                slots_done[blocking_slot] = True
                 continue
-            channel, payload = self._pending_step_responses.pop(uuid)
-            self._handle_response(slot, channel, payload, rewards, dones, infos)
-            slots_done_this_step[slot] = True
 
-        remaining = sum(1 for done in slots_done_this_step if not done)
-
-        # 2b) Block on the gateway until every slot has advanced exactly once.
-        while remaining > 0:
-            channel, payload = self._next_event()
-            uuid = self._payload_uuid(payload)
-            slot = self._uuid_to_slot.get(uuid)
-
-            if slot is None:
-                self._route_event(channel, payload)
+            next_state_dict = self.state_ingress.take_next_for_episode(
+                uuid,
+                timeout_s=remaining,
+            )
+            if next_state_dict is None:
+                self._timeout_slot(blocking_slot, rewards, dones, infos)
+                slots_done[blocking_slot] = True
                 continue
 
-            if slots_done_this_step[slot]:
-                # Two events for the same slot in one step: the slot was
-                # already advanced; keep the extra event for the next step.
-                self._pending_step_responses[uuid] = (channel, payload)
-                continue
+            self._record_roundtrip(slot_wait_started[blocking_slot])
+            self._handle_response(
+                blocking_slot,
+                next_state_dict,
+                rewards,
+                dones,
+                infos,
+            )
+            slots_done[blocking_slot] = True
 
-            self._handle_response(slot, channel, payload, rewards, dones, infos)
-            slots_done_this_step[slot] = True
-            remaining -= 1
-
+        self._refill_pending_slots()
         return self._stack_obs(), rewards, dones, infos
 
     def _handle_response(
         self,
         slot: int,
-        channel: str,
         payload: Dict[str, Any],
         rewards: np.ndarray,
         dones: np.ndarray,
         infos: List[Dict[str, Any]],
     ) -> None:
         uuid = self._slot_uuid[slot]
-        self.replay_buffer.set_next_state(uuid, payload)
+        status = payload.get("status")
 
-        if self._is_terminal(channel, payload):
+        if status in ("error", "non_converged"):
+            logger.warning(
+                "Solver-Error (UUID: %s, status=%s): %s",
+                uuid,
+                status,
+                payload.get("errorMessage"),
+            )
+            if self.replay_buffer.has_episode(uuid):
+                self.replay_buffer.clear_episode(uuid)
+            rewards[slot] = float(self.timeout_penalty)
+            dones[slot] = True
+            infos[slot] = {
+                "episode_steps": 0,
+                "total_reward": float(self.timeout_penalty),
+                "episode": {
+                    "r": float(self.timeout_penalty),
+                    "l": 0,
+                    "t": 0.0,
+                },
+                "error": status,
+            }
+            self._clear_slot(slot)
+            self._schedule_slot_refill(slot)
+            return
+
+        self._attach_observed_state(slot, payload)
+
+        if _is_terminal_response(payload):
             transitions = self.replay_buffer.get_transitions(uuid)
             self.reward_calculator.calculate_episode_rewards(transitions, payload)
-            total_reward = float(sum(t.get("reward", 0.0) for t in transitions))
+            total_reward = float(
+                sum(float(t.get("reward") or 0.0) for t in transitions)
+            )
             n_steps = len(transitions)
-
-            # SB3 reads info["episode"] to fill ep_info_buffer (normally
-            # provided by the Monitor wrapper which we do not use here).
             terminal_obs = self._slot_obs[slot]
             infos[slot] = {
                 "episode_steps": n_steps,
@@ -403,28 +463,31 @@ class MathematicaVecEnv(VecEnv):
             dones[slot] = True
 
             self.replay_buffer.clear_episode(uuid)
-            del self._uuid_to_slot[uuid]
-            self._slot_uuid[slot] = None
-            self._slot_state[slot] = None
-            self._slot_obs[slot] = None
-            self._slot_episode_steps[slot] = 0
+            self._clear_slot(slot)
+            self._schedule_slot_refill(slot)
+            return
 
-            # SB3 vec env contract: obs returned for a done env is the
-            # initial observation of the next episode. Refill immediately.
-            self._fill_slot(slot)
-        else:
-            self._slot_state[slot] = payload
-            pyg_data, _ = self.preprocessor.process(payload, dataloader=None)
-            self._slot_obs[slot] = self._pad_graph(pyg_data)
-            rewards[slot] = 0.0
-            dones[slot] = False
-            infos[slot] = {}
+        self._slot_state[slot] = payload
+        pyg_data, _ = self.preprocessor.process(payload, dataloader=None)
+        self._slot_obs[slot] = self._pad_graph(pyg_data)
+        rewards[slot] = 0.0
+        dones[slot] = False
+        infos[slot] = {}
 
-    # ------------------------------------------------------------------ #
-    # Other VecEnv contract methods
-    # ------------------------------------------------------------------ #
     def close(self) -> None:
+        """Release all slots and return deferred messages to the shared queue.
+
+        This **must** be called between Optuna trials so that training states
+        consumed by this env's ``MathematicaStateIngress`` are returned to
+        ``gateway.network_queue`` and available for the next trial's env.
+        """
         self._clear_all_slots()
+        returned = self.state_ingress.drain_to_queue()
+        if returned > 0:
+            logger.info(
+                "VecEnv close: returned %d deferred messages to the queue.",
+                returned,
+            )
 
     def get_attr(self, attr_name, indices=None):
         indices = self._get_indices(indices)
@@ -446,3 +509,22 @@ class MathematicaVecEnv(VecEnv):
 
     def seed(self, seed=None):
         return [seed for _ in range(self.num_envs)]
+
+
+def build_mathematica_training_env(
+    *,
+    gateway,
+    preprocessor,
+    reward_calculator: RewardCalculator,
+    n_envs: int,
+    max_nodes: int,
+    max_edges: int,
+):
+    return MathematicaVecEnv(
+        num_envs=n_envs,
+        gateway=gateway,
+        preprocessor=preprocessor,
+        reward_calculator=reward_calculator,
+        max_nodes=max_nodes,
+        max_edges=max_edges,
+    )

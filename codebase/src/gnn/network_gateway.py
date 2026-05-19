@@ -1,30 +1,32 @@
+import time
 import zmq
 import threading
 from queue import Queue
+from typing import Optional
 
-# Multiplexed ingress: state socket vs reward (terminal) socket
-CHANNEL_STATE = "state"
-CHANNEL_TERMINAL = "terminal"
+from gateway_state_logger import GatewayStateLogger
+from gateway_traffic_monitor import GatewayTrafficMonitor
 
 
-class NetworkGateway:
-    """
-    ZeroMQ bridge to Mathematica.
+class NetworkGateway():
 
-    - State port (receiver): transition observations during an episode.
-    - Reward port (reward_receiver): terminal payloads and benchmark fields
-      for reward calculation (CHANNEL_TERMINAL).
-
-    Both are merged into ``event_queue`` as (channel, dict) so the env can
-    block on one queue while keeping receive-side routing explicit.
-    """
-
-    def __init__(self, receiver_port, sender_port, control_port, reward_port):
+    def __init__(
+        self,
+        receiver_port,
+        sender_port,
+        control_port,
+        reward_port,
+        *,
+        traffic_monitor: Optional[GatewayTrafficMonitor] = None,
+        state_logger: Optional[GatewayStateLogger] = None,
+    ):
         self.context = zmq.Context()
         self.receiver_port = receiver_port
         self.sender_port = sender_port
         self.control_port = control_port
         self.reward_port = reward_port
+        self.traffic_monitor = traffic_monitor
+        self.state_logger = state_logger
         self.receiver = None
         self.sender = None
         self.controller = None
@@ -32,7 +34,7 @@ class NetworkGateway:
         self.running = False
         self._thread = None
         self._ready = threading.Event()
-        self.event_queue = Queue()
+        self.network_queue = Queue()
 
     def _set_up_sender(self):
         self.sender = self.context.socket(zmq.PUSH)
@@ -76,32 +78,31 @@ class NetworkGateway:
         print(f"[Gateway Debug] Loop is live! Polling on ports {self.receiver_port} and {self.reward_port}...")
         
         try:
-            while self.running:
+            while self.running:                   
                 socks = dict(self.poller.poll(timeout=100))
                 if self.receiver in socks and socks[self.receiver] == zmq.POLLIN:
-                    while True:
-                        try:
-                            message = self.receiver.recv_json(flags=zmq.NOBLOCK)
-                            self.event_queue.put((CHANNEL_STATE, message))
-                        except zmq.Again:
-                            break
+                    message = self.receiver.recv_json()
+                    self._enqueue_message(message, "training")
                 if (
                     self.reward_receiver in socks
                     and socks[self.reward_receiver] == zmq.POLLIN
                 ):
-                    while True:
-                        try:
-                            reward_state = self.reward_receiver.recv_json(
-                                flags=zmq.NOBLOCK
-                            )
-                            self.event_queue.put((CHANNEL_TERMINAL, reward_state))
-                        except zmq.Again:
-                            break
+                    reward_state = self.reward_receiver.recv_json()
+                    self._enqueue_message(reward_state, "reward")
 
         except Exception as e:
             print(f"[Gateway] CRITICAL ERROR IN POLL LOOP: {e}")
         finally:
             self._cleanup_receivers()
+
+    def _enqueue_message(self, message, channel: str) -> None:
+        if isinstance(message, dict):
+            if self.state_logger is not None:
+                self.state_logger.log_incoming(message, channel)
+            message["_gateway_channel"] = channel
+            if self.traffic_monitor is not None:
+                self.traffic_monitor.observe(message, channel)
+        self.network_queue.put(message)
 
     def stop(self):
         control_parameter = {"pipeline_status": 0}
@@ -112,6 +113,8 @@ class NetworkGateway:
 
     def send(self, message):
         if self.sender:
+            if self.state_logger is not None:
+                self.state_logger.log_outgoing(message)
             self.sender.send_json(message)
 
     def send_decision(self, original_state: dict, solver: int, local_max_tolerance: float):
@@ -124,6 +127,8 @@ class NetworkGateway:
         response_state["localMaxTolerance"] = float(local_max_tolerance)
         
         if self.sender:
+            if self.state_logger is not None:
+                self.state_logger.log_outgoing(response_state)
             self.sender.send_json(response_state)
 
     def _cleanup_receivers(self):
