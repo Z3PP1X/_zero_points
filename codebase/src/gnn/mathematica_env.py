@@ -22,9 +22,8 @@ logger = logging.getLogger(__name__)
 def decode_action_to_solver_tol(action, state_dict: dict) -> tuple:
     chosen_solver = 1 if action[0] > 0 else 0
     base_tol = state_dict.get("tolerance", 1e-15)
-    log_tol_base = math.log10(base_tol)
-    log_tol_min = log_tol_base - 4.0
-    log_tol_max = log_tol_base + 4.0
+    log_tol_min = math.log10(base_tol)
+    log_tol_max = log_tol_min + 14.0
     scale_factor = (action[1] + 1.0) / 2.0
     log10_tol = log_tol_min + scale_factor * (log_tol_max - log_tol_min)
     chosen_tol = 10.0 ** log10_tol

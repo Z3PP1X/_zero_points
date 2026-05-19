@@ -21,7 +21,7 @@ class GatewayTrafficMonitor:
         *,
         refresh_s: float = 0.5,
         timeout_fallback_s: float = 5.0,
-        timeout_cushion_s: float = 2.0,
+        timeout_cushion_s: float = 0.5,
         timeout_window_size: int = 100,
     ):
         self.refresh_s = refresh_s
