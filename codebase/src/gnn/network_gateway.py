@@ -7,6 +7,9 @@ from typing import Optional
 from gateway_state_logger import GatewayStateLogger
 from gateway_traffic_monitor import GatewayTrafficMonitor
 
+# Instructs the Mathematica pipeline to stream fresh initial states for a new trial.
+CONTROL_FRESH_TRIAL_ENV = 3
+
 
 class NetworkGateway():
 
@@ -103,6 +106,11 @@ class NetworkGateway():
             if self.traffic_monitor is not None:
                 self.traffic_monitor.observe(message, channel)
         self.network_queue.put(message)
+
+    def send_control(self, control: int) -> None:
+        if not self.controller:
+            raise RuntimeError("Control socket not initialized; call init() first.")
+        self.controller.send_json({"control": int(control)})
 
     def stop(self):
         control_parameter = {"pipeline_status": 0}

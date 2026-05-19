@@ -12,7 +12,7 @@ from stable_baselines3 import PPO
 
 from gnn_policy_backbone import build_graph_policy_backbone
 from mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
-from network_gateway import NetworkGateway
+from network_gateway import CONTROL_FRESH_TRIAL_ENV, NetworkGateway
 from ppo_optuna_callback import (
     OptunaEpisodeRewardCallback,
     OptunaStudyProgressCallback,
@@ -74,6 +74,11 @@ class PpoOptunaWorkflow:
             f"\n--- Trial {trial.number} startet "
             f"({trial_index}/{self.total_trials}) | "
             f"Study Best: {_format_study_best(self.study)} ---"
+        )
+        self.gateway.send_control(CONTROL_FRESH_TRIAL_ENV)
+        print(
+            f"  Pipeline control signal sent "
+            f"(control={CONTROL_FRESH_TRIAL_ENV}, fresh trial environment)"
         )
         trial_config = sample_trial_configuration(trial)
         print(
