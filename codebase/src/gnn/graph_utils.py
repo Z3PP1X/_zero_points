@@ -120,7 +120,22 @@ class ExpressionGraphConverter:
         return G
 
     def _to_homogeneous(self, G: nx.DiGraph, raw: dict) -> Data:
-        data = from_networkx(
+        if G.number_of_edges() == 0:
+            data = from_networkx(
+                G,
+                group_node_attrs=[
+                    "node_type",
+                    "label_id",
+                    "value",
+                    "has_value",
+                    "degree_centrality",
+                ],
+            )
+            data.edge_index = torch.empty((2, 0), dtype=torch.long)
+            data.edge_attr = torch.empty((0, 1), dtype=torch.float)
+            return data
+
+        return from_networkx(
             G,
             group_node_attrs=[
                 "node_type",
@@ -131,7 +146,6 @@ class ExpressionGraphConverter:
             ],
             group_edge_attrs=["edge_type"],
         )
-        return data
 
     def _to_hetero(self, G: nx.DiGraph, raw: dict) -> HeteroData:
         node_ids = list(G.nodes)

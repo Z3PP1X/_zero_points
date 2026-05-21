@@ -106,7 +106,7 @@ class PpoOptunaWorkflow:
             check_freq=self.optuna_check_freq,
         )
 
-        with mlflow.start_run(run_name=f"Trial_{trial.number}"):
+        with mlflow.start_run(run_name=f"Trial_{trial.number}", nested=True):
             mlflow.log_params(trial.params)
             model.learn(total_timesteps=self.timesteps_per_trial, callback=callback)
             self._finalize_episode_state(env)
@@ -124,11 +124,12 @@ class PpoOptunaWorkflow:
     def optimize(self, n_trials: int) -> optuna.Study:
         self.total_trials = n_trials
         study = self.create_study()
-        study.optimize(
-            self.objective,
-            n_trials=n_trials,
-            callbacks=[OptunaStudyProgressCallback(total_trials=n_trials)],
-        )
+        with mlflow.start_run(run_name=f"Optuna_Study_{self.experiment_name}"):
+            study.optimize(
+                self.objective,
+                n_trials=n_trials,
+                callbacks=[OptunaStudyProgressCallback(total_trials=n_trials)],
+            )
         return study
 
     @staticmethod

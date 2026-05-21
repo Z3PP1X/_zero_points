@@ -90,6 +90,10 @@ class TrainingCallback(BaseCallback):
                 best_model_path = os.path.join(self.save_path, f"{self.model_name}_best.zip")
                 self.model.save(best_model_path)
                 print(f"  ↳ Saved new best model to {best_model_path} (Mean Reward: {mean_reward:.3f})")
+                try:
+                    mlflow.log_artifact(best_model_path, artifact_path="models")
+                except Exception as e:
+                    print(f"  ↳ [Callback] Warning: Failed to log best model to MLflow: {e}")
         else:
             print(f"[Step {self.num_timesteps:>6}] No completed episodes in buffer yet...")
 
@@ -98,6 +102,10 @@ class TrainingCallback(BaseCallback):
             checkpoint_path = os.path.join(self.save_path, f"{self.model_name}_step_{self.num_timesteps}.zip")
             self.model.save(checkpoint_path)
             print(f"  ↳ Saved checkpoint to {checkpoint_path}")
+            try:
+                mlflow.log_artifact(checkpoint_path, artifact_path="checkpoints")
+            except Exception as e:
+                print(f"  ↳ [Callback] Warning: Failed to log checkpoint to MLflow: {e}")
 
         return True
 
@@ -415,6 +423,11 @@ def main() -> None:
             model.save(final_path)
             print(f"\n[Training] Training completed successfully!")
             print(f"[Training] Saved final model to: {final_path}")
+            try:
+                mlflow.log_artifact(final_path, artifact_path="models")
+                print(f"[Training] Logged final model artifact to MLflow.")
+            except Exception as e:
+                print(f"[Training] Warning: Failed to log final model to MLflow: {e}")
 
     except KeyboardInterrupt:
         print("\n[Training] Training interrupted by user.")

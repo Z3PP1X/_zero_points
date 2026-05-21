@@ -50,6 +50,15 @@ class OptunaEpisodeRewardCallback(BaseCallback):
         worst_episode_reward = float(np.min(rewards))
         self.trial.report(mean_reward, self.num_timesteps)
 
+        try:
+            import mlflow
+            if mlflow.active_run() is not None:
+                mlflow.log_metric("mean_episode_reward", mean_reward, step=self.num_timesteps)
+                mlflow.log_metric("best_episode_reward", best_episode_reward, step=self.num_timesteps)
+                mlflow.log_metric("worst_episode_reward", worst_episode_reward, step=self.num_timesteps)
+        except Exception:
+            pass
+
         print(
             f"  [Trial {self.trial.number:>3}] "
             f"{progress_pct:5.1f}% ({self.num_timesteps}/{self.total_timesteps}) | "

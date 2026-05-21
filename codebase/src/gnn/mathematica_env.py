@@ -187,7 +187,7 @@ class MathematicaGraphEnv(gym.Env):
         if status in ("reward_calc", "finished"):
             transitions = self.replay_buffer.get_transitions(self.current_uuid)
             self.reward_calculator.calculate_episode_rewards(transitions, next_state_dict)
-            total_reward = sum(t.get("reward", 0.0) for t in transitions)
+            total_reward = sum((t.get("reward") if t.get("reward") is not None else 0.0) for t in transitions)
             n_steps = len(transitions)
             logger.info(
                 "Episode done (UUID: %s) | Steps: %d | Total Reward: %.4f",
