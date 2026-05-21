@@ -2,29 +2,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from datetime import datetime
+
+current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 NATIVE_NODE_FEATURE_COUNT = 5
 NATIVE_GLOBAL_FEATURE_COUNT = 9
 PADDED_NODE_FEATURE_COUNT = NATIVE_NODE_FEATURE_COUNT
 PADDED_GLOBAL_FEATURE_COUNT = NATIVE_GLOBAL_FEATURE_COUNT
 
-NODE_INPUT_DIM_CHOICES = (4, 5)
-GLOBAL_INPUT_DIM_CHOICES = (6, 9)
+NODE_INPUT_DIM_CHOICES = (4,)
+GLOBAL_INPUT_DIM_CHOICES = (6,)
 
 # Suffix for Optuna study/DB names. Bump (or change choices) when categorical search
 # spaces change so load_if_exists does not reuse incompatible distributions.
 OPTUNA_SEARCH_SPACE_SUFFIX = (
     f"n{''.join(str(choice) for choice in NODE_INPUT_DIM_CHOICES)}"
     f"g{''.join(str(choice) for choice in GLOBAL_INPUT_DIM_CHOICES)}"
+    f"_{current_timestamp}"
 )
 
-HIDDEN_DIM_CHOICES = (64, 128, 256)
+HIDDEN_DIM_CHOICES = (128,)
 GNN_ARCHITECTURE_CHOICES = (
-    "gatv2_stack",
-    "gcn_stack",
-    "sage_stack",
+    #"gatv2_stack",
+    #"gcn_stack",
+    #"sage_stack",
     "gin_stack",
 )
-GNN_LAYER_COUNT_CHOICES = (2, 3, 4)
+GNN_LAYER_COUNT_CHOICES = (3,)
 GAT_HEAD_COUNT_CHOICES = (2, 4, 8)
 
 

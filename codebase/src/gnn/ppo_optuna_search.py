@@ -25,22 +25,22 @@ def sample_trial_configuration(
     target_rollout: int = 2048,
 ) -> TrialConfiguration:
     random_seed = trial.suggest_int("random_seed", 0, 99_999)
-    learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
-    gamma = trial.suggest_float("gamma", 0.9, 0.999)
-    ent_coef = trial.suggest_float("ent_coef", 1e-8, 1e-2, log=True)
+    learning_rate = trial.suggest_float("learning_rate", 1e-6, 9e-3, log=True)
+    gamma = trial.suggest_float("gamma", 0.9841845574038558, 0.9841845574038558)
+    ent_coef = trial.suggest_float("ent_coef", 5.267281408304776e-06, 5.267281408304776e-06, log=True)
     n_steps = target_rollout
 
     reward = RewardShapingParameters(
         alpha=trial.suggest_float("alpha", 0.1, 5.0),
         basis_reward=trial.suggest_float("basis_reward", 0.1, 2.0),
-        reward_gamma=trial.suggest_float("reward_gamma", 0.9, 0.999),
+        reward_gamma=trial.suggest_float("reward_gamma", 0.97, 0.999),
         step_cost_lambda=trial.suggest_float("step_cost_lambda", 1e-4, 0.5, log=True),
-        time_bad_penalty=trial.suggest_float("time_bad_penalty", 0.1, 5.0),
+        time_bad_penalty=trial.suggest_float("time_bad_penalty", 4, 10),
         solver_mismatch_penalty=trial.suggest_float(
-            "solver_mismatch_penalty", 0.05, 2.0
+            "solver_mismatch_penalty", 0.30, 0.5
         ),
         solver_match_bonus=trial.suggest_float("solver_match_bonus", 0.0, 0.5),
-        solver_wrong_slow_coef=trial.suggest_float("solver_wrong_slow_coef", 0.0, 2.0),
+        solver_wrong_slow_coef=trial.suggest_float("solver_wrong_slow_coef", 1, 2),
     )
 
     policy = GnnPolicySpec(
