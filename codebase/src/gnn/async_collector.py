@@ -81,7 +81,7 @@ class AsyncMathematicaEnv(gym.Env):
             {
                 "x": spaces.Box(
                     low=-np.inf, high=np.inf,
-                    shape=(self.max_nodes, 5), dtype=np.float32,
+                    shape=(self.max_nodes, 16), dtype=np.float32,
                 ),
                 "edge_index": spaces.Box(
                     low=0, high=self.max_nodes - 1,
