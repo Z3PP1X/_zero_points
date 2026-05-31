@@ -6,16 +6,16 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from feature_layout import (
+from gnn.reinforcement_learning.feature_layout import (
     NATIVE_GLOBAL_FEATURE_COUNT,
     NATIVE_NODE_FEATURE_COUNT,
     PADDED_GLOBAL_FEATURE_COUNT,
     PADDED_NODE_FEATURE_COUNT,
 )
-from mathematica_state_ingress import MathematicaStateIngress
-from observation_sanitize import sanitize_numpy_features
-from replay_buffer import EpisodeReplayBuffer
-from state_wait_timeout import StateRoundtripTimeout
+from gnn.reinforcement_learning.gateway.mathematica_state_ingress import MathematicaStateIngress
+from gnn.reinforcement_learning.observation_sanitize import sanitize_numpy_features
+from gnn.reinforcement_learning.replay_buffer import EpisodeReplayBuffer
+from gnn.reinforcement_learning.gateway.state_wait_timeout import StateRoundtripTimeout
 
 logger = logging.getLogger(__name__)
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import optuna
 from stable_baselines3.common.callbacks import BaseCallback
+from typing import Optional, Any
+from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
 
 
 def _format_study_best(study: optuna.Study) -> str:
@@ -21,6 +23,7 @@ class OptunaEpisodeRewardCallback(BaseCallback):
         *,
         total_timesteps: int,
         check_freq: int = 500,
+        traffic_monitor: Optional[GatewayTrafficMonitor] = None,
     ):
         super().__init__()
         self.trial = trial
@@ -28,6 +31,7 @@ class OptunaEpisodeRewardCallback(BaseCallback):
         self.total_timesteps = total_timesteps
         self.check_freq = check_freq
         self.is_pruned = False
+        self.traffic_monitor = traffic_monitor
 
     def _on_step(self) -> bool:
         if self.n_calls % self.check_freq != 0:
@@ -48,16 +52,45 @@ class OptunaEpisodeRewardCallback(BaseCallback):
         mean_reward = float(np.mean(rewards))
         best_episode_reward = float(np.max(rewards))
         worst_episode_reward = float(np.min(rewards))
+        faster_ratio = None
+        overshoot_var = None
+        if self.traffic_monitor is not None:
+            faster_ratio, overshoot_var = self.traffic_monitor.get_rolling_metrics()
+
         self.trial.report(mean_reward, self.num_timesteps)
 
         try:
             import mlflow
+
             if mlflow.active_run() is not None:
-                mlflow.log_metric("mean_episode_reward", mean_reward, step=self.num_timesteps)
-                mlflow.log_metric("best_episode_reward", best_episode_reward, step=self.num_timesteps)
-                mlflow.log_metric("worst_episode_reward", worst_episode_reward, step=self.num_timesteps)
+                mlflow.log_metric(
+                    "mean_episode_reward", mean_reward, step=self.num_timesteps
+                )
+                mlflow.log_metric(
+                    "best_episode_reward", best_episode_reward, step=self.num_timesteps
+                )
+                mlflow.log_metric(
+                    "worst_episode_reward",
+                    worst_episode_reward,
+                    step=self.num_timesteps,
+                )
+                if faster_ratio is not None:
+                    mlflow.log_metric(
+                        "faster_than_benchmark_ratio",
+                        faster_ratio,
+                        step=self.num_timesteps,
+                    )
+                if overshoot_var is not None:
+                    mlflow.log_metric(
+                        "overshoot_variance",
+                        overshoot_var,
+                        step=self.num_timesteps,
+                    )
         except Exception:
             pass
+
+        faster_text = f"{faster_ratio:.3f}" if faster_ratio is not None else "—"
+        overshoot_text = f"{overshoot_var:.3f}" if overshoot_var is not None else "—"
 
         print(
             f"  [Trial {self.trial.number:>3}] "
@@ -66,6 +99,8 @@ class OptunaEpisodeRewardCallback(BaseCallback):
             f"Mean R: {mean_reward:>8.3f} | "
             f"Best Ep: {best_episode_reward:>8.3f} | "
             f"Worst Ep: {worst_episode_reward:>8.3f} | "
+            f"Faster Ratio: {faster_text} | "
+            f"Overshoot Var: {overshoot_text} | "
             f"Study Best: {_format_study_best(self.study)}"
         )
 
@@ -95,11 +130,7 @@ class OptunaStudyProgressCallback:
             for finished_trial in study.trials
             if finished_trial.state == optuna.trial.TrialState.PRUNED
         )
-        value_text = (
-            f"{trial.value:.3f}"
-            if trial.value is not None
-            else "—"
-        )
+        value_text = f"{trial.value:.3f}" if trial.value is not None else "—"
         print(
             f"\n--- Trial {trial.number} abgeschlossen ({trial.state.name}) | "
             f"Wert: {value_text} | "

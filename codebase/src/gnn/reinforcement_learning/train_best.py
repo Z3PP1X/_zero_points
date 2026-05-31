@@ -14,6 +14,8 @@ import argparse
 import os
 import random
 import sys
+from typing import Optional
+
 import numpy as np
 import optuna
 import torch
@@ -21,17 +23,26 @@ import mlflow
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
+# Dynamic sys.path resolution to support package imports when run as scripts
+from pathlib import Path
+sys_path_root = Path(__file__).resolve().parents[1]
+if str(sys_path_root) not in sys.path:
+    sys.path.insert(0, str(sys_path_root))
+sys_path_src = Path(__file__).resolve().parents[2]
+if str(sys_path_src) not in sys.path:
+    sys.path.insert(0, str(sys_path_src))
+
 # Pipeline imports
-from gateway_state_logger import GatewayStateLogger
-from network_gateway import NetworkGateway, CONTROL_FRESH_TRIAL_ENV
-from gateway_traffic_monitor import GatewayTrafficMonitor
-from preprocessor import Preprocessor
-from reward import RewardCalculator
-from mathematica_vec_env import build_mathematica_training_env, MathematicaVecEnv
-from gnn_policy_backbone import build_graph_policy_backbone
-from sb3_extractor import CustomGNNFeaturesExtractor
-from feature_layout import FeatureLayout
-from ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
+from gnn.reinforcement_learning.gateway.gateway_state_logger import GatewayStateLogger
+from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway, CONTROL_FRESH_TRIAL_ENV
+from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
+from gnn.reinforcement_learning.preprocessor import Preprocessor
+from gnn.reinforcement_learning.reward import RewardCalculator
+from gnn.reinforcement_learning.mathematica_vec_env import build_mathematica_training_env, MathematicaVecEnv
+from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
+from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
+from gnn.reinforcement_learning.feature_layout import FeatureLayout
+from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
 
 # ZMQ Port configuration
 RECEIVER_PORT = 5650
@@ -49,13 +60,15 @@ class TrainingCallback(BaseCallback):
         self,
         check_freq: int = 1000,
         save_path: str = "models",
-        model_name: str = "gnn_ppo_model"
+        model_name: str = "gnn_ppo_model",
+        traffic_monitor: Optional[GatewayTrafficMonitor] = None,
     ):
         super().__init__()
         self.check_freq = check_freq
         self.save_path = save_path
         self.model_name = model_name
         self.best_mean_reward = -float("inf")
+        self.traffic_monitor = traffic_monitor
         os.makedirs(self.save_path, exist_ok=True)
 
     def _on_step(self) -> bool:
@@ -64,6 +77,11 @@ class TrainingCallback(BaseCallback):
 
         ep_buf = self.model.ep_info_buffer
         n_episodes = len(ep_buf)
+
+        faster_ratio = None
+        overshoot_var = None
+        if self.traffic_monitor is not None:
+            faster_ratio, overshoot_var = self.traffic_monitor.get_rolling_metrics()
 
         if n_episodes > 0:
             rewards = [ep["r"] for ep in ep_buf]
@@ -75,13 +93,22 @@ class TrainingCallback(BaseCallback):
             mlflow.log_metric("mean_episode_reward", mean_reward, step=self.num_timesteps)
             mlflow.log_metric("best_episode_reward", best_ep_reward, step=self.num_timesteps)
             mlflow.log_metric("worst_episode_reward", worst_ep_reward, step=self.num_timesteps)
+            if faster_ratio is not None:
+                mlflow.log_metric("faster_than_benchmark_ratio", faster_ratio, step=self.num_timesteps)
+            if overshoot_var is not None:
+                mlflow.log_metric("overshoot_variance", overshoot_var, step=self.num_timesteps)
+
+            faster_text = f"{faster_ratio:.3f}" if faster_ratio is not None else "—"
+            overshoot_text = f"{overshoot_var:.3f}" if overshoot_var is not None else "—"
 
             print(
                 f"[Step {self.num_timesteps:>6}] "
                 f"Completed Episodes: {n_episodes:>3} | "
                 f"Mean Reward: {mean_reward:>8.3f} | "
                 f"Best Ep: {best_ep_reward:>8.3f} | "
-                f"Worst Ep: {worst_ep_reward:>8.3f}"
+                f"Worst Ep: {worst_ep_reward:>8.3f} | "
+                f"Faster Ratio: {faster_text} | "
+                f"Overshoot Var: {overshoot_text}"
             )
 
             # Check and save the best model
@@ -163,6 +190,7 @@ def build_trial_configuration(params: dict, override_seed: int | None = None) ->
         solver_mismatch_penalty=float(params["solver_mismatch_penalty"]),
         solver_match_bonus=float(params["solver_match_bonus"]),
         solver_wrong_slow_coef=float(params["solver_wrong_slow_coef"]),
+        time_tolerance=float(params.get("time_tolerance", 0.03)),
     )
     
     layout = FeatureLayout(
@@ -172,6 +200,7 @@ def build_trial_configuration(params: dict, override_seed: int | None = None) ->
     
     policy = GnnPolicySpec(
         architecture=params["gnn_architecture"],
+        activation=params.get("gnn_activation", "leaky_relu"),
         hidden_dim=int(params["hidden_dim"]),
         num_layers=int(params["num_gnn_layers"]),
         heads=int(params["heads"]),
@@ -287,6 +316,7 @@ def main() -> None:
     print("\n--- GNN RL RUN CONFIGURATION ---")
     print(f"  Experiment:       {args.experiment}")
     print(f"  GNN Architecture: {trial_config.policy.architecture}")
+    print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
     print(f"  Num Layers:       {trial_config.policy.num_layers}")
     print(f"  Heads:            {trial_config.policy.heads}")
@@ -321,7 +351,8 @@ def main() -> None:
         state_logger=state_logger,
     )
 
-    graphs_path = os.path.join("graphs", args.experiment)
+    repo_root = Path(__file__).resolve().parents[4]
+    graphs_path = str(repo_root / "codebase" / "src" / "gnn" / "graphs" / args.experiment)
     preprocessor = Preprocessor(graphs_dir=graphs_path)
 
     print(f"[Pipeline] Initializing ZMQ NetworkGateway on receiver={RECEIVER_PORT}, sender={SENDER_PORT}...")
@@ -337,6 +368,7 @@ def main() -> None:
         basis_reward=trial_config.reward.basis_reward,
         gamma=trial_config.reward.reward_gamma,
         alpha=trial_config.reward.alpha,
+        time_tolerance=trial_config.reward.time_tolerance,
         step_cost_lambda=trial_config.reward.step_cost_lambda,
         time_bad_penalty=trial_config.reward.time_bad_penalty,
         solver_mismatch_penalty=trial_config.reward.solver_mismatch_penalty,
@@ -358,6 +390,7 @@ def main() -> None:
     gnn_model = build_graph_policy_backbone(
         layout=trial_config.policy.layout,
         architecture=trial_config.policy.architecture,
+        activation=trial_config.policy.activation,
         hidden_dim=trial_config.policy.hidden_dim,
         num_layers=trial_config.policy.num_layers,
         heads=trial_config.policy.heads,
@@ -365,7 +398,7 @@ def main() -> None:
 
     # Attempt torch compile if requested
     if not args.no_torch_compile:
-        from gnn_architectures import maybe_torch_compile
+        from gnn.shared.models.gnn_backbones import maybe_torch_compile
         gnn_model = maybe_torch_compile(gnn_model, enabled=True)
 
     policy_kwargs = {
@@ -393,18 +426,20 @@ def main() -> None:
     training_callback = TrainingCallback(
         check_freq=1000,
         save_path=args.save_dir,
-        model_name=args.model_name
+        model_name=args.model_name,
+        traffic_monitor=traffic_monitor,
     )
 
     print(f"\n[Training] Starting full training of {args.timesteps} steps...")
     print(f"[Training] Checkpoints and best model will be saved to '{args.save_dir}/'")
 
-    try:
-        # Start MLflow run
-        with mlflow.start_run(run_name=f"Full_Training_Run_{args.model_name}"):
+    # Start MLflow run
+    with mlflow.start_run(run_name=f"Full_Training_Run_{args.model_name}"):
+        try:
             # Log all parameters to MLflow
             mlflow.log_param("experiment", args.experiment)
             mlflow.log_param("gnn_architecture", trial_config.policy.architecture)
+            mlflow.log_param("gnn_activation", trial_config.policy.activation)
             mlflow.log_param("hidden_dim", trial_config.policy.hidden_dim)
             mlflow.log_param("num_layers", trial_config.policy.num_layers)
             mlflow.log_param("heads", trial_config.policy.heads)
@@ -414,6 +449,14 @@ def main() -> None:
             mlflow.log_param("seed", trial_config.ppo.random_seed)
             mlflow.log_param("n_envs", args.n_envs)
             mlflow.log_param("timesteps", args.timesteps)
+
+            # Log reward parameters
+            mlflow.log_param("reward_version", "v2_tolerance")
+            mlflow.log_param("reward_alpha", trial_config.reward.alpha)
+            mlflow.log_param("reward_gamma", trial_config.reward.reward_gamma)
+            mlflow.log_param("time_tolerance", trial_config.reward.time_tolerance)
+            mlflow.log_param("step_cost_lambda", trial_config.reward.step_cost_lambda)
+            mlflow.log_param("time_bad_penalty", trial_config.reward.time_bad_penalty)
 
             # Start learning
             model.learn(total_timesteps=args.timesteps, callback=training_callback)
@@ -429,23 +472,23 @@ def main() -> None:
             except Exception as e:
                 print(f"[Training] Warning: Failed to log final model to MLflow: {e}")
 
-    except KeyboardInterrupt:
-        print("\n[Training] Training interrupted by user.")
-    finally:
-        print("[Pipeline] Flushing open episodes and closing environments...")
-        if isinstance(env, MathematicaVecEnv):
-            try:
-                env.finalize_open_episodes()
-            except Exception as e:
-                print(f"[Pipeline] Error during vec env episode flushing: {e}")
-            env.close()
+        except KeyboardInterrupt:
+            print("\n[Training] Training interrupted by user.")
+        finally:
+            print("[Pipeline] Flushing open episodes and closing environments...")
+            if isinstance(env, MathematicaVecEnv):
+                try:
+                    env.finalize_open_episodes()
+                except Exception as e:
+                    print(f"[Pipeline] Error during vec env episode flushing: {e}")
+                env.close()
 
-        print("[Pipeline] Stopping traffic monitor and closing ZMQ network gateway...")
-        traffic_monitor.stop()
-        gateway.stop()
-        gateway.cleanup()
-        state_logger.close()
-        print("[Pipeline] Cleanup complete. Goodbye!")
+            print("[Pipeline] Stopping traffic monitor and closing ZMQ network gateway...")
+            traffic_monitor.stop()
+            gateway.stop()
+            gateway.cleanup()
+            state_logger.close()
+            print("[Pipeline] Cleanup complete. Goodbye!")
 
 
 if __name__ == "__main__":

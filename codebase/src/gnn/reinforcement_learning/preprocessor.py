@@ -6,8 +6,8 @@ from typing import Any, Dict, FrozenSet
 import torch
 from torch_geometric.data import Data
 
-from graph_utils import ExpressionGraphConverter
-from observation_sanitize import finite_float, sanitize_torch_features
+from gnn.shared.utils.graph_utils import ExpressionGraphConverter
+from gnn.reinforcement_learning.observation_sanitize import finite_float, sanitize_torch_features
 
 STATE_GLOBAL_FEATURE_KEYS = (
     "currentX",

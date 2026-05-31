@@ -1,8 +1,42 @@
+import sys
+import numpy as np
 import torch
+from pathlib import Path
 from sklearn.model_selection import train_test_split
-from dataset import DatasetLoader
-from feature_engineering import FeatureEngineering, GraphConversionPipeline
 from torch.utils.data import Dataset
+
+# Dynamic sys.path resolution to support package imports when run as scripts
+gnn_root = Path(__file__).resolve().parents[2]
+if str(gnn_root) not in sys.path:
+    sys.path.insert(0, str(gnn_root))
+src_root = Path(__file__).resolve().parents[3]
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
+
+from gnn.supervised_learning.dataset import DatasetLoader
+from gnn.shared.utils.graph_utils import GraphConversionPipeline
+
+
+class FeatureEngineering:
+    """Contains offline feature tagging and calculation logic for supervised learning."""
+    def __init__(self, loader: DatasetLoader):
+        self._loader = loader
+
+    def _tag_faster_algorithm(self):
+        """Set binary labels for the faster algorithm: 0: Newton, 1: gMGF"""
+        boundaries = [
+            self._loader.data["avg_abs_time_newton"] < self._loader.data["avg_abs_time_gmgf"],
+            self._loader.data["avg_abs_time_newton"] > self._loader.data["avg_abs_time_gmgf"],
+        ]
+        values = [0, 1]
+        self._loader.add_column("faster_algorithm", np.select(boundaries, values))
+
+    def _conserve_relationships(self):
+        """Conserve relationships between absolute times"""
+        self._loader.add_column(
+            "conserved_step_rel",
+            self._loader.data["schritte_newton"] / self._loader.data["schritte_gmgf"],
+        )
 
 
 class GraphPipeline:
@@ -11,7 +45,8 @@ class GraphPipeline:
         self.loader = DatasetLoader(dataset_name)
         fe = FeatureEngineering(self.loader)
         fe._tag_faster_algorithm()
-        self.graph_pipeline = GraphConversionPipeline(experiments_dir)
+        # Supervised pipeline uses basic (enrich=False) graph representation
+        self.graph_pipeline = GraphConversionPipeline(experiments_dir, enrich=False)
         self.train_loader = None
         self.test_loader = None
         self.class_weights = None
@@ -95,7 +130,6 @@ class GraphPipeline:
 
 
 class ProblemRunDataset(Dataset):
-
     def __init__(self, df, base_graphs):
         self.df = df.reset_index(drop=True)
         self.base_graphs = base_graphs

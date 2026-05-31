@@ -1,13 +1,23 @@
+import sys
 import argparse
 import os
+from pathlib import Path
 
 import mlflow
 
-from gateway_state_logger import GatewayStateLogger
-from network_gateway import NetworkGateway
-from gateway_traffic_monitor import GatewayTrafficMonitor
-from ppo_optuna_workflow import PpoOptunaWorkflow
-from preprocessor import Preprocessor
+# Dynamic sys.path resolution to support package imports when run as scripts
+gnn_root = Path(__file__).resolve().parents[1]
+if str(gnn_root) not in sys.path:
+    sys.path.insert(0, str(gnn_root))
+src_root = Path(__file__).resolve().parents[2]
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
+
+from gnn.reinforcement_learning.gateway.gateway_state_logger import GatewayStateLogger
+from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway
+from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
+from gnn.reinforcement_learning.ppo_optuna_workflow import PpoOptunaWorkflow
+from gnn.reinforcement_learning.preprocessor import Preprocessor
 
 RECEIVER_PORT = 5650
 RESULTS_PORT = 5693
@@ -34,7 +44,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout-cushion",
         type=float,
-        default=2.0,
+        default=1.0,
         help="Puffer in Sekunden auf den gleitenden Roundtrip-Durchschnitt.",
     )
     parser.add_argument(
@@ -51,6 +61,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "Anzahl paralleler Mathematica-Slots für SB3-Training "
             "(gemeinsames Senden/Sammeln pro VecEnv-Schritt)."
         ),
+    )
+    parser.add_argument(
+        "--continue-study",
+        action="store_true",
+        help="Set this flag to continue the last not finished study, otherwise start a new one.",
     )
     return parser
 
@@ -75,11 +90,13 @@ def main() -> None:
         traffic_monitor=traffic_monitor,
         state_logger=state_logger,
     )
-    graphs_path = os.path.join("graphs", args.experiment)
+    repo_root = Path(__file__).resolve().parents[4]
+    graphs_path = str(repo_root / "codebase" / "src" / "gnn" / "graphs" / args.experiment)
     print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
     print(
         f"Optuna: {args.n_trials} Trials × {args.timesteps} Schritte | "
-        f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs}"
+        f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs} | "
+        f"Continue Study: {args.continue_study}"
     )
     preprocessor = Preprocessor(graphs_dir=graphs_path)
     print(
@@ -98,7 +115,7 @@ def main() -> None:
     )
 
     try:
-        study = workflow.optimize(n_trials=args.n_trials)
+        study = workflow.optimize(n_trials=args.n_trials, continue_study=args.continue_study)
         print("\n--- OPTUNA STUDY COMPLETED ---")
         print("Best trial:")
         best_trial = study.best_trial

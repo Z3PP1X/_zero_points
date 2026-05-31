@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import optuna
 
-from feature_layout import (
+from gnn.reinforcement_learning.feature_layout import (
     GAT_HEAD_COUNT_CHOICES,
     GLOBAL_INPUT_DIM_CHOICES,
+    GNN_ACTIVATION_CHOICES,
     GNN_ARCHITECTURE_CHOICES,
     GNN_LAYER_COUNT_CHOICES,
     HIDDEN_DIM_CHOICES,
     NODE_INPUT_DIM_CHOICES,
     FeatureLayout,
 )
-from ppo_trial_config import (
+from gnn.reinforcement_learning.ppo_trial_config import (
     GnnPolicySpec,
     PpoHyperparameters,
     RewardShapingParameters,
@@ -26,8 +27,8 @@ def sample_trial_configuration(
 ) -> TrialConfiguration:
     random_seed = trial.suggest_int("random_seed", 0, 99_999)
     learning_rate = trial.suggest_float("learning_rate", 1e-6, 9e-3, log=True)
-    gamma = trial.suggest_float("gamma", 0.9841845574038558, 0.9841845574038558)
-    ent_coef = trial.suggest_float("ent_coef", 5.267281408304776e-06, 5.267281408304776e-06, log=True)
+    gamma = trial.suggest_float("gamma", 0.9, 0.999)
+    ent_coef = trial.suggest_float("ent_coef", 1e-8, 1e-2, log=True)
     n_steps = target_rollout
 
     reward = RewardShapingParameters(
@@ -41,10 +42,14 @@ def sample_trial_configuration(
         ),
         solver_match_bonus=trial.suggest_float("solver_match_bonus", 0.0, 0.5),
         solver_wrong_slow_coef=trial.suggest_float("solver_wrong_slow_coef", 1, 2),
+        time_tolerance=trial.suggest_float("time_tolerance", 0.0, 0.1),
     )
 
     policy = GnnPolicySpec(
-        architecture=trial.suggest_categorical("gnn_architecture", GNN_ARCHITECTURE_CHOICES),
+        architecture=trial.suggest_categorical(
+            "gnn_architecture", GNN_ARCHITECTURE_CHOICES
+        ),
+        activation=trial.suggest_categorical("gnn_activation", GNN_ACTIVATION_CHOICES),
         hidden_dim=trial.suggest_categorical("hidden_dim", HIDDEN_DIM_CHOICES),
         num_layers=trial.suggest_categorical("num_gnn_layers", GNN_LAYER_COUNT_CHOICES),
         heads=trial.suggest_categorical("heads", GAT_HEAD_COUNT_CHOICES),

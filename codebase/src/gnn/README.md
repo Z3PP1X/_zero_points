@@ -1,153 +1,148 @@
 # GNN-RL-Pipeline (Mathematica · ZeroMQ · Stable-Baselines3 · Optuna)
 
-Diese Pipeline trainiert einen **PPO-Agenten** mit **graph-neuralem Feature-Extractor** auf Symbolik-Graphen. Der Agent steuert einen externen **Mathematica**-Solver über **ZeroMQ**; Hyperparameter werden mit **Optuna** gesucht, Lauf-Metadaten mit **MLflow** protokolliert.
+Diese Pipeline trainiert einen **PPO-Agenten** mit einem **graph-neuralen Feature-Extractor (GNN)** auf Symbolik-Graphen. Der Agent steuert einen externen **Mathematica**-Solver über **ZeroMQ**; Hyperparameter werden mit **Optuna** optimiert, Lauf-Metadaten mit **MLflow** protokolliert.
 
 ---
 
-## Was die Pipeline macht (Kurzüberblick)
+## 🎯 Hauptfunktionen
 
-1. **NetworkGateway** bindet lokale ZeroMQ-Ports und multiplext Zustands- vs. Terminal-/Reward-Nachrichten in eine gemeinsame Warteschlange.
-2. **Preprocessor** lädt pro Graph-ID die statische Topologie aus `graphs/<experiment>/` (Cache), ergänzt pro Schritt skalare **global_features** aus der Mathematica-Nachricht und baut PyTorch-Geometric-`Data`.
-3. **MathematicaGraphEnv** (Gymnasium) führt die Episode, puffert Transitionen und triggert nach Episode-Ende die rückwirkende Reward-Berechnung.
-4. **RewardCalculator** setzt `basis_reward`, zeitlich diskontierte Schritt-Rewards und einen Rekord-Verbesserungsanteil (`alpha`, `reward_gamma`).
-5. **CustomGNNFeaturesExtractor** (SB3) führt die gewählte GNN-Architektur aus und liefert feste Feature-Dimensionen an die Policy.
-6. **Optuna** variiert Seeds, PPO-, GNN- und Reward-Parameter; **MedianPruner** kann schlechte Trials früh beenden.
-7. **MLflow** legt pro Trial einen Run an, loggt alle gesampelten Parameter und die Metrik `final_mean_reward` (sowie Tags `status`: `completed` / `pruned`).
-
-Zwischenstände der mittleren Episoden-Belohnung werden an Optuna gemeldet (`trial.report` über **Timesteps**) — für Kurven und Pruning-Analysen die Optuna-Study-DB verwenden.
-
----
-
-## Voraussetzungen
-
-- **Python** mit u. a. `torch`, `torch-geometric`, `stable-baselines3`, `gymnasium`, `pyzmq`, `optuna`, `mlflow`, `numpy`.
-- **Mathematica-Seite**, die die konfigurierten Ports nutzt und mit dem Nachrichtenformat der Umgebung zusammenpasst.
-- Graph-Daten unter `codebase/src/gnn/graphs/<experiment>/` (z. B. `P1_meta.json` / `P1_ast.graphml` — der Preprocessor löst `*_meta.json` bevorzugt).
-
-Standard-**ZeroMQ-Ports** (in `main.py` fest, bei Bedarf im Code anpassen):
-
-| Rolle        | Port |
-|-------------|------|
-| State (in)  | 5650 |
-| Actions out | 5651 |
-| Terminal / Reward (in) | 5693 |
-| Control (PUB) | 6000 |
+1. **Flexible Feature-Layouts**: Die Pipeline projiziert Rohgraphen mit beliebiger Knotendimension dynamisch in einen optimierbaren latenten Raum (`node_input_dim` und `global_input_dim`).
+2. **Dynamische Aktivierungsfunktionen**: Unterstützt die Optimierung der Aktivierungsfunktion im GNN-Backbone und den MLP-Tails (`relu`, `leaky_relu`, `elu`, `tanh`, `gelu`).
+3. **Zwei-Phasen-Workflow**:
+   - **Phase 1: Tuning** mit Optuna (`main.py`) zur automatischen Suche der optimalen Parameter.
+   - **Phase 2: Training** mit den besten Parametern (`train_best.py`) für einen ausgedehnten Trainingslauf mit MLflow-Tracking.
+4. **Abwärtskompatibilität**: Ältere Studien-Datenbanken, die den Aktivierungsparameter noch nicht enthielten, werden beim Laden in Phase 2 automatisch auf `"leaky_relu"` zurückgesetzt.
+5. **Trial-Kontrolle & Fortsetzbarkeit**:
+   - Der `reward-states`-Zähler wird bei jedem Start eines neuen Optuna-Trials automatisch auf `0` zurückgesetzt.
+   - Studien können pausiert und mit dem `--continue-study` CLI-Flag nahtlos fortgesetzt werden, anstatt bei jedem Neustart eine neue Studie zu erzwingen.
 
 ---
 
-## Start aus dem GNN-Verzeichnis
+## 🛠️ Phase 1: Optuna Hyperparameter-Tuning (`main.py`)
 
-Alle Pfade beziehen sich auf das Verzeichnis `codebase/src/gnn/` (damit `graphs/` und relative Pfade stimmen).
+Das Skript `main.py` startet eine Optuna-Studie, die systematisch den Hyperparameter-Suchraum exploriert.
+
+### 🏃 Starten des Tunings
+Führen Sie das Skript aus dem `gnn`-Verzeichnis aus. Aktivieren Sie vorab das entsprechende Conda-Environment (z. B. `pytorch`).
 
 ```bash
-cd codebase/src/gnn
-python main.py [OPTIONEN]
+# In WSL / Linux Terminal wechseln und Environment aktivieren:
+conda activate pytorch
+cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn
+
+# Optuna Run starten:
+python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --n-envs 4
 ```
 
----
+### 📋 CLI-Parameter für `main.py`
 
-## CLI-Argumente (`python main.py`)
-
-| Option | Standard | Beschreibung |
-|--------|----------|--------------|
+| Parameter | Standard | Beschreibung |
+| :--- | :--- | :--- |
 | `--experiment` | `nur_f` | Datensatz/Graph-Ordner: `nur_f`, `f_fp_roh` oder `kein_inv` (Unterordner von `graphs/`). |
 | `--timesteps` | `10000` | PPO-Umgebungsschritte pro Optuna-Trial. |
-| `--n_trials` | `50` | Anzahl Optuna-Trials pro Studien-Lauf. |
-| `--no-torch-compile` | aus | Wenn gesetzt: kein `torch.compile` auf dem GNN (sonst Versuch mit dynamischen Shapes, bei Fehler Fallback laut `maybe_torch_compile`). |
-| `--num_envs` | `1` | Anzahl gleichzeitig aktiver Slots (= in-flight UUIDs) in der **vektorisierten** Umgebung. `1` = bisheriges synchrones Verhalten. Höhere Werte lassen Mathematica mehrere Probleme parallel bearbeiten und bündeln die Policy-Inferenz pro PPO-Step. Sollte ≤ Mathematica-Batchgröße sein. |
-| `--n_steps` | PPO-Default (2048) | PPO-Rolloutlänge **pro Slot**. Mit `--num_envs > 1` wächst der Rollout-Buffer auf `n_steps * num_envs`; entsprechend `n_steps` reduzieren, um Speicher und Update-Frequenz vernünftig zu halten. |
+| `--n_trials` | `50` | Gesamtanzahl der zu suchenden Optuna-Trials. |
+| `--n-envs` | `1` | Anzahl paralleler Mathematica-Slots in der vektorisierten Umgebung (`VecEnv`). |
+| `--continue-study` | *aus (False)* | Flag zum Fortsetzen der letzten nicht beendeten Studie. Wenn nicht gesetzt, wird die existierende Studie gelöscht und neu gestartet. |
+| `--timeout-fallback` | `5.0` | Initialer Timeout in Sekunden für Mathematica-Rückmeldungen. |
+| `--timeout-cushion` | `2.0` | Pufferzeit in Sekunden, die auf den gleitenden Antwortzeit-Durchschnitt addiert wird. |
+| `--timeout-window` | `100` | Fenstergröße für den gleitenden Durchschnitt der Antwortzeiten. |
 
-Hilfe anzeigen:
+### 🔍 Der Optuna-Suchraum
+Folgende Parameter werden dynamisch gesucht und in der SQLite-Datenbank abgespeichert:
 
+* **PPO Hyperparameter**:
+  * `learning_rate` (logarithmisch zwischen `1e-6` und `9e-3`)
+  * `gamma` (PPO-Diskontierungsfaktor, kontinuierlich zwischen `0.9` und `0.999`)
+  * `ent_coef` (Entropie-Koeffizient, logarithmisch zwischen `1e-8` und `1e-2`)
+* **Reward-Shaping**:
+  * `alpha` (Skalierung der Rekord-Belohnung, kontinuierlich zwischen `0.1` und `5.0`)
+  * `basis_reward` (Basis-Belohnung, kontinuierlich zwischen `0.1` und `2.0`)
+  * `reward_gamma` (Diskontierung für gelöste Pfade, `0.97` bis `0.999`)
+  * `step_cost_lambda` (Gewichtung der Schrittkosten, `1e-4` bis `0.5` logarithmisch)
+  * `time_bad_penalty` (Strafe für schlechte Rechenzeit, `4` bis `10`)
+  * `solver_mismatch_penalty` / `solver_match_bonus`
+* **GNN & Feature-Layout**:
+  * `gnn_architecture` (Auswahl aus: `gatv2_stack`, `gcn_stack`, `sage_stack`, `gin_stack`)
+  * `gnn_activation` (Auswahl aus: `relu`, `leaky_relu`, `elu`, `tanh`, `gelu`)
+  * `hidden_dim` (Projektionsdimension: `64`, `128` oder `256`)
+  * `num_gnn_layers` (Anzahl GNN-Schichten: `2`, `3` oder `4`)
+  * `heads` (GATv2 Attention Heads: `2`, `4` oder `8`)
+  * `node_input_dim` (Knoten-Einbettung: `4` oder `5`)
+  * `global_input_dim` (Globale-Einbettung: `6` oder `9`)
+
+---
+
+## 🚀 Phase 2: Training mit den besten Parametern (`train_best.py`)
+
+Nach Abschluss der Optuna-Studie ermittelt `train_best.py` den besten Trial aus der SQLite-Datenbank, baut das exakte GNN-Modell und trainiert einen dedizierten Agenten über viele Schritte inklusive Checkpointing und MLflow-Visualisierung.
+
+### 🏃 Starten des Trainings
 ```bash
-python main.py --help
+# Wechseln Sie ins Verzeichnis
+cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn
+
+# Besten Run laden und trainieren (z. B. für 250k Schritte)
+python train_best.py --db optuna_kein_inv_n4g6.db --experiment kein_inv --timesteps 250000
+```
+
+### 📋 CLI-Parameter für `train_best.py`
+
+| Parameter | Standard | Beschreibung |
+| :--- | :--- | :--- |
+| `--db` | *Erforderlich* | Pfad zur Optuna SQLite-Datenbankdatei (z. B. `optuna_kein_inv.db`). |
+| `--experiment` | `kein_inv` | Experiment-Name / Graph-Pfad: `nur_f`, `f_fp_roh` oder `kein_inv`. |
+| `--study-name` | `None` | Name der Studie. Wenn `None`, wird die erste in der DB gefundene Studie geladen. |
+| `--timesteps` | `250000` | Gesamte Anzahl an Trainings-Schritten für den optimalen Agenten. |
+| `--n-envs` | `1` | Anzahl paralleler Mathematica-Instanzen. |
+| `--save-dir` | `models` | Ordner zum Speichern von Zwischen-Checkpoints und des finalen Agenten. |
+| `--model-name` | `gnn_ppo_best` | Basisname für gespeicherte ZIP-Modelldateien. |
+| `--seed` | `None` | Ermöglicht das Überschreiben des besten Trial-Seeds mit einem benutzerdefinierten Seed. |
+| `--dry-run` | aus | Führt nur das Parsen und Laden der Parameter aus (ohne ZeroMQ-Sockets zu binden oder das Training zu starten). Perfekt zum Testen von DBs! |
+| `--no-torch-compile` | aus | Deaktiviert `torch.compile` für das GNN-Backbone. |
+
+---
+
+## 💡 Nützliche Terminal-Befehle & Beispiele
+
+### 1. Einen schnellen Test-Tuning-Lauf (Optuna) machen:
+```bash
+python main.py --experiment kein_inv --n_trials 3 --timesteps 2000
+```
+
+### 2. Eine bestehende Optuna-Datenbank überprüfen (Dry-Run):
+Dies lädt die beste Trial-Konfiguration und gibt alle Parameter sauber im Terminal aus, ohne ZeroMQ-Verbindungen aufzubauen.
+```bash
+python train_best.py --db optuna_kein_inv_n4g6.db --experiment kein_inv --dry-run
+```
+
+### 3. Vektorisiertes Tuning mit 4 parallelen Mathematica-Instanzen:
+```bash
+python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --n-envs 4
+```
+
+### 4. MLflow Benutzeroberfläche starten:
+Visualisieren Sie Trainingskurven, vergleichen Sie Trials und bewerten Sie Hyperparameter direkt im Browser.
+```bash
+mlflow ui --host 0.0.0.0 --port 5000
+```
+Öffnen Sie anschließend `http://localhost:5000` in Ihrem Webbrowser.
+
+### 5. Eine bestehende Optuna-Studie fortsetzen (Resume):
+Setzen Sie eine unterbrochene oder pausierte Tuning-Studie nahtlos fort:
+```bash
+python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --continue-study
 ```
 
 ---
 
-## Optuna-Studie und Speicher
+## 📂 Wichtige Modul-Dateien
 
-- **Storage:** SQLite-Datei pro Experiment im GNN-Ordner, z. B. `sqlite:///optuna_nur_f.db` für `--experiment nur_f`.
-- **`load_if_exists=True`:** Studie wird fortgesetzt, wenn die DB schon existiert (gleicher `study_name`).
-- **Richtung:** Maximierung des Rückgabewerts der Objective-Funktion (Mittelwert der letzten Episoden-Rewards im `ep_info_buffer` nach Training bzw. vor Pruning-Abbruch).
-
-Nach einem Lauf zeigt die Konsole den besten Trial und dessen Parameter.
-
----
-
-## MLflow
-
-- **Experimentname:** `GNN_RL_Optuna_<experiment>` (z. B. `GNN_RL_Optuna_nur_f`).
-- Es wird kein explizites `set_tracking_uri` im GNN-`main.py` gesetzt — Standard ist das lokale Backend (typisch `./mlruns` im Arbeitsverzeichnis oder konfigurierter URI über Umgebungsvariablen).
-
-UI starten (üblich):
-
-```bash
-mlflow ui
-```
-
-Dann im Browser das Tracking-UI öffnen und das Experiment auswählen.
-
----
-
-## GNN-Architekturen (Optuna-kategorial)
-
-`gnn_architectures.py` definiert genau vier Varianten (`ARCHITECTURE_NAMES`):
-
-- `gatv2_stack` — GATv2, nutzt `heads`
-- `gcn_stack` — GCN (`heads` wird ignoriert, API bleibt gleich)
-- `sage_stack` — GraphSAGE
-- `gin_stack` — GIN
-
-Weitere gesampelte Netz-Hyperparameter: `hidden_dim` ∈ {64, 128, 256}, `heads` ∈ {2, 4, 8} (wo relevant).
-
----
-
-## Wichtige Modul-Dateien
-
-| Datei | Rolle |
-|-------|--------|
-| `main.py` | Einstieg, Argumente, Gateway/Preprocessor, Optuna-Objective, MLflow-Runs |
-| `mathematica_env.py` | Gymnasium-Env, Beobachtungsraum, Episode-Logik (single-stream) |
-| `mathematica_vec_env.py` | Slot-basierte SB3-`VecEnv` über denselben Gateway: hält `num_envs` UUIDs gleichzeitig in-flight, sendet pro PPO-Step `num_envs` Actions als Batch, routet Antworten per UUID auf Slots zurück und füllt fertige Slots aus dem Pool frischer Initial-States nach. |
-| `network_gateway.py` | ZeroMQ-Bridge, Event-Queue |
-| `preprocessor.py` | Graph laden/cachen, Features aus Nachricht |
-| `reward.py` | Episode-Reward-Shaping |
-| `sb3_extractor.py` | SB3-Feature-Extractor mit GNN |
-| `gnn_architectures.py` | Modellfabrik und `torch.compile`-Hilfe |
-| `replay_buffer.py` | Episoden-Puffer für Reward-Nachrechnung |
-| `graph_utils.py` | Konvertierung Rohgraph → PyG |
-
-Tests und ältere ZeroMQ-Hilfsskripte liegen unter `tests_and_archive/` (kein Pflichtteil der Trainings-Pipeline).
-
----
-
-## Typische Probleme
-
-- **Ports belegt:** Andere Instanz beenden oder Ports in `main.py` / Mathematica anpassen.
-- **Graph nicht gefunden:** `id` in der Nachricht muss zu `graphs/<experiment>/<id>_meta.json` (oder Fallback `.json`) passen.
-- **Pruning sehr aggressiv:** `MedianPruner`-Parameter und `--timesteps` in `main.py` prüfen.
-- **KeyboardInterrupt:** Gateway wird im `finally`-Block gestoppt und aufgeräumt.
-
----
-
-## Kurzbeispiele
-
-Nur kleines Experiment, wenige Trials:
-
-```bash
-cd codebase/src/gnn
-python main.py --experiment nur_f --n_trials 5 --timesteps 2000
-```
-
-Anderes Graph-Set, Torch-Compile deaktivieren (Debugging / ältere GPUs):
-
-```bash
-python main.py --experiment f_fp_roh --no-torch-compile
-```
-
-Vectorized-Run mit 64 parallelen Slots und kürzerem Rollout pro Slot (Mathematica muss mind. 64 Probleme gleichzeitig liefern können):
-
-```bash
-python main.py --num_envs 64 --n_steps 64 --timesteps 50000
-```
+* `main.py`: Haupteinstiegspunkt für Phase 1 (Optuna-Tuning).
+* `train_best.py`: Haupteinstiegspunkt für Phase 2 (Bestes Modell trainieren).
+* `feature_layout.py`: Definition des Suchraums, der Dimensionen und Aktivierungsfunktionen.
+* `ppo_trial_config.py`: Datenstrukturen (`dataclasses`) für Modell- und Reward-Parameter.
+* `ppo_optuna_search.py`: Logik zur Erzeugung von Parametern durch den Optuna-Sampler.
+* `gnn_policy_backbone.py`: Die PyTorch-GNN-Netzwerkarchitektur mit dynamischer Aktivierungswahl und robustem Fallback.
+* `ppo_optuna_workflow.py`: Verbindungsklasse zur Initialisierung des SB3-PPO-Modells.
+* `mathematica_vec_env.py` / `mathematica_env.py`: Gymnasium-Umgebungen zur Kommunikation mit Mathematica.
+* `reward.py`: Nachberechnung der asymmetrischen Rewards und Schrittkosten.

@@ -1,11 +1,25 @@
+import sys
+import os
 import pandas as pd
 from pathlib import Path
 import json
 import shutil
 
+# Dynamic sys.path resolution to support package imports when run as scripts
+gnn_root = Path(__file__).resolve().parents[2]
+if str(gnn_root) not in sys.path:
+    sys.path.insert(0, str(gnn_root))
+src_root = Path(__file__).resolve().parents[3]
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
+
 
 class DatasetLoader:
-    def __init__(self, dataset_name: str, run_key: str, addTraces=False):
+    def __init__(self, dataset_name: str, run_key: str = None, addTraces=False):
+        # Auto-extract run_key if passed in dataset_name like "run_20260408_160456/dataset_4"
+        if "/" in dataset_name and run_key is None:
+            run_key, dataset_name = dataset_name.split("/", 1)
+        
         self.dataset_name = dataset_name
         self.run_key = run_key
         self.working_directory = self._set_working_directory()
@@ -13,13 +27,14 @@ class DatasetLoader:
         self.addTraces = addTraces
 
     def _set_working_directory(self):
-        base = Path(__file__).parent.parent.parent
+        # Parents resolved:
+        # [0] supervised_learning, [1] gnn, [2] src, [3] codebase, [4] _zero_points (repo root)
+        base = Path(__file__).resolve().parents[4]
         return base / "_datasets" / self.run_key
 
     def _load_dataset_from_csv(self):
         filepath = self.working_directory / f"{self.dataset_name}.csv"
         self._data = pd.read_csv(filepath, sep=",")
-        # Typen für den Merge vorbereiten
         self._data["problem_id"] = self._data["problem_id"].astype(str)
         self._data["point_index"] = self._data["point_index"].astype(int)
 
@@ -101,11 +116,9 @@ class DatasetLoader:
         self._load_dataset_from_csv()
         raw_data = self._import_traces()
 
-        # Merge-Typen sicherstellen
         raw_data["problem_id"] = raw_data["problem_id"].astype(str)
         raw_data["point_index"] = raw_data["point_index"].astype(int)
 
-        # Join
         self._data = pd.merge(
             self._data, raw_data, on=["problem_id", "point_index"], how="left"
         )
@@ -118,6 +131,10 @@ class DatasetLoader:
             else:
                 self._load_dataset_from_csv()
         return self._data
+
+    def add_column(self, name: str, values):
+        """Adds a new column to the loaded DataFrame."""
+        self.data[name] = values
 
 
 class DatasetDescriptor:
@@ -152,8 +169,12 @@ class DatasetDescriptor:
         print("-" * (30 + len(self.dataset_name)))
 
 
-data = DatasetLoader(
-    run_key="run_20260419_110821", addTraces=True, dataset_name="dataset1"
-)
-print(data.data.head())
-print(list(data.data.columns.values))
+if __name__ == "__main__":
+    # Test loading
+    try:
+        data_loader = DatasetLoader(
+            run_key="run_20260419_110821", addTraces=True, dataset_name="dataset1"
+        )
+        print("DatasetLoader initialized successfully!")
+    except Exception as e:
+        print(f"DatasetLoader test failed (expected if datasets not present in this sandbox context): {e}")

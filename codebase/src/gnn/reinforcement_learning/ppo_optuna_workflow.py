@@ -10,20 +10,20 @@ import torch
 from optuna.pruners import MedianPruner
 from stable_baselines3 import PPO
 
-from feature_layout import OPTUNA_SEARCH_SPACE_SUFFIX
-from gnn_policy_backbone import build_graph_policy_backbone
-from mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
-from network_gateway import CONTROL_FRESH_TRIAL_ENV, NetworkGateway
-from ppo_optuna_callback import (
+from gnn.reinforcement_learning.feature_layout import OPTUNA_SEARCH_SPACE_SUFFIX
+from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
+from gnn.reinforcement_learning.mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
+from gnn.reinforcement_learning.gateway.network_gateway import CONTROL_FRESH_TRIAL_ENV, NetworkGateway
+from gnn.reinforcement_learning.ppo_optuna_callback import (
     OptunaEpisodeRewardCallback,
     OptunaStudyProgressCallback,
     _format_study_best,
 )
-from ppo_optuna_search import sample_trial_configuration
-from ppo_trial_config import TrialConfiguration
-from preprocessor import Preprocessor
-from reward import RewardCalculator
-from sb3_extractor import CustomGNNFeaturesExtractor
+from gnn.reinforcement_learning.ppo_optuna_search import sample_trial_configuration
+from gnn.reinforcement_learning.ppo_trial_config import TrialConfiguration
+from gnn.reinforcement_learning.preprocessor import Preprocessor
+from gnn.reinforcement_learning.reward import RewardCalculator
+from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
 
 
 class PpoOptunaWorkflow:
@@ -50,14 +50,20 @@ class PpoOptunaWorkflow:
         self.study: Optional[optuna.Study] = None
         self.total_trials = 0
 
-    def create_study(self) -> optuna.Study:
+    def create_study(self, continue_study: bool = False) -> optuna.Study:
         study_name = f"gnn_rl_{self.experiment_name}_{OPTUNA_SEARCH_SPACE_SUFFIX}"
         storage_name = (
             f"sqlite:///optuna_{self.experiment_name}_{OPTUNA_SEARCH_SPACE_SUFFIX}.db"
         )
-        print(
-            f"[PpoOptunaWorkflow] Optuna study={study_name!r} storage={storage_name}"
-        )
+        print(f"[PpoOptunaWorkflow] Optuna study={study_name!r} storage={storage_name}")
+        
+        if not continue_study:
+            try:
+                optuna.delete_study(study_name=study_name, storage=storage_name)
+                print(f"[PpoOptunaWorkflow] Deleted existing study {study_name!r} to start fresh.")
+            except Exception:
+                pass
+
         self.study = optuna.create_study(
             study_name=study_name,
             storage=storage_name,
@@ -86,6 +92,9 @@ class PpoOptunaWorkflow:
             f"  Pipeline control signal sent "
             f"(control={CONTROL_FRESH_TRIAL_ENV}, fresh trial environment)"
         )
+        if self.gateway.traffic_monitor is not None:
+            self.gateway.traffic_monitor.reset_reward_state_count()
+            print("  Reward-States counter reset to 0.")
         trial_config = sample_trial_configuration(trial)
         print(
             f"  Hyperparameter: lr={trial_config.ppo.learning_rate:.2e}, "
@@ -104,32 +113,70 @@ class PpoOptunaWorkflow:
             self.study,
             total_timesteps=self.timesteps_per_trial,
             check_freq=self.optuna_check_freq,
+            traffic_monitor=self.gateway.traffic_monitor,
         )
 
         with mlflow.start_run(run_name=f"Trial_{trial.number}", nested=True):
-            mlflow.log_params(trial.params)
-            model.learn(total_timesteps=self.timesteps_per_trial, callback=callback)
-            self._finalize_episode_state(env)
-            env.close()
+            try:
+                mlflow.log_params(trial.params)
+                mlflow.log_param("reward_version", "v2_tolerance")
+                model.learn(total_timesteps=self.timesteps_per_trial, callback=callback)
+                self._finalize_episode_state(env)
+                env.close()
 
-            if callback.is_pruned:
-                mlflow.set_tag("status", "pruned")
-                raise optuna.TrialPruned()
+                if callback.is_pruned:
+                    mlflow.set_tag("status", "pruned")
+                    raise optuna.TrialPruned()
 
-            final_mean_reward = self._mean_episode_reward(model)
-            mlflow.log_metric("final_mean_reward", final_mean_reward)
-            mlflow.set_tag("status", "completed")
-            return final_mean_reward
+                final_mean_reward = self._mean_episode_reward(model)
+                mlflow.log_metric("final_mean_reward", final_mean_reward)
+                mlflow.set_tag("status", "completed")
+                return final_mean_reward
+            finally:
+                if self.gateway.state_logger is not None:
+                    try:
+                        mlflow.log_artifact(
+                            str(self.gateway.state_logger.log_path),
+                            artifact_path="states",
+                        )
+                        print(
+                            "[PpoOptunaWorkflow] Successfully logged "
+                            f"{self.gateway.state_logger.log_path.name} "
+                            f"to Trial {trial.number} MLflow run."
+                        )
+                    except Exception as e:
+                        print(
+                            "[PpoOptunaWorkflow] Warning: Failed to log state database "
+                            f"to Trial {trial.number} MLflow: {e}"
+                        )
 
-    def optimize(self, n_trials: int) -> optuna.Study:
+    def optimize(self, n_trials: int, continue_study: bool = False) -> optuna.Study:
         self.total_trials = n_trials
-        study = self.create_study()
+        study = self.create_study(continue_study=continue_study)
         with mlflow.start_run(run_name=f"Optuna_Study_{self.experiment_name}"):
-            study.optimize(
-                self.objective,
-                n_trials=n_trials,
-                callbacks=[OptunaStudyProgressCallback(total_trials=n_trials)],
-            )
+            try:
+                study.optimize(
+                    self.objective,
+                    n_trials=n_trials,
+                    callbacks=[OptunaStudyProgressCallback(total_trials=n_trials)],
+                )
+            finally:
+                if self.gateway.state_logger is not None:
+                    try:
+                        mlflow.log_artifact(
+                            str(self.gateway.state_logger.log_path),
+                            artifact_path="states",
+                        )
+                        print(
+                            "[PpoOptunaWorkflow] Successfully logged "
+                            f"{self.gateway.state_logger.log_path.name} to study MLflow"
+                            " run."
+                        )
+                    except Exception as e:
+                        print(
+                            "[PpoOptunaWorkflow] Warning: Failed to log state "
+                            f"database to study MLflow: {e}"
+                        )
         return study
 
     @staticmethod
@@ -140,12 +187,15 @@ class PpoOptunaWorkflow:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(random_seed)
 
-    def _build_reward_calculator(self, trial_config: TrialConfiguration) -> RewardCalculator:
+    def _build_reward_calculator(
+        self, trial_config: TrialConfiguration
+    ) -> RewardCalculator:
         reward = trial_config.reward
         return RewardCalculator(
             basis_reward=reward.basis_reward,
             gamma=reward.reward_gamma,
             alpha=reward.alpha,
+            time_tolerance=reward.time_tolerance,
             step_cost_lambda=reward.step_cost_lambda,
             time_bad_penalty=reward.time_bad_penalty,
             solver_mismatch_penalty=reward.solver_mismatch_penalty,
@@ -169,6 +219,7 @@ class PpoOptunaWorkflow:
         gnn_model = build_graph_policy_backbone(
             layout=policy.layout,
             architecture=policy.architecture,
+            activation=policy.activation,
             hidden_dim=policy.hidden_dim,
             num_layers=policy.num_layers,
             heads=policy.heads,

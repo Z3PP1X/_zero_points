@@ -1,18 +1,16 @@
-import time
 import zmq
 import threading
 from queue import Queue
 from typing import Optional
 
-from gateway_state_logger import GatewayStateLogger
-from gateway_traffic_monitor import GatewayTrafficMonitor
+from gnn.reinforcement_learning.gateway.gateway_state_logger import GatewayStateLogger
+from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
 
 # Instructs the Mathematica pipeline to stream fresh initial states for a new trial.
 CONTROL_FRESH_TRIAL_ENV = 3
 
 
-class NetworkGateway():
-
+class NetworkGateway:
     def __init__(
         self,
         receiver_port,
@@ -42,7 +40,6 @@ class NetworkGateway():
     def _set_up_sender(self):
         self.sender = self.context.socket(zmq.PUSH)
         self.sender.bind(f"tcp://localhost:{self.sender_port}")
-
 
     def _set_up_reward_receiver(self):
         self.reward_receiver = self.context.socket(zmq.PULL)
@@ -78,10 +75,13 @@ class NetworkGateway():
             return
 
         self._ready.set()
-        print(f"[Gateway Debug] Loop is live! Polling on ports {self.receiver_port} and {self.reward_port}...")
-        
+        print(
+            f"[Gateway Debug] Loop is live! Polling on ports {self.receiver_port} "
+            f"and {self.reward_port}..."
+        )
+
         try:
-            while self.running:                   
+            while self.running:
                 socks = dict(self.poller.poll(timeout=100))
                 if self.receiver in socks and socks[self.receiver] == zmq.POLLIN:
                     message = self.receiver.recv_json()
@@ -125,15 +125,17 @@ class NetworkGateway():
                 self.state_logger.log_outgoing(message)
             self.sender.send_json(message)
 
-    def send_decision(self, original_state: dict, solver: int, local_max_tolerance: float):
+    def send_decision(
+        self, original_state: dict, solver: int, local_max_tolerance: float
+    ):
         """
-        Fügt die vom GNN getroffenen Entscheidungen in den originalen State ein 
+        Fügt die vom GNN getroffenen Entscheidungen in den originalen State ein
         und sendet das aktualisierte Dictionary zurück an Mathematica.
         """
-        response_state = original_state.copy()  # Kopie zur Vermeidung von Seiteneffekten
+        response_state = original_state.copy()
         response_state["solver"] = int(solver)
         response_state["localMaxTolerance"] = float(local_max_tolerance)
-        
+
         if self.sender:
             if self.state_logger is not None:
                 self.state_logger.log_outgoing(response_state)
@@ -151,4 +153,3 @@ class NetworkGateway():
         if self.controller:
             self.controller.close()
         self.context.term()
-    

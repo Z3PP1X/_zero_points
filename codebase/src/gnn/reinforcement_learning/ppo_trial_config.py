@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from feature_layout import FeatureLayout
+from gnn.reinforcement_learning.feature_layout import FeatureLayout
 
 
 @dataclass(frozen=True)
@@ -24,11 +24,13 @@ class RewardShapingParameters:
     solver_mismatch_penalty: float
     solver_match_bonus: float
     solver_wrong_slow_coef: float
+    time_tolerance: float = 0.03
 
 
 @dataclass(frozen=True)
 class GnnPolicySpec:
     architecture: str
+    activation: str
     hidden_dim: int
     num_layers: int
     heads: int
