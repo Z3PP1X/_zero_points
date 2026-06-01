@@ -52,14 +52,20 @@ class TopologicalFeatureExtractor:
 
         # Heights (Height)
         heights = {}
+        visiting = set()
         def get_height(node):
             if node in heights:
                 return heights[node]
+            if node in visiting:
+                return 0
+            visiting.add(node)
             children = list(G.successors(node))
             if not children:
+                visiting.remove(node)
                 heights[node] = 0
                 return 0
             h = 1 + max(get_height(child) for child in children)
+            visiting.remove(node)
             heights[node] = h
             return h
         for node in G.nodes:
@@ -157,6 +163,9 @@ class ExpressionGraphConverter:
         "constant": 2,
         "variable": 3,
         "function": 4,
+        "virtual_current_x": 5,
+        "virtual_f_x": 6,
+        "virtual_y_target": 7,
     }
 
     def __init__(self):
@@ -164,9 +173,84 @@ class ExpressionGraphConverter:
         self.edge_type_vocab: dict[str, int] = {}
 
     def convert(
-        self, source: Union[str, Path, dict], heterogeneous: bool = False, enrich: bool = True
+        self, source: Union[str, Path, dict], heterogeneous: bool = False, enrich: bool = True, mode: str = "graph"
     ) -> Union[Data, HeteroData]:
         raw = self._load(source)
+        
+        # Make a copy of raw to avoid modifying the original dict in-place if passed as object
+        raw = dict(raw)
+        raw["nodes"] = list(raw.get("nodes", []))
+        raw["edges"] = list(raw.get("edges", []))
+        
+        if mode == "graph":
+            # Find variable nodes and global node
+            variable_node_ids = []
+            global_node_id = None
+            for node in raw["nodes"]:
+                if node.get("type") == "variable":
+                    variable_node_ids.append(node["id"])
+                elif node.get("type") == "global":
+                    global_node_id = node["id"]
+            
+            # Add the three virtual nodes
+            raw["nodes"].append({
+                "id": "virtual_current_x",
+                "label": "virtual_current_x",
+                "type": "virtual_current_x",
+                "value": None
+            })
+            raw["nodes"].append({
+                "id": "virtual_f_x",
+                "label": "virtual_f_x",
+                "type": "virtual_f_x",
+                "value": None
+            })
+            raw["nodes"].append({
+                "id": "virtual_y_target",
+                "label": "virtual_y_target",
+                "type": "virtual_y_target",
+                "value": None
+            })
+            
+            # Add virtual edges:
+            # virtual_current_x -> all variables
+            for var_id in variable_node_ids:
+                raw["edges"].append({
+                    "source": "virtual_current_x",
+                    "target": var_id,
+                    "type": "virtual"
+                })
+            # virtual_current_x -> virtual_f_x
+            raw["edges"].append({
+                "source": "virtual_current_x",
+                "target": "virtual_f_x",
+                "type": "virtual"
+            })
+            # virtual_f_x -> virtual_current_x
+            raw["edges"].append({
+                "source": "virtual_f_x",
+                "target": "virtual_current_x",
+                "type": "virtual"
+            })
+            # virtual_f_x -> virtual_y_target
+            raw["edges"].append({
+                "source": "virtual_f_x",
+                "target": "virtual_y_target",
+                "type": "virtual"
+            })
+            # virtual_y_target -> virtual_f_x
+            raw["edges"].append({
+                "source": "virtual_y_target",
+                "target": "virtual_f_x",
+                "type": "virtual"
+            })
+            # virtual_y_target -> global node
+            if global_node_id is not None:
+                raw["edges"].append({
+                    "source": "virtual_y_target",
+                    "target": global_node_id,
+                    "type": "virtual"
+                })
         
         # 1. Build directed graph first (forward edges only)
         G_directed = self._build_networkx(raw)
@@ -251,8 +335,10 @@ class ExpressionGraphConverter:
 
         if heterogeneous:
             data = self._to_hetero(G_enriched, raw, topo, enrich)
+            data["node"].node_ids = node_ids
         else:
             data = self._to_homogeneous(G_enriched, raw, enrich)
+            data.node_ids = node_ids
 
         # Add global graph features
         data.tree_depth = topo["tree_depth"]
@@ -307,6 +393,9 @@ class ExpressionGraphConverter:
                 label_id=self._encode_label(node["label"]),
                 value=actual_value,
                 has_value=has_val,
+                virtual_current_x_val=0.0,
+                virtual_f_x_val=0.0,
+                virtual_y_target_val=0.0,
             )
         for edge in raw["edges"]:
             G.add_edge(
@@ -332,6 +421,9 @@ class ExpressionGraphConverter:
                         "value",
                         "lpe_1", "lpe_2", "lpe_3", "lpe_4",
                         "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
+                        "virtual_current_x_val",
+                        "virtual_f_x_val",
+                        "virtual_y_target_val",
                     ],
                 )
                 data.edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -351,10 +443,31 @@ class ExpressionGraphConverter:
                     "value",
                     "lpe_1", "lpe_2", "lpe_3", "lpe_4",
                     "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
+                    "virtual_current_x_val",
+                    "virtual_f_x_val",
+                    "virtual_y_target_val",
                 ],
                 group_edge_attrs=["child_index", "direction", "relation_type", "edge_betweenness_centrality"],
             )
         else:
+            if G.number_of_edges() == 0:
+                data = from_networkx(
+                    G,
+                    group_node_attrs=[
+                        "node_type",
+                        "label_id",
+                        "value",
+                        "has_value",
+                        "degree_centrality",
+                        "virtual_current_x_val",
+                        "virtual_f_x_val",
+                        "virtual_y_target_val",
+                    ],
+                )
+                data.edge_index = torch.empty((2, 0), dtype=torch.long)
+                data.edge_attr = torch.empty((0, 1), dtype=torch.float)
+                return data
+
             return from_networkx(
                 G,
                 group_node_attrs=[
@@ -363,6 +476,9 @@ class ExpressionGraphConverter:
                     "value",
                     "has_value",
                     "degree_centrality",
+                    "virtual_current_x_val",
+                    "virtual_f_x_val",
+                    "virtual_y_target_val",
                 ],
                 group_edge_attrs=["edge_type"],
             )
@@ -375,6 +491,10 @@ class ExpressionGraphConverter:
         label_id = torch.tensor([G.nodes[n]["label_id"] for n in node_ids], dtype=torch.long)
         value = torch.tensor([G.nodes[n]["value"] for n in node_ids], dtype=torch.float)
         
+        v_cx = torch.tensor([G.nodes[n]["virtual_current_x_val"] for n in node_ids], dtype=torch.float)
+        v_fx = torch.tensor([G.nodes[n]["virtual_f_x_val"] for n in node_ids], dtype=torch.float)
+        v_yt = torch.tensor([G.nodes[n]["virtual_y_target_val"] for n in node_ids], dtype=torch.float)
+
         if enrich:
             depth = torch.tensor([G.nodes[n]["depth"] for n in node_ids], dtype=torch.float)
             height = torch.tensor([G.nodes[n]["height"] for n in node_ids], dtype=torch.float)
@@ -388,7 +508,8 @@ class ExpressionGraphConverter:
                 [
                     node_type.float(), depth, height, subtree_size, out_degree, betweenness, label_id.float(), value,
                     lpe[:, 0], lpe[:, 1], lpe[:, 2], lpe[:, 3],
-                    rwpe[:, 0], rwpe[:, 1], rwpe[:, 2], rwpe[:, 3]
+                    rwpe[:, 0], rwpe[:, 1], rwpe[:, 2], rwpe[:, 3],
+                    v_cx, v_fx, v_yt
                 ],
                 dim=1
             )
@@ -396,7 +517,7 @@ class ExpressionGraphConverter:
             has_value = torch.tensor([G.nodes[n]["has_value"] for n in node_ids], dtype=torch.float)
             deg_cent = torch.tensor([G.nodes[n]["degree_centrality"] for n in node_ids], dtype=torch.float)
             x = torch.stack(
-                [node_type.float(), label_id.float(), value, has_value, deg_cent], dim=1
+                [node_type.float(), label_id.float(), value, has_value, deg_cent, v_cx, v_fx, v_yt], dim=1
             )
 
         edge_buckets: dict[str, list[tuple[int, int]]] = {}
@@ -425,10 +546,11 @@ class ExpressionGraphConverter:
 class GraphConversionPipeline:
     """Loads all JSON graph files from a directory and converts them to PyG objects."""
 
-    def __init__(self, experiments_dir: Union[str, Path], heterogeneous: bool = False, enrich: bool = True):
+    def __init__(self, experiments_dir: Union[str, Path], heterogeneous: bool = False, enrich: bool = True, mode: str = "graph"):
         self.experiments_dir = Path(experiments_dir)
         self.heterogeneous = heterogeneous
         self.enrich = enrich
+        self.mode = mode
         self.converter = ExpressionGraphConverter()
         self.graphs: dict[str, Union[Data, HeteroData]] = {}
         self._convert_all()
@@ -444,7 +566,7 @@ class GraphConversionPipeline:
                 continue
             graph_id = raw.get("id", json_path.stem)
             self.graphs[graph_id] = self.converter.convert(
-                raw, heterogeneous=self.heterogeneous, enrich=self.enrich
+                raw, heterogeneous=self.heterogeneous, enrich=self.enrich, mode=self.mode
             )
         print(f"Geladen: {len(self.graphs)} Graphen")
 
@@ -475,7 +597,11 @@ class GraphConversionPipeline:
         if self.enrich:
             return [
                 "node_type", "depth", "height", "subtree_size", "out_degree", "betweenness_centrality", "label_id", "value",
-                "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4"
+                "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
+                "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
             ]
         else:
-            return ["node_type", "label_id", "value", "has_value", "degree_centrality"]
+            return [
+                "node_type", "label_id", "value", "has_value", "degree_centrality",
+                "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
+            ]

@@ -23,7 +23,7 @@ STATE_GLOBAL_FEATURE_KEYS = (
 
 
 class Preprocessor:
-    def __init__(self, graphs_dir: str, graph_cache_max: int = 128):
+    def __init__(self, graphs_dir: str, graph_cache_max: int = 128, mode: str = "graph"):
         """
         Initialisiert den Preprocessor.
         :param graphs_dir: Pfad zum Verzeichnis, in dem die Graph-JSONs liegen
@@ -35,6 +35,7 @@ class Preprocessor:
         """
         self.graphs_dir = Path(graphs_dir)
         self.converter = ExpressionGraphConverter()
+        self.mode = mode
         self._graph_cache_max = graph_cache_max
         self._known_problem_ids = self._discover_problem_ids()
         self._pyg_template_cache: OrderedDict[str, Data] = OrderedDict()
@@ -96,7 +97,7 @@ class Preprocessor:
         with graph_path.open("r", encoding="utf-8") as graph_file:
             raw_graph = json.load(graph_file)
 
-        data = self.converter.convert(raw_graph, heterogeneous=False)
+        data = self.converter.convert(raw_graph, heterogeneous=False, mode=self.mode)
         self._store_template(cache_key, data)
         return data
 
@@ -125,6 +126,48 @@ class Preprocessor:
         data.global_features = sanitize_torch_features(
             torch.sign(raw_tensor) * torch.log1p(torch.abs(raw_tensor))
         )
+
+        # Update virtual nodes dynamically with the current values collected from the state
+        if hasattr(data, "node_ids") and data.node_ids is not None:
+            try:
+                cx_val = extracted_features.get("currentX", 0.0)
+                fx_val = extracted_features.get("fx", 0.0)
+                yt_val = extracted_features.get("yTarget", 0.0)
+
+                if self.mode == "graph":
+                    idx_cx = data.node_ids.index("virtual_current_x")
+                    idx_fx = data.node_ids.index("virtual_f_x")
+                    idx_yt = data.node_ids.index("virtual_y_target")
+                    
+                    if data.x is not None and len(data.x.shape) == 2:
+                        num_features = data.x.shape[1]
+                        if num_features == 19:  # enrich=True (16 native + 3 custom slots)
+                            data.x[idx_cx, 7] = float(cx_val)
+                            data.x[idx_fx, 7] = float(fx_val)
+                            data.x[idx_yt, 7] = float(yt_val)
+                        elif num_features == 8:  # enrich=False (5 native + 3 custom slots)
+                            data.x[idx_cx, 2] = float(cx_val)
+                            data.x[idx_fx, 2] = float(fx_val)
+                            data.x[idx_yt, 2] = float(yt_val)
+                            
+                            data.x[idx_cx, 3] = 1.0
+                            data.x[idx_fx, 3] = 1.0
+                            data.x[idx_yt, 3] = 1.0
+                elif self.mode == "tree":
+                    # Populate slots on the global node directly
+                    idx_global = data.node_ids.index("global")
+                    if data.x is not None and len(data.x.shape) == 2:
+                        num_features = data.x.shape[1]
+                        if num_features == 19:  # enrich=True (custom slots are indices 16, 17, 18)
+                            data.x[idx_global, 16] = float(cx_val)
+                            data.x[idx_global, 17] = float(fx_val)
+                            data.x[idx_global, 18] = float(yt_val)
+                        elif num_features == 8:  # enrich=False (custom slots are indices 5, 6, 7)
+                            data.x[idx_global, 5] = float(cx_val)
+                            data.x[idx_global, 6] = float(fx_val)
+                            data.x[idx_global, 7] = float(yt_val)
+            except ValueError:
+                pass
 
         data.uuid = message.get("uuid")
         data.state_id = message.get("stateId")

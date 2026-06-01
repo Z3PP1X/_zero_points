@@ -298,6 +298,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=100,
         help="Rolling window size for timeout average.",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="graph",
+        choices=["graph", "tree"],
+        help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
+    )
     return parser
 
 
@@ -353,7 +360,7 @@ def main() -> None:
 
     repo_root = Path(__file__).resolve().parents[4]
     graphs_path = str(repo_root / "codebase" / "src" / "gnn" / "graphs" / args.experiment)
-    preprocessor = Preprocessor(graphs_dir=graphs_path)
+    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode)
 
     print(f"[Pipeline] Initializing ZMQ NetworkGateway on receiver={RECEIVER_PORT}, sender={SENDER_PORT}...")
     gateway.init()
@@ -449,6 +456,7 @@ def main() -> None:
             mlflow.log_param("seed", trial_config.ppo.random_seed)
             mlflow.log_param("n_envs", args.n_envs)
             mlflow.log_param("timesteps", args.timesteps)
+            mlflow.log_param("mode", args.mode)
 
             # Log reward parameters
             mlflow.log_param("reward_version", "v2_tolerance")

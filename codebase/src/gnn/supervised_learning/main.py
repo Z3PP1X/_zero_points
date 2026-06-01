@@ -50,8 +50,8 @@ recall_metric = MulticlassRecall(num_classes=2).to(DEVICE)
 mlflow.set_tracking_uri("http://localhost:5000")
 
 
-def create_experiment_name():
-    return DATASET_NAME + "_" + str(SEED) + "_" + str(EPOCHS)
+def create_experiment_name(mode: str = "graph"):
+    return DATASET_NAME + "_" + str(SEED) + "_" + str(EPOCHS) + "_" + mode
 
 
 def train(model, loader, optimizer, criterion):
@@ -106,7 +106,7 @@ def evaluate(model, loader, criterion):
     return avg_loss, accuracy, f1_computed, precision_computed, recall_computed
 
 
-def main():
+def main(mode: str = "graph"):
     # Make paths absolute relative to repo root to avoid cwd dependency issues
     repo_root = Path(__file__).resolve().parents[4]
     dataset_path = DATASET_NAME
@@ -119,6 +119,7 @@ def main():
         dataset_name=dataset_path,
         experiments_dir=str(experiments_dir),
         seed=SEED,
+        mode=mode,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(
@@ -133,7 +134,7 @@ def main():
 
     mlflow.set_experiment(DATASET_NAME)
 
-    with mlflow.start_run(run_name=create_experiment_name()):
+    with mlflow.start_run(run_name=create_experiment_name(mode)):
         mlflow.log_params(
             {
                 "seed": SEED,
@@ -146,6 +147,7 @@ def main():
                 "model": "TestGraphNetwork (GATv2)",
                 "input_dim": pipeline.input_dim,
                 "global_dim": pipeline.global_dim,
+                "mode": mode,
             }
         )
 
@@ -197,6 +199,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Loads data and prints structure without starting full training.",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="graph",
+        choices=["graph", "tree"],
+        help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
+    )
     args = parser.parse_args()
 
     # Resolve paths
@@ -213,7 +222,7 @@ if __name__ == "__main__":
 
     if not args.dry_run:
         try:
-            main()
+            main(mode=args.mode)
         except Exception as e:
             print(f"Failed to start training run (expected if datasets/connections not available in sandbox): {e}")
     else:

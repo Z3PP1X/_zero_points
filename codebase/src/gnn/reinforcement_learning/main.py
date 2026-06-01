@@ -67,6 +67,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Set this flag to continue the last not finished study, otherwise start a new one.",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="graph",
+        choices=["graph", "tree"],
+        help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
+    )
     return parser
 
 
@@ -98,10 +105,10 @@ def main() -> None:
         f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs} | "
         f"Continue Study: {args.continue_study}"
     )
-    preprocessor = Preprocessor(graphs_dir=graphs_path)
+    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode)
     print(
         f"Graph-Templates: {len(preprocessor.known_problem_ids)} Problem-IDs indexiert, "
-        f"lazy LRU-Cache aktiv"
+        f"lazy LRU-Cache aktiv (mode: {args.mode})"
     )
     gateway.init()
     traffic_monitor.start()

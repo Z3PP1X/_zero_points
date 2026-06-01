@@ -45,7 +45,7 @@ def _build_preprocessor():
         edge_index=MagicMock(),
         global_features=MagicMock(),
     )
-    pyg_data.x.numpy.return_value = np.zeros((1, 16), dtype=np.float32)
+    pyg_data.x.numpy.return_value = np.zeros((1, 19), dtype=np.float32)
     pyg_data.edge_index.numpy.return_value = np.zeros((2, 0), dtype=np.int64)
     pyg_data.global_features.numpy.return_value = np.zeros((9,), dtype=np.float32)
     preprocessor = MagicMock()
@@ -205,6 +205,6 @@ def test_stack_obs_handles_none_slots():
 
     obs = env._stack_obs()
 
-    assert obs["x"].shape == (2, 50, 16)
+    assert obs["x"].shape == (2, 50, 19)
     assert obs["edge_index"].shape == (2, 2, 100)
     assert obs["num_nodes"].shape == (2, 1)

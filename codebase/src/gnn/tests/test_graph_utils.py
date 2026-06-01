@@ -28,7 +28,7 @@ def test_convert_ignores_legacy_taylor_coeff_fields(tmp_path):
     data = ExpressionGraphConverter().convert(raw)
 
     assert data.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
-    assert data.x.shape[1] == 16
+    assert data.x.shape[1] == 19
     assert not hasattr(data, "taylor_coeffs")
     assert not hasattr(data, "inv_taylor_coeffs")
 
@@ -73,7 +73,7 @@ def test_enriched_graph_features(tmp_path):
     }
 
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw, heterogeneous=False)
+    data = converter.convert(raw, heterogeneous=False, mode="tree")
 
     # 1. Global graph feature assertions
     assert data.nodes == 3
@@ -84,8 +84,8 @@ def test_enriched_graph_features(tmp_path):
     assert data.treewidth == 2 or data.tree_width == 2
 
     # 2. Node feature shape and values
-    # Node features: [node_type, depth, height, subtree_size, out_degree, betweenness, label_id, value, LPE1-4, RWPE1-4]
-    assert data.x.shape == (3, 16)
+    # Node features: [node_type, depth, height, subtree_size, out_degree, betweenness, label_id, value, LPE1-4, RWPE1-4, cx, fx, yt]
+    assert data.x.shape == (3, 19)
 
     root_idx = 0  # since order of nodes is preserved in networkx
     child1_idx = 1

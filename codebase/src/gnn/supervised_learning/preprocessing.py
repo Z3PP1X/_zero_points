@@ -40,13 +40,14 @@ class FeatureEngineering:
 
 
 class GraphPipeline:
-    def __init__(self, dataset_name: str, experiments_dir: str, seed: int = 42):
+    def __init__(self, dataset_name: str, experiments_dir: str, seed: int = 42, mode: str = "graph"):
         self.seed = seed
         self.loader = DatasetLoader(dataset_name)
+        self.mode = mode
         fe = FeatureEngineering(self.loader)
         fe._tag_faster_algorithm()
         # Supervised pipeline uses basic (enrich=False) graph representation
-        self.graph_pipeline = GraphConversionPipeline(experiments_dir, enrich=False)
+        self.graph_pipeline = GraphConversionPipeline(experiments_dir, enrich=False, mode=mode)
         self.train_loader = None
         self.test_loader = None
         self.class_weights = None
@@ -90,8 +91,8 @@ class GraphPipeline:
         weight_1 = total_train / (num_classes * class_counts.get(1, 1))
         self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
 
-        train_dataset = ProblemRunDataset(train_df, self.graph_pipeline.graphs)
-        test_dataset = ProblemRunDataset(test_df, self.graph_pipeline.graphs)
+        train_dataset = ProblemRunDataset(train_df, self.graph_pipeline.graphs, mode=self.mode)
+        test_dataset = ProblemRunDataset(test_df, self.graph_pipeline.graphs, mode=self.mode)
 
         from torch_geometric.loader import DataLoader
 
@@ -130,9 +131,10 @@ class GraphPipeline:
 
 
 class ProblemRunDataset(Dataset):
-    def __init__(self, df, base_graphs):
+    def __init__(self, df, base_graphs, mode: str = "graph"):
         self.df = df.reset_index(drop=True)
         self.base_graphs = base_graphs
+        self.mode = mode
 
     def __len__(self):
         return len(self.df)
@@ -148,5 +150,47 @@ class ProblemRunDataset(Dataset):
             [row["startwert"], row["zielwert"]], dtype=torch.float
         )
         data.pid = pid
+
+        # Initialize virtual nodes once from the dataset (without any Taylor series fallback)
+        if hasattr(data, "node_ids") and data.node_ids is not None:
+            try:
+                cx_val = row.get("startwert", row.get("x0", 0.0))
+                yt_val = row.get("zielwert", row.get("y_target", 0.0))
+                fx_val = row.get("fx", 0.0)  # Default to 0.0 to completely avoid Taylor series fallback
+                
+                if self.mode == "graph":
+                    idx_cx = data.node_ids.index("virtual_current_x")
+                    idx_fx = data.node_ids.index("virtual_f_x")
+                    idx_yt = data.node_ids.index("virtual_y_target")
+                    
+                    if data.x is not None and len(data.x.shape) == 2:
+                        num_features = data.x.shape[1]
+                        if num_features == 19:  # enrich=True
+                            data.x[idx_cx, 7] = float(cx_val)
+                            data.x[idx_fx, 7] = float(fx_val)
+                            data.x[idx_yt, 7] = float(yt_val)
+                        elif num_features == 8:  # enrich=False
+                            data.x[idx_cx, 2] = float(cx_val)
+                            data.x[idx_fx, 2] = float(fx_val)
+                            data.x[idx_yt, 2] = float(yt_val)
+                            
+                            data.x[idx_cx, 3] = 1.0
+                            data.x[idx_fx, 3] = 1.0
+                            data.x[idx_yt, 3] = 1.0
+                elif self.mode == "tree":
+                    # Populate slots on the global node directly
+                    idx_global = data.node_ids.index("global")
+                    if data.x is not None and len(data.x.shape) == 2:
+                        num_features = data.x.shape[1]
+                        if num_features == 19:  # enrich=True
+                            data.x[idx_global, 16] = float(cx_val)
+                            data.x[idx_global, 17] = float(fx_val)
+                            data.x[idx_global, 18] = float(yt_val)
+                        elif num_features == 8:  # enrich=False
+                            data.x[idx_global, 5] = float(cx_val)
+                            data.x[idx_global, 6] = float(fx_val)
+                            data.x[idx_global, 7] = float(yt_val)
+            except ValueError:
+                pass
 
         return data

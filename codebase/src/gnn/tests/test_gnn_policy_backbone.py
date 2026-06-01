@@ -1,6 +1,6 @@
 import torch
 from feature_layout import FeatureLayout, GNN_ARCHITECTURE_CHOICES, GNN_ACTIVATION_CHOICES
-from gnn_policy_backbone import build_graph_policy_backbone, GraphPolicyBackbone
+from gnn_backbones import build_graph_policy_backbone, GraphPolicyBackbone
 
 def test_backbone_forward_pass_all_combinations():
     layout = FeatureLayout(node_input_dim=4, global_input_dim=6)
