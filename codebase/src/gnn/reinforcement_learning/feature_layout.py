@@ -41,6 +41,8 @@ GNN_ACTIVATION_CHOICES = (
 class FeatureLayout:
     node_input_dim: int
     global_input_dim: int
+    padded_node_feature_count: int = PADDED_NODE_FEATURE_COUNT
+    padded_global_feature_count: int = PADDED_GLOBAL_FEATURE_COUNT
 
     def __post_init__(self) -> None:
         if self.node_input_dim not in NODE_INPUT_DIM_CHOICES:
@@ -53,11 +55,3 @@ class FeatureLayout:
                 f"global_input_dim must be one of {GLOBAL_INPUT_DIM_CHOICES}, "
                 f"got {self.global_input_dim}"
             )
-
-    @property
-    def padded_node_feature_count(self) -> int:
-        return PADDED_NODE_FEATURE_COUNT
-
-    @property
-    def padded_global_feature_count(self) -> int:
-        return PADDED_GLOBAL_FEATURE_COUNT

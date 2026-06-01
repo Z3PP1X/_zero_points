@@ -605,3 +605,23 @@ class GraphConversionPipeline:
                 "node_type", "label_id", "value", "has_value", "degree_centrality",
                 "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
             ]
+
+
+def slice_active_features(x: torch.Tensor, active_features: list[str] | None, enrich: bool) -> torch.Tensor:
+    if active_features is None:
+        return x
+    full_schema = [
+        "node_type", "depth", "height", "subtree_size", "out_degree", "betweenness_centrality", "label_id", "value",
+        "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
+        "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
+    ] if enrich else [
+        "node_type", "label_id", "value", "has_value", "degree_centrality",
+        "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
+    ]
+    indices = []
+    for f in active_features:
+        if f in full_schema:
+            indices.append(full_schema.index(f))
+        else:
+            raise ValueError(f"Feature '{f}' is not in the schema (enrich={enrich}). Available: {full_schema}")
+    return x[:, indices]

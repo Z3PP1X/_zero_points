@@ -95,7 +95,10 @@ class PpoOptunaWorkflow:
         if self.gateway.traffic_monitor is not None:
             self.gateway.traffic_monitor.reset_reward_state_count()
             print("  Reward-States counter reset to 0.")
-        trial_config = sample_trial_configuration(trial)
+        trial_config = sample_trial_configuration(
+            trial,
+            padded_node_feature_count=self.preprocessor.padded_node_feature_count,
+        )
         print(
             f"  Hyperparameter: lr={trial_config.ppo.learning_rate:.2e}, "
             f"gamma={trial_config.ppo.gamma:.3f}, "

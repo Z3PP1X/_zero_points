@@ -238,3 +238,97 @@ def test_supervised_learning_preprocessor_static_initialization():
     dataset_with_fx_tree = ProblemRunDataset(df_with_fx, base_graphs_tree, mode="tree")
     data_with_fx_tree = dataset_with_fx_tree[0]
     assert data_with_fx_tree.x[idx_global, 6].item() == pytest.approx(10.12)
+
+
+def test_dynamic_feature_slicing_and_selection(tmp_path):
+    # Construct a simple graph
+    raw = {
+        "id": "P-slice",
+        "nodes": [
+            {
+                "id": "global",
+                "label": "GLOBAL",
+                "type": "global",
+                "value": None
+            },
+            {
+                "id": "f1",
+                "label": "x",
+                "type": "variable",
+                "value": None
+            }
+        ],
+        "edges": []
+    }
+    
+    # 1. Test slicing in Graph Mode with enriched (RL) features
+    converter = ExpressionGraphConverter()
+    
+    # Slice active features: only node_type, value, virtual_current_x_val
+    active_feats = ["node_type", "value", "virtual_current_x_val"]
+    
+    data_full = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph")
+    assert data_full.x.shape[1] == 19
+    
+    from graph_utils import slice_active_features
+    data_sliced = data_full.clone()
+    data_sliced.x = slice_active_features(data_full.x, active_feats, enrich=True)
+    
+    # Node features tensor must be sliced to 3 features
+    assert data_sliced.x.shape[1] == 3
+    # Check that feature indices align correctly:
+    # In sliced: index 0 is node_type, index 1 is value, index 2 is virtual_current_x_val
+    idx_cx = data_sliced.node_ids.index("virtual_current_x")
+    
+    # 2. Test preprocessor with active_features sliced
+    meta_path = tmp_path / "P-slice_meta.json"
+    meta_path.write_text(json.dumps(raw), encoding="utf-8")
+    
+    preprocessor = Preprocessor(graphs_dir=str(tmp_path), mode="graph", active_features=active_feats)
+    
+    message = {
+        "id": "P-slice",
+        "currentX": 3.14,
+        "fx": -1.2,
+        "yTarget": 0.5,
+        "uuid": "uuid-slice"
+    }
+    
+    data, extracted = preprocessor.process(message)
+    assert data.x.shape[1] == 3
+    
+    idx_cx_pre = data.node_ids.index("virtual_current_x")
+    # In active_feats, "value" is at index 1
+    assert data.x[idx_cx_pre, 1].item() == pytest.approx(3.14)
+
+    # 3. Test supervised dataset with active_features sliced (basic features)
+    base_graph_basic = converter.convert(raw, heterogeneous=False, enrich=False, mode="graph")
+    base_graphs_basic = {"P-slice": base_graph_basic}
+    
+    active_feats_basic = ["node_type", "value", "virtual_y_target_val"]
+    
+    df = pd.DataFrame([{
+        "problem_id": "P-slice",
+        "startwert": 2.5,
+        "zielwert": 9.9,
+        "faster_algorithm": 0
+    }])
+    
+    dataset = ProblemRunDataset(df, base_graphs_basic, mode="graph", enrich=False, active_features=active_feats_basic)
+    data_sup = dataset[0]
+    
+    assert data_sup.x.shape[1] == 3
+    idx_yt = data_sup.node_ids.index("virtual_y_target")
+    # In active_feats_basic, "value" is at index 1
+    assert data_sup.x[idx_yt, 1].item() == pytest.approx(9.9)
+
+    # 4. Test preprocessor in Tree Mode with sliced features
+    active_feats_tree = ["node_type", "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"]
+    preprocessor_tree = Preprocessor(graphs_dir=str(tmp_path), mode="tree", active_features=active_feats_tree)
+    
+    data_tree, extracted = preprocessor_tree.process(message)
+    assert data_tree.x.shape[1] == 4
+    idx_global = data_tree.node_ids.index("global")
+    # In active_feats_tree, "virtual_current_x_val" is at index 1, "virtual_f_x_val" is at index 2
+    assert data_tree.x[idx_global, 1].item() == pytest.approx(3.14)
+    assert data_tree.x[idx_global, 2].item() == pytest.approx(-1.2)

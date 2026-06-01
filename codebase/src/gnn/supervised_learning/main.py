@@ -106,7 +106,7 @@ def evaluate(model, loader, criterion):
     return avg_loss, accuracy, f1_computed, precision_computed, recall_computed
 
 
-def main(mode: str = "graph"):
+def main(mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
     # Make paths absolute relative to repo root to avoid cwd dependency issues
     repo_root = Path(__file__).resolve().parents[4]
     dataset_path = DATASET_NAME
@@ -120,6 +120,8 @@ def main(mode: str = "graph"):
         experiments_dir=str(experiments_dir),
         seed=SEED,
         mode=mode,
+        enrich=enrich,
+        active_features=active_features,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(
@@ -148,6 +150,8 @@ def main(mode: str = "graph"):
                 "input_dim": pipeline.input_dim,
                 "global_dim": pipeline.global_dim,
                 "mode": mode,
+                "enrich": enrich,
+                "active_features": active_features,
             }
         )
 
@@ -206,6 +210,17 @@ if __name__ == "__main__":
         choices=["graph", "tree"],
         help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
     )
+    parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help="Toggles enriched features in supervised learning pipeline (uses 19 features instead of 8)."
+    )
+    parser.add_argument(
+        "--active-features",
+        type=str,
+        default=None,
+        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
+    )
     args = parser.parse_args()
 
     # Resolve paths
@@ -222,7 +237,11 @@ if __name__ == "__main__":
 
     if not args.dry_run:
         try:
-            main(mode=args.mode)
+            active_feats = None
+            if args.active_features is not None:
+                active_feats = [f.strip() for f in args.active_features.split(",") if f.strip()]
+                print(f"Aktivierte Features: {active_feats}")
+            main(mode=args.mode, enrich=args.enrich, active_features=active_feats)
         except Exception as e:
             print(f"Failed to start training run (expected if datasets/connections not available in sandbox): {e}")
     else:

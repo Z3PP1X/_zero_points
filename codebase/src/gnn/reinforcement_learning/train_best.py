@@ -169,7 +169,7 @@ def load_best_trial_params(db_path: str, study_name: str | None = None) -> dict:
     return best_trial.params
 
 
-def build_trial_configuration(params: dict, override_seed: int | None = None) -> TrialConfiguration:
+def build_trial_configuration(params: dict, override_seed: int | None = None, padded_node_feature_count: int = 19) -> TrialConfiguration:
     """Constructs a structured TrialConfiguration from flat Optuna params."""
     random_seed = override_seed if override_seed is not None else int(params.get("random_seed", 42))
     
@@ -196,6 +196,7 @@ def build_trial_configuration(params: dict, override_seed: int | None = None) ->
     layout = FeatureLayout(
         node_input_dim=int(params["node_input_dim"]),
         global_input_dim=int(params["global_input_dim"]),
+        padded_node_feature_count=padded_node_feature_count,
     )
     
     policy = GnnPolicySpec(
@@ -305,6 +306,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=["graph", "tree"],
         help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
     )
+    parser.add_argument(
+        "--active-features",
+        type=str,
+        default=None,
+        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
+    )
     return parser
 
 
@@ -312,10 +319,17 @@ def main() -> None:
     parser = build_argument_parser()
     args = parser.parse_args()
 
+    active_features = None
+    if args.active_features is not None:
+        active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
+        print(f"[Pipeline] Aktivierte Features ({len(active_features)}): {active_features}")
+    
+    padded_node_feature_count = len(active_features) if active_features is not None else 19
+
     # 1. Load and parse hyperparameter configuration
     try:
         best_params = load_best_trial_params(args.db, args.study_name)
-        trial_config = build_trial_configuration(best_params, args.seed)
+        trial_config = build_trial_configuration(best_params, args.seed, padded_node_feature_count)
     except Exception as e:
         print(f"[Error] Failed to load/parse study parameters: {e}")
         sys.exit(1)
@@ -360,7 +374,7 @@ def main() -> None:
 
     repo_root = Path(__file__).resolve().parents[4]
     graphs_path = str(repo_root / "codebase" / "src" / "gnn" / "graphs" / args.experiment)
-    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode)
+    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode, active_features=active_features)
 
     print(f"[Pipeline] Initializing ZMQ NetworkGateway on receiver={RECEIVER_PORT}, sender={SENDER_PORT}...")
     gateway.init()

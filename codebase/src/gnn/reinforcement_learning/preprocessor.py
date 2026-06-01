@@ -23,7 +23,7 @@ STATE_GLOBAL_FEATURE_KEYS = (
 
 
 class Preprocessor:
-    def __init__(self, graphs_dir: str, graph_cache_max: int = 128, mode: str = "graph"):
+    def __init__(self, graphs_dir: str, graph_cache_max: int = 128, mode: str = "graph", active_features: list[str] | None = None):
         """
         Initialisiert den Preprocessor.
         :param graphs_dir: Pfad zum Verzeichnis, in dem die Graph-JSONs liegen
@@ -36,9 +36,16 @@ class Preprocessor:
         self.graphs_dir = Path(graphs_dir)
         self.converter = ExpressionGraphConverter()
         self.mode = mode
+        self.active_features = active_features
         self._graph_cache_max = graph_cache_max
         self._known_problem_ids = self._discover_problem_ids()
         self._pyg_template_cache: OrderedDict[str, Data] = OrderedDict()
+
+    @property
+    def padded_node_feature_count(self) -> int:
+        if self.active_features is not None:
+            return len(self.active_features)
+        return 19
 
     @property
     def known_problem_ids(self) -> FrozenSet[str]:
@@ -172,6 +179,11 @@ class Preprocessor:
         data.uuid = message.get("uuid")
         data.state_id = message.get("stateId")
         data.network_job_id = message.get("networkJobId")
+
+        # Slice active features if selection is active
+        if self.active_features is not None and data.x is not None:
+            from gnn.shared.utils.graph_utils import slice_active_features
+            data.x = slice_active_features(data.x, self.active_features, enrich=True)
 
         if dataloader is not None:
             pass

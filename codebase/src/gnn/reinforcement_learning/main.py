@@ -74,6 +74,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         choices=["graph", "tree"],
         help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
     )
+    parser.add_argument(
+        "--active-features",
+        type=str,
+        default=None,
+        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
+    )
     return parser
 
 
@@ -105,7 +111,12 @@ def main() -> None:
         f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs} | "
         f"Continue Study: {args.continue_study}"
     )
-    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode)
+    active_features = None
+    if args.active_features is not None:
+        active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
+        print(f"Aktivierte Features ({len(active_features)}): {active_features}")
+    
+    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode, active_features=active_features)
     print(
         f"Graph-Templates: {len(preprocessor.known_problem_ids)} Problem-IDs indexiert, "
         f"lazy LRU-Cache aktiv (mode: {args.mode})"

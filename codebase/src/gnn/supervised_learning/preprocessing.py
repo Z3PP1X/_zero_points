@@ -40,14 +40,16 @@ class FeatureEngineering:
 
 
 class GraphPipeline:
-    def __init__(self, dataset_name: str, experiments_dir: str, seed: int = 42, mode: str = "graph"):
+    def __init__(self, dataset_name: str, experiments_dir: str, seed: int = 42, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
         self.seed = seed
         self.loader = DatasetLoader(dataset_name)
         self.mode = mode
+        self.enrich = enrich
+        self.active_features = active_features
         fe = FeatureEngineering(self.loader)
         fe._tag_faster_algorithm()
-        # Supervised pipeline uses basic (enrich=False) graph representation
-        self.graph_pipeline = GraphConversionPipeline(experiments_dir, enrich=False, mode=mode)
+        # Supervised pipeline can use either basic or enriched representation
+        self.graph_pipeline = GraphConversionPipeline(experiments_dir, enrich=enrich, mode=mode)
         self.train_loader = None
         self.test_loader = None
         self.class_weights = None
@@ -91,8 +93,8 @@ class GraphPipeline:
         weight_1 = total_train / (num_classes * class_counts.get(1, 1))
         self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
 
-        train_dataset = ProblemRunDataset(train_df, self.graph_pipeline.graphs, mode=self.mode)
-        test_dataset = ProblemRunDataset(test_df, self.graph_pipeline.graphs, mode=self.mode)
+        train_dataset = ProblemRunDataset(train_df, self.graph_pipeline.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+        test_dataset = ProblemRunDataset(test_df, self.graph_pipeline.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
 
         from torch_geometric.loader import DataLoader
 
@@ -123,7 +125,9 @@ class GraphPipeline:
 
     @property
     def input_dim(self) -> int:
-        return self.graph_pipeline.input_dim
+        if self.active_features is not None:
+            return len(self.active_features)
+        return 19 if self.enrich else 8
 
     @property
     def global_dim(self) -> int:
@@ -131,10 +135,12 @@ class GraphPipeline:
 
 
 class ProblemRunDataset(Dataset):
-    def __init__(self, df, base_graphs, mode: str = "graph"):
+    def __init__(self, df, base_graphs, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
         self.df = df.reset_index(drop=True)
         self.base_graphs = base_graphs
         self.mode = mode
+        self.enrich = enrich
+        self.active_features = active_features
 
     def __len__(self):
         return len(self.df)
@@ -192,5 +198,10 @@ class ProblemRunDataset(Dataset):
                             data.x[idx_global, 7] = float(yt_val)
             except ValueError:
                 pass
+
+        # Slice active features if selection is active
+        if self.active_features is not None and data.x is not None:
+            from gnn.shared.utils.graph_utils import slice_active_features
+            data.x = slice_active_features(data.x, self.active_features, enrich=self.enrich)
 
         return data
