@@ -183,7 +183,7 @@ class ProblemRunDataset(Dataset):
                             data.x[idx_cx, 3] = 1.0
                             data.x[idx_fx, 3] = 1.0
                             data.x[idx_yt, 3] = 1.0
-                elif self.mode == "tree":
+                elif self.mode in ["tree", "tree_derivatives"]:
                     # Populate slots on the global node directly
                     idx_global = data.node_ids.index("global")
                     if data.x is not None and len(data.x.shape) == 2:

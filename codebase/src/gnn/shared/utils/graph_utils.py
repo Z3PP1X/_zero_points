@@ -179,8 +179,45 @@ class ExpressionGraphConverter:
         
         # Make a copy of raw to avoid modifying the original dict in-place if passed as object
         raw = dict(raw)
-        raw["nodes"] = list(raw.get("nodes", []))
-        raw["edges"] = list(raw.get("edges", []))
+        
+        # Check if the raw data is in the new GraphML string container format
+        if "graphml_f" in raw:
+            nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
+            
+            # If mode is tree, we only compile the function graph f.
+            # If mode is tree_derivatives or graph, we compile all three (f, f', f'').
+            if mode in ["tree_derivatives", "graph"]:
+                nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
+                nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
+            else:
+                nodes_d1, edges_d1 = [], []
+                nodes_d2, edges_d2 = [], []
+            
+            combined_nodes = nodes_f + nodes_d1 + nodes_d2
+            combined_nodes.insert(0, {
+                "id": "global",
+                "label": "GLOBAL",
+                "type": "global",
+                "value": None
+            })
+            
+            roots_f = find_roots(nodes_f, edges_f)
+            roots_d1 = find_roots(nodes_d1, edges_d1)
+            roots_d2 = find_roots(nodes_d2, edges_d2)
+            
+            combined_edges = edges_f + edges_d1 + edges_d2
+            for root in roots_f:
+                combined_edges.append({"source": "global", "target": root, "type": "belongs_to_f"})
+            for root in roots_d1:
+                combined_edges.append({"source": "global", "target": root, "type": "belongs_to_d1"})
+            for root in roots_d2:
+                combined_edges.append({"source": "global", "target": root, "type": "belongs_to_d2"})
+                
+            raw["nodes"] = combined_nodes
+            raw["edges"] = combined_edges
+        else:
+            raw["nodes"] = list(raw.get("nodes", []))
+            raw["edges"] = list(raw.get("edges", []))
         
         if mode == "graph":
             # Find variable nodes and global node
@@ -625,3 +662,195 @@ def slice_active_features(x: torch.Tensor, active_features: list[str] | None, en
         else:
             raise ValueError(f"Feature '{f}' is not in the schema (enrich={enrich}). Available: {full_schema}")
     return x[:, indices]
+
+
+def parse_graphml_node_name(name_str: str) -> str:
+    name_str = name_str.strip()
+    if name_str.startswith('{') and name_str.endswith('}'):
+        inner = name_str[1:-1]
+        if ',' in inner:
+            label = inner.split(',', 1)[0].strip()
+            return label
+        else:
+            return inner.strip()
+    return name_str
+
+
+def _determine_node_type_from_label(label: str) -> str:
+    if label in ["Plus", "Times", "Power"]:
+        return "operator"
+    if label in ["x", "E", "Pi", "I"]:
+        return "variable"
+    try:
+        float(label)
+        return "constant"
+    except ValueError:
+        pass
+    if "/" in label:
+        try:
+            parts = label.split("/")
+            if len(parts) == 2:
+                float(parts[0])
+                float(parts[1])
+                return "constant"
+        except ValueError:
+            pass
+    return "function"
+
+
+def _parse_constant_value(label: str) -> float:
+    try:
+        if "/" in label:
+            parts = label.split("/")
+            if len(parts) == 2:
+                return float(parts[0]) / float(parts[1])
+        return float(label)
+    except Exception:
+        return 0.0
+
+
+def find_roots(nodes_list, edges_list):
+    targets = {e["target"] for e in edges_list}
+    return [n["id"] for n in nodes_list if n["id"] not in targets]
+
+
+def parse_graphml_to_nodes_and_edges(graphml_str: str, prefix: str):
+    if not graphml_str or not isinstance(graphml_str, str) or graphml_str.strip() == "":
+        return [], []
+        
+    content = graphml_str.replace("attr.type='String'", "attr.type='string'")
+    content = content.replace('attr.type="String"', 'attr.type="string"')
+    
+    G = nx.parse_graphml(content)
+    
+    nodes = []
+    edges = []
+    
+    for nid, attrs in G.nodes(data=True):
+        name_val = attrs.get("Name") or attrs.get("nodeKey1")
+        if not name_val:
+            label = str(nid)
+        else:
+            label = parse_graphml_node_name(name_val)
+        type_str = _determine_node_type_from_label(label)
+        
+        val = None
+        if type_str == "constant":
+            val = _parse_constant_value(label)
+            
+        nodes.append({
+            "id": f"{prefix}_{nid}",
+            "label": label,
+            "type": type_str,
+            "value": val
+        })
+        
+    for u, v in G.edges():
+        edges.append({
+            "source": f"{prefix}_{u}",
+            "target": f"{prefix}_{v}",
+            "type": "child_of"
+        })
+        
+    return nodes, edges
+
+
+def create_virtual_global_node(
+    graph_function: Union[str, nx.DiGraph],
+    graph_derivative: Union[str, nx.DiGraph],
+    graph_secondderivative: Union[str, nx.DiGraph]
+) -> nx.DiGraph:
+    """
+    Creates a combined directed graph by adding a virtual global node 'global'
+    that connects to the root nodes (in-degree == 0) of graph_function,
+    graph_derivative, and graph_secondderivative.
+    """
+    def to_digraph(g) -> nx.DiGraph:
+        if isinstance(g, str):
+            if not g.strip():
+                return nx.DiGraph()
+            content = g.replace("attr.type='String'", "attr.type='string'")
+            content = content.replace('attr.type="String"', 'attr.type="string"')
+            return nx.parse_graphml(content)
+        elif isinstance(g, nx.DiGraph):
+            return g
+        else:
+            return nx.DiGraph()
+
+    g_f = to_digraph(graph_function)
+    g_d1 = to_digraph(graph_derivative)
+    g_d2 = to_digraph(graph_secondderivative)
+
+    def normalize_graph(G: nx.DiGraph):
+        G_norm = nx.DiGraph()
+        for nid, attrs in G.nodes(data=True):
+            if "node_type" in attrs:
+                G_norm.add_node(nid, **attrs)
+                continue
+            name_val = attrs.get("Name") or attrs.get("nodeKey1")
+            if not name_val:
+                label = str(nid)
+            else:
+                label = parse_graphml_node_name(name_val)
+            type_str = _determine_node_type_from_label(label)
+            val = 0.0
+            has_val = 0.0
+            if type_str == "constant":
+                val = _parse_constant_value(label)
+                has_val = 1.0
+            G_norm.add_node(
+                nid,
+                node_type=ExpressionGraphConverter.NODE_TYPES[type_str],
+                label_id=0,
+                label=label,
+                type=type_str,
+                value=val,
+                has_value=has_val,
+                virtual_current_x_val=0.0,
+                virtual_f_x_val=0.0,
+                virtual_y_target_val=0.0
+            )
+        for u, v, attrs in G.edges(data=True):
+            G_norm.add_edge(u, v, **attrs)
+        return G_norm
+
+    g_f = normalize_graph(g_f)
+    g_d1 = normalize_graph(g_d1)
+    g_d2 = normalize_graph(g_d2)
+
+    roots_f = [n for n, d in g_f.in_degree() if d == 0]
+    roots_d1 = [n for n, d in g_d1.in_degree() if d == 0]
+    roots_d2 = [n for n, d in g_d2.in_degree() if d == 0]
+
+    G_combined = nx.DiGraph()
+    G_combined.add_node(
+        "global",
+        node_type=ExpressionGraphConverter.NODE_TYPES["global"],
+        label_id=0,
+        label="GLOBAL",
+        type="global",
+        value=0.0,
+        has_value=0.0,
+        virtual_current_x_val=0.0,
+        virtual_f_x_val=0.0,
+        virtual_y_target_val=0.0
+    )
+
+    def add_component(g_comp, prefix: str):
+        for nid, attrs in g_comp.nodes(data=True):
+            G_combined.add_node(f"{prefix}_{nid}", **attrs)
+        for u, v, attrs in g_comp.edges(data=True):
+            G_combined.add_edge(f"{prefix}_{u}", f"{prefix}_{v}", **attrs)
+
+    add_component(g_f, "f")
+    add_component(g_d1, "d1")
+    add_component(g_d2, "d2")
+
+    for r in roots_f:
+        G_combined.add_edge("global", f"f_{r}", edge_type=0)
+    for r in roots_d1:
+        G_combined.add_edge("global", f"d1_{r}", edge_type=0)
+    for r in roots_d2:
+        G_combined.add_edge("global", f"d2_{r}", edge_type=0)
+
+    return G_combined

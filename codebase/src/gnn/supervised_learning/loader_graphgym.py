@@ -21,7 +21,7 @@ def set_custom_cfg(cfg):
     Allows specifying experimental variables inside YAML configuration.
     """
     cfg.expression_graph = CN()
-    cfg.expression_graph.mode = "graph"            # "graph" or "tree"
+    cfg.expression_graph.mode = "graph"            # "graph", "tree", or "tree_derivatives"
     cfg.expression_graph.enrich = False             # True or False
     cfg.expression_graph.active_features = ""       # Comma-separated list or empty for all
 
@@ -36,7 +36,7 @@ def load_custom_expression_graphs():
     - cfg.dataset.name: e.g., "run_20260408_160456/dataset_4" (injects dataset selection)
     - cfg.train.batch_size: injects batch size
     - cfg.seed: injects seed (defaults to 42001 if not set)
-    - cfg.expression_graph.mode: injects GNN mode ("graph" or "tree")
+    - cfg.expression_graph.mode: injects GNN mode ("graph", "tree", or "tree_derivatives")
     - cfg.expression_graph.enrich: injects GNN feature enrichment (True or False)
     - cfg.expression_graph.active_features: injects list of active features
     """

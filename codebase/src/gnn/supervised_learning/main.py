@@ -207,8 +207,8 @@ if __name__ == "__main__":
         "--mode",
         type=str,
         default="graph",
-        choices=["graph", "tree"],
-        help="Select GNN experiment mode: graph (with virtual nodes) or tree (features on global node)"
+        choices=["graph", "tree", "tree_derivatives"],
+        help="Select GNN experiment mode: graph (with virtual nodes), tree (features on global node, f only) or tree_derivatives (f, f', f'' connected via global node)"
     )
     parser.add_argument(
         "--enrich",
