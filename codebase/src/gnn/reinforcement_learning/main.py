@@ -103,9 +103,6 @@ def main() -> None:
         traffic_monitor=traffic_monitor,
         state_logger=state_logger,
     )
-    repo_root = Path(__file__).resolve().parents[4]
-    graphs_path = str(repo_root / "codebase" / "src" / "gnn" / "graphs" / args.experiment)
-    print(f"Starte Pipeline mit Graphen aus: {graphs_path}")
     print(
         f"Optuna: {args.n_trials} Trials × {args.timesteps} Schritte | "
         f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs} | "
@@ -116,7 +113,15 @@ def main() -> None:
         active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
         print(f"Aktivierte Features ({len(active_features)}): {active_features}")
     
-    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode, active_features=active_features)
+    from gnn.shared.utils.graph_loader import GraphDataLoader
+    loader = GraphDataLoader(
+        name=args.experiment,
+        mode=args.mode,
+        enrich=True,
+        heterogeneous=False,
+    )
+    
+    preprocessor = Preprocessor(loader=loader, mode=args.mode, active_features=active_features)
     print(
         f"Graph-Templates: {len(preprocessor.known_problem_ids)} Problem-IDs indexiert, "
         f"lazy LRU-Cache aktiv (mode: {args.mode})"

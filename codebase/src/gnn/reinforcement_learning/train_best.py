@@ -80,8 +80,15 @@ class TrainingCallback(BaseCallback):
 
         faster_ratio = None
         overshoot_var = None
+        convergence_rate = None
+        mean_episode_steps = None
+        mean_roundtrip_s = None
         if self.traffic_monitor is not None:
             faster_ratio, overshoot_var = self.traffic_monitor.get_rolling_metrics()
+            adv_metrics = self.traffic_monitor.get_advanced_rolling_metrics()
+            convergence_rate = adv_metrics.get("convergence_rate")
+            mean_episode_steps = adv_metrics.get("mean_episode_steps")
+            mean_roundtrip_s = adv_metrics.get("mean_roundtrip_s")
 
         if n_episodes > 0:
             rewards = [ep["r"] for ep in ep_buf]
@@ -97,9 +104,18 @@ class TrainingCallback(BaseCallback):
                 mlflow.log_metric("faster_than_benchmark_ratio", faster_ratio, step=self.num_timesteps)
             if overshoot_var is not None:
                 mlflow.log_metric("overshoot_variance", overshoot_var, step=self.num_timesteps)
+            if convergence_rate is not None:
+                mlflow.log_metric("convergence_rate", convergence_rate, step=self.num_timesteps)
+            if mean_episode_steps is not None:
+                mlflow.log_metric("mean_episode_steps", mean_episode_steps, step=self.num_timesteps)
+            if mean_roundtrip_s is not None:
+                mlflow.log_metric("mean_roundtrip_s", mean_roundtrip_s, step=self.num_timesteps)
 
             faster_text = f"{faster_ratio:.3f}" if faster_ratio is not None else "—"
             overshoot_text = f"{overshoot_var:.3f}" if overshoot_var is not None else "—"
+            conv_text = f"{convergence_rate:.3f}" if convergence_rate is not None else "—"
+            steps_text = f"{mean_episode_steps:.1f}" if mean_episode_steps is not None else "—"
+            latency_text = f"{mean_roundtrip_s:.3f}s" if mean_roundtrip_s is not None else "—"
 
             print(
                 f"[Step {self.num_timesteps:>6}] "
@@ -108,7 +124,10 @@ class TrainingCallback(BaseCallback):
                 f"Best Ep: {best_ep_reward:>8.3f} | "
                 f"Worst Ep: {worst_ep_reward:>8.3f} | "
                 f"Faster Ratio: {faster_text} | "
-                f"Overshoot Var: {overshoot_text}"
+                f"Overshoot Var: {overshoot_text} | "
+                f"Conv Rate: {conv_text} | "
+                f"Mean Steps: {steps_text} | "
+                f"Latency: {latency_text}"
             )
 
             # Check and save the best model
@@ -371,10 +390,14 @@ def main() -> None:
         traffic_monitor=traffic_monitor,
         state_logger=state_logger,
     )
-
-    repo_root = Path(__file__).resolve().parents[4]
-    graphs_path = str(repo_root / "codebase" / "src" / "gnn" / "graphs" / args.experiment)
-    preprocessor = Preprocessor(graphs_dir=graphs_path, mode=args.mode, active_features=active_features)
+    from gnn.shared.utils.graph_loader import GraphDataLoader
+    loader = GraphDataLoader(
+        name=args.experiment,
+        mode=args.mode,
+        enrich=True,
+        heterogeneous=False,
+    )
+    preprocessor = Preprocessor(loader=loader, mode=args.mode, active_features=active_features)
 
     print(f"[Pipeline] Initializing ZMQ NetworkGateway on receiver={RECEIVER_PORT}, sender={SENDER_PORT}...")
     gateway.init()

@@ -1,0 +1,48 @@
+# config_supervised.yaml
+# GraphGym configuration file for supervised GNN architecture evaluation
+
+# Output directory for checkpoints, stats, and tensorboard logs
+out_dir: results
+
+# --- Dataset Section ---
+# Demontrates Dependency Injection (DI) by passing properties that are read in loader_graphgym.py
+dataset:
+  format: custom_expression_graphs   # Registered loader name inside loader_graphgym.py
+  name: run_20260408_160456/dataset_4 # DI: Inject different dataset path prefixes dynamically here!
+  task: graph
+  task_type: classification
+  transductive: False
+
+# --- Training Loop Section ---
+train:
+  mode: custom
+  batch_size: 256                    # DI: Inject batch size
+  eval_period: 10
+  ckpt_period: 20
+  epoch_warmup: 5
+  epochs: 100
+
+# --- Model Structure ---
+model:
+  type: gnn
+  loss_fun: cross_entropy
+  edge_decoding: dot
+  graph_pooling: mean
+
+# --- GNN Backbone Architecture ---
+gnn:
+  layers_pre_mp: 1                  # Projection layers before message passing
+  layers_mp: 3                      # Number of graph convolution layers
+  layers_post_mp: 2                 # Classification MLP tail layers after pooling
+  dim_inner: 128                    # Injected hidden channel dimension
+  layer_type: gatv2conv             # Dynamic backbones: gatv2conv, gcnconv, sageconv, ginconv
+  stage_type: stack
+  act: leaky_relu                   # Dynamic activation: relu, leaky_relu, gelu, elu, tanh
+  dropout: 0.2
+
+# --- Optimizations ---
+optim:
+  optimizer: adam
+  base_lr: 0.001
+  weight_decay: 0.0005
+  scheduler: cosine_with_warmup

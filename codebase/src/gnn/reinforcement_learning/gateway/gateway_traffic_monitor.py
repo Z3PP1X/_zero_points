@@ -41,12 +41,16 @@ class GatewayTrafficMonitor:
         )
         self._faster_than_benchmark_history = deque(maxlen=1000)
         self._overshoot_history = deque(maxlen=1000)
+        self._convergence_history = deque(maxlen=1000)
+        self._steps_history = deque(maxlen=1000)
 
     def reset_reward_state_count(self) -> None:
         with self._lock:
             self._reward_state_count = 0
             self._faster_than_benchmark_history.clear()
             self._overshoot_history.clear()
+            self._convergence_history.clear()
+            self._steps_history.clear()
 
     @staticmethod
     def _benchmark_abs_time(reward_state: dict) -> float:
@@ -70,6 +74,17 @@ class GatewayTrafficMonitor:
             overshoot_var = float(np.var(self._overshoot_history)) if len(self._overshoot_history) >= 1 else 0.0
             return faster_avg, overshoot_var
 
+    def get_advanced_rolling_metrics(self) -> dict:
+        with self._lock:
+            conv_rate = float(np.mean(self._convergence_history)) if self._convergence_history else None
+            mean_steps = float(np.mean(self._steps_history)) if self._steps_history else None
+            mean_roundtrip = self.roundtrip_timeout.mean_roundtrip_s()
+            return {
+                "convergence_rate": conv_rate,
+                "mean_episode_steps": mean_steps,
+                "mean_roundtrip_s": mean_roundtrip,
+            }
+
     def observe(self, message: dict, channel: str) -> None:
         with self._lock:
             if channel == "reward":
@@ -81,6 +96,17 @@ class GatewayTrafficMonitor:
                     overshoot = terminal_abs - bench
                     self._faster_than_benchmark_history.append(is_faster)
                     self._overshoot_history.append(overshoot)
+                
+                status = message.get("status")
+                if status is not None:
+                    is_converged = 1.0 if status in ("finished", "reward_calc") else 0.0
+                    self._convergence_history.append(is_converged)
+                
+                steps = message.get("networkStep")
+                if steps is not None:
+                    steps_val = _to_float(steps)
+                    if steps_val is not None:
+                        self._steps_history.append(steps_val)
                 return
 
             if channel != "training":
@@ -144,6 +170,10 @@ class GatewayTrafficMonitor:
                 else:
                     faster_ratio = None
                     overshoot_var = None
+
+                conv_rate = float(np.mean(self._convergence_history)) if self._convergence_history else None
+                mean_steps = float(np.mean(self._steps_history)) if self._steps_history else None
+
             if roundtrip_avg is None:
                 roundtrip_text = f"fallback {roundtrip_timeout:.2f}s"
             else:
@@ -153,12 +183,16 @@ class GatewayTrafficMonitor:
                 )
             faster_text = f"{faster_ratio:.3f}" if faster_ratio is not None else "—"
             overshoot_text = f"{overshoot_var:.3f}" if overshoot_var is not None else "—"
+            conv_text = f"{conv_rate:.3f}" if conv_rate is not None else "—"
+            steps_text = f"{mean_steps:.1f}" if mean_steps is not None else "—"
             line = (
                 f"\r[Gateway] Episode: {episode} | "
                 f"Episode-Reward: {episode_reward:>10.4f} | "
                 f"Reward-States: {reward_states:>6} | "
                 f"Faster Ratio: {faster_text} | "
                 f"Overshoot Var: {overshoot_text} | "
+                f"Conv Rate: {conv_text} | "
+                f"Mean Steps: {steps_text} | "
                 f"Roundtrip avg: {roundtrip_text} | "
                 f"Total Timeouts: {total_timeouts:>6}"
             )

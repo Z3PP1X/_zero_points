@@ -25,6 +25,12 @@ from torchmetrics.classification import (
     MulticlassRecall,
 )
 
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, confusion_matrix
+
 NUM_CORES = 6
 torch.set_num_threads(NUM_CORES)
 
@@ -72,6 +78,53 @@ def train(model, loader, optimizer, criterion):
     return running_loss / len(loader)
 
 
+def log_confusion_matrix(y_true, y_pred, epoch: int):
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    
+    # Plot confusion matrix
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    ax.figure.colorbar(im, ax=ax)
+    
+    # We want to show all ticks...
+    ax.set(xticks=[0, 1],
+           yticks=[0, 1],
+           xticklabels=['Class 0', 'Class 1'],
+           yticklabels=['Class 0', 'Class 1'],
+           title=f'Confusion Matrix - Epoch {epoch + 1}',
+           ylabel='True label',
+           xlabel='Predicted label')
+
+    # Loop over data dimensions and create text annotations.
+    thresh = cm.max() / 2.
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, format(cm[i, j], 'd'),
+                    ha="center", va="center",
+                    color="white" if cm[i, j] > thresh else "black")
+    
+    fig.tight_layout()
+    
+    # Save to a temporary file
+    temp_path = f"temp_cm_epoch_{epoch}.png"
+    plt.savefig(temp_path, dpi=100)
+    plt.close(fig)
+    
+    # Log to MLflow
+    try:
+        mlflow.log_artifact(temp_path, artifact_path="confusion_matrices")
+    except Exception as e:
+        print(f"Warning: Failed to log confusion matrix to MLflow: {e}")
+        
+    # Clean up temp file
+    if os.path.exists(temp_path):
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+
 def evaluate(model, loader, criterion):
     model.eval()
     f1_metric.reset()
@@ -81,6 +134,10 @@ def evaluate(model, loader, criterion):
     correct = 0
     total = 0
 
+    all_labels = []
+    all_preds = []
+    all_probs = []
+
     with torch.no_grad():
         for batch in loader:
             batch = batch.to(DEVICE)
@@ -88,6 +145,8 @@ def evaluate(model, loader, criterion):
                 batch.x, batch.edge_index, batch.batch, batch.global_features
             )
             labels = batch.y.squeeze()
+            if labels.dim() == 0:
+                labels = labels.unsqueeze(0)
             total_loss += criterion(outputs, labels).item()
             preds = outputs.argmax(dim=1)
             correct += (preds == labels).sum().item()
@@ -97,13 +156,19 @@ def evaluate(model, loader, criterion):
             precision_metric.update(probs, labels)
             recall_metric.update(probs, labels)
 
+            all_labels.extend(labels.cpu().numpy().tolist())
+            all_preds.extend(preds.cpu().numpy().tolist())
+            if probs.dim() == 1:
+                probs = probs.unsqueeze(0)
+            all_probs.extend(probs[:, 1].cpu().numpy().tolist())
+
     avg_loss = total_loss / len(loader)
     accuracy = correct / total
     f1_computed = f1_metric.compute().item()
     precision_computed = precision_metric.compute().item()
     recall_computed = recall_metric.compute().item()
 
-    return avg_loss, accuracy, f1_computed, precision_computed, recall_computed
+    return avg_loss, accuracy, f1_computed, precision_computed, recall_computed, all_labels, all_preds, all_probs
 
 
 def main(mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
@@ -114,14 +179,21 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
     save_dir = repo_root / "_models"
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / "best_model.pth"
+    from gnn.shared.utils.graph_loader import GraphDataLoader
+    loader = GraphDataLoader(
+        name=dataset_path,
+        mode=mode,
+        enrich=enrich,
+        heterogeneous=False,
+    )
 
     pipeline = GraphPipeline(
         dataset_name=dataset_path,
-        experiments_dir=str(experiments_dir),
         seed=SEED,
         mode=mode,
         enrich=enrich,
         active_features=active_features,
+        graph_loader=loader,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(
@@ -159,9 +231,30 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
 
         for epoch in range(EPOCHS):
             train_loss = train(model, train_loader, optimizer, criterion)
-            val_loss, val_acc, f1_val, prec_val, rec_val = evaluate(
+            val_loss, val_acc, f1_val, prec_val, rec_val, y_true, y_pred, y_prob = evaluate(
                 model, test_loader, criterion
             )
+
+            # Compute advanced metrics
+            y_true_np = np.array(y_true)
+            y_pred_np = np.array(y_pred)
+            y_prob_np = np.array(y_prob)
+
+            if len(np.unique(y_true_np)) > 1:
+                roc_auc = float(roc_auc_score(y_true_np, y_prob_np))
+            else:
+                roc_auc = 0.5
+
+            f1_classes = f1_score(y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0)
+            prec_classes = precision_score(y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0)
+            rec_classes = recall_score(y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0)
+
+            f1_c0, f1_c1 = float(f1_classes[0]), float(f1_classes[1])
+            prec_c0, prec_c1 = float(prec_classes[0]), float(prec_classes[1])
+            rec_c0, rec_c1 = float(rec_classes[0]), float(rec_classes[1])
+
+            # Log confusion matrix plot as artifact
+            log_confusion_matrix(y_true, y_pred, epoch)
 
             mlflow.log_metrics(
                 {
@@ -171,6 +264,13 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
                     "F1": f1_val,
                     "Precision": prec_val,
                     "Recall": rec_val,
+                    "AUC/val": roc_auc,
+                    "F1_class_0": f1_c0,
+                    "F1_class_1": f1_c1,
+                    "Precision_class_0": prec_c0,
+                    "Precision_class_1": prec_c1,
+                    "Recall_class_0": rec_c0,
+                    "Recall_class_1": rec_c1,
                 },
                 step=epoch,
             )
@@ -181,8 +281,10 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
                 f"Val Loss: {val_loss:.4f} | "
                 f"Val Acc: {val_acc:.4f} | "
                 f"F1: {f1_val:.4f} | "
-                f"Precision: {prec_val:.4f} | "
-                f"Recall: {rec_val:.4f}"
+                f"ROC-AUC: {roc_auc:.4f} | "
+                f"F1 (C0/C1): {f1_c0:.4f}/{f1_c1:.4f} | "
+                f"Prec (C0/C1): {prec_c0:.4f}/{prec_c1:.4f} | "
+                f"Rec (C0/C1): {rec_c0:.4f}/{rec_c1:.4f}"
             )
 
             if val_loss < best_val_loss:

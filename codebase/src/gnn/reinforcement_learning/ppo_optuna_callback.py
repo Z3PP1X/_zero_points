@@ -54,8 +54,15 @@ class OptunaEpisodeRewardCallback(BaseCallback):
         worst_episode_reward = float(np.min(rewards))
         faster_ratio = None
         overshoot_var = None
+        convergence_rate = None
+        mean_episode_steps = None
+        mean_roundtrip_s = None
         if self.traffic_monitor is not None:
             faster_ratio, overshoot_var = self.traffic_monitor.get_rolling_metrics()
+            adv_metrics = self.traffic_monitor.get_advanced_rolling_metrics()
+            convergence_rate = adv_metrics.get("convergence_rate")
+            mean_episode_steps = adv_metrics.get("mean_episode_steps")
+            mean_roundtrip_s = adv_metrics.get("mean_roundtrip_s")
 
         self.trial.report(mean_reward, self.num_timesteps)
 
@@ -86,11 +93,32 @@ class OptunaEpisodeRewardCallback(BaseCallback):
                         overshoot_var,
                         step=self.num_timesteps,
                     )
+                if convergence_rate is not None:
+                    mlflow.log_metric(
+                        "convergence_rate",
+                        convergence_rate,
+                        step=self.num_timesteps,
+                    )
+                if mean_episode_steps is not None:
+                    mlflow.log_metric(
+                        "mean_episode_steps",
+                        mean_episode_steps,
+                        step=self.num_timesteps,
+                    )
+                if mean_roundtrip_s is not None:
+                    mlflow.log_metric(
+                        "mean_roundtrip_s",
+                        mean_roundtrip_s,
+                        step=self.num_timesteps,
+                    )
         except Exception:
             pass
 
         faster_text = f"{faster_ratio:.3f}" if faster_ratio is not None else "—"
         overshoot_text = f"{overshoot_var:.3f}" if overshoot_var is not None else "—"
+        conv_text = f"{convergence_rate:.3f}" if convergence_rate is not None else "—"
+        steps_text = f"{mean_episode_steps:.1f}" if mean_episode_steps is not None else "—"
+        latency_text = f"{mean_roundtrip_s:.3f}s" if mean_roundtrip_s is not None else "—"
 
         print(
             f"  [Trial {self.trial.number:>3}] "
@@ -101,6 +129,9 @@ class OptunaEpisodeRewardCallback(BaseCallback):
             f"Worst Ep: {worst_episode_reward:>8.3f} | "
             f"Faster Ratio: {faster_text} | "
             f"Overshoot Var: {overshoot_text} | "
+            f"Conv Rate: {conv_text} | "
+            f"Mean Steps: {steps_text} | "
+            f"Latency: {latency_text} | "
             f"Study Best: {_format_study_best(self.study)}"
         )
 

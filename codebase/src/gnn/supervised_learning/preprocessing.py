@@ -15,6 +15,7 @@ if str(src_root) not in sys.path:
 
 from gnn.supervised_learning.dataset import DatasetLoader
 from gnn.shared.utils.graph_utils import GraphConversionPipeline
+from gnn.shared.utils.graph_loader import GraphDataLoader
 
 
 class FeatureEngineering:
@@ -40,7 +41,16 @@ class FeatureEngineering:
 
 
 class GraphPipeline:
-    def __init__(self, dataset_name: str, experiments_dir: str, seed: int = 42, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
+    def __init__(
+        self,
+        dataset_name: str,
+        experiments_dir: str = "",
+        seed: int = 42,
+        mode: str = "graph",
+        enrich: bool = False,
+        active_features: list[str] | None = None,
+        graph_loader: GraphDataLoader | None = None,
+    ):
         self.seed = seed
         self.loader = DatasetLoader(dataset_name)
         self.mode = mode
@@ -48,8 +58,23 @@ class GraphPipeline:
         self.active_features = active_features
         fe = FeatureEngineering(self.loader)
         fe._tag_faster_algorithm()
-        # Supervised pipeline can use either basic or enriched representation
-        self.graph_pipeline = GraphConversionPipeline(experiments_dir, enrich=enrich, mode=mode)
+        
+        # Dependency Injection / Fallback
+        if graph_loader is not None:
+            self.graph_loader = graph_loader
+        else:
+            self.graph_loader = GraphDataLoader(
+                name=dataset_name,
+                mode=mode,
+                enrich=enrich,
+                heterogeneous=False,
+                base_dir=experiments_dir if experiments_dir else None
+            )
+            
+        self.graphs = self.graph_loader.load_all()
+        # Backward compatibility alias
+        self.graph_pipeline = self
+        
         self.train_loader = None
         self.test_loader = None
         self.class_weights = None
@@ -62,7 +87,7 @@ class GraphPipeline:
         self, test_size=0.2, batch_size=32, stratify: bool = True, num_workers: int = 0
     ):
         df = self.loader.data
-        graph_ids = set(self.graph_pipeline.graphs.keys())
+        graph_ids = set(self.graphs.keys())
         df_matched = df[df["problem_id"].isin(graph_ids)].copy()
 
         unique_problem_ids = df_matched["problem_id"].unique()
@@ -93,8 +118,8 @@ class GraphPipeline:
         weight_1 = total_train / (num_classes * class_counts.get(1, 1))
         self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
 
-        train_dataset = ProblemRunDataset(train_df, self.graph_pipeline.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
-        test_dataset = ProblemRunDataset(test_df, self.graph_pipeline.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+        train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+        test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
 
         from torch_geometric.loader import DataLoader
 

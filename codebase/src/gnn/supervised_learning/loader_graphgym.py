@@ -75,14 +75,22 @@ def load_custom_expression_graphs():
         print(f"  Injected Features:       ALL")
     print(f"----------------------------------------\n")
 
+    from gnn.shared.utils.graph_loader import GraphDataLoader
+    loader = GraphDataLoader(
+        name=dataset_name,
+        mode=mode,
+        enrich=enrich,
+        heterogeneous=False,
+    )
+
     # Instantiate the GraphPipeline using the injected dependencies
     pipeline = GraphPipeline(
         dataset_name=dataset_name,
-        experiments_dir=str(experiments_dir),
         seed=seed,
         mode=mode,
         enrich=enrich,
         active_features=active_features,
+        graph_loader=loader,
     )
 
     # Use pipeline loaders as requested
