@@ -31,6 +31,8 @@ def main():
     import torch
     if cfg.accelerator == 'auto':
         cfg.accelerator = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # Ensure optim.max_epoch matches train.epochs specified in the configuration
+    cfg.optim.max_epoch = cfg.train.epochs
     set_run_dir(cfg.out_dir)
     
     print("\n[GraphGym Command Center] Launching training run...")
