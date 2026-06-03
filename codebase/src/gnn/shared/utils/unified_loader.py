@@ -87,6 +87,54 @@ class UnifiedDataLoader:
             heterogeneous=self.heterogeneous,
         )
 
+        # Automatically enrich missing x0/startwert values from graph data
+        try:
+            self.enrich_x0_if_missing(self.dataset_loader.data)
+        except Exception as e:
+            logger.warning(f"Could not perform x0 dataset enrichment: {e}")
+
+    def enrich_x0_if_missing(self, df: pd.DataFrame) -> None:
+        """
+        Scans the DataFrame for the 'x0' or 'startwert' key. If missing or null,
+        fetches the fitting value from the graph data for that problem ID.
+        """
+        # Determine target column name
+        target_col = "x0"
+        if "startwert" in df.columns:
+            target_col = "startwert"
+        elif "x0" in df.columns:
+            target_col = "x0"
+        else:
+            df[target_col] = None
+
+        # Check if column has any missing values
+        if df[target_col].isnull().any():
+            for idx, row in df.iterrows():
+                pid = row.get("problem_id", row.get("problemID"))
+                if pid is None:
+                    continue
+                pid_str = str(pid)
+                
+                # If current row value is null/NaN, fetch from graph data
+                if pd.isnull(row[target_col]):
+                    try:
+                        if self.graph_loader.has_graph(pid_str):
+                            raw_val = self.graph_loader._raw_sources.get(pid_str)
+                            if raw_val is not None:
+                                if isinstance(raw_val, Path):
+                                    import json
+                                    with open(raw_val, "r", encoding="utf-8") as f:
+                                        raw_dict = json.load(f)
+                                else:
+                                    raw_dict = raw_val
+                                
+                                # Try 'x0' first, then 'startwert'
+                                x0_val = raw_dict.get("x0", raw_dict.get("startwert"))
+                                if x0_val is not None:
+                                    df.at[idx, target_col] = float(x0_val)
+                    except Exception as e:
+                        logger.warning(f"Failed to enrich x0 for problem ID '{pid_str}': {e}")
+
     @property
     def data(self) -> pd.DataFrame:
         """Returns the tabular pandas DataFrame from DatasetLoader."""
