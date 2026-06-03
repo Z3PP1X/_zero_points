@@ -134,16 +134,16 @@ class GraphPipeline:
         weight_1 = total_train / (num_classes * class_counts.get(1, 1))
         self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
 
-        train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
-        test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+        self.train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+        self.test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
 
         from torch_geometric.loader import DataLoader
 
         self.train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
         )
         self.test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, num_workers=num_workers
+            self.test_dataset, batch_size=batch_size, num_workers=num_workers
         )
 
         print("-" * 40)
@@ -153,7 +153,7 @@ class GraphPipeline:
         )
         print(
             f"Runs gesamt: {len(df_matched)} "
-            f"(Train: {len(train_dataset)}, Test: {len(test_dataset)})"
+            f"(Train: {len(self.train_dataset)}, Test: {len(self.test_dataset)})"
         )
         print(
             f"Trainings-Verteilung: 0: {class_counts.get(0, 0)}, "

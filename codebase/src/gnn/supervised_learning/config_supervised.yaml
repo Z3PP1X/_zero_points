@@ -8,7 +8,7 @@ out_dir: results
 # Demontrates Dependency Injection (DI) by passing properties that are read in loader_graphgym.py
 dataset:
   format: custom_expression_graphs   # Registered loader name inside loader_graphgym.py
-  name: run_20260603_123013/parallel_benchmark_results.csv 
+  name: run_20260603_123013/parallel_benchmark_results
   task: graph
   task_type: classification
   transductive: False

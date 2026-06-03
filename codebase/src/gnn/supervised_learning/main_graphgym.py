@@ -14,10 +14,12 @@ if str(src_root) not in sys.path:
 import gnn.supervised_learning.loader_graphgym
 
 from torch_geometric.graphgym.cmd_args import parse_args
-from torch_geometric.graphgym.config import set_cfg, load_cfg
-from torch_geometric.graphgym.utils.comp_exec import set_run_dir
-from torch_geometric.graphgym.train import train_runner
-import torch_geometric.graphgym.register as register
+from torch_geometric.graphgym.config import cfg, set_cfg, load_cfg, set_run_dir
+from torch_geometric.graphgym.model_builder import create_model
+from torch_geometric.graphgym.train import GraphGymDataModule, train
+
+# Re-run set_cfg(cfg) to incorporate custom configurations registered in loader_graphgym
+set_cfg(cfg)
 
 
 def main():
@@ -25,12 +27,17 @@ def main():
     args = parse_args()
     
     # 2. Load configuration from YAML into GraphGym's global config object
-    load_cfg(set_cfg(), args)
-    set_run_dir(set_cfg(), args.cfg_file)
+    load_cfg(cfg, args)
+    import torch
+    if cfg.accelerator == 'auto':
+        cfg.accelerator = 'cuda' if torch.cuda.is_available() else 'cpu'
+    set_run_dir(cfg.out_dir)
     
     print("\n[GraphGym Command Center] Launching training run...")
-    # 3. Start training loop using GraphGym's built-in train_runner
-    train_runner(register.train_dict[set_cfg().train.mode])
+    # 3. Start training loop using PyG's standard train helper and Lightning model/loaders
+    datamodule = GraphGymDataModule()
+    model = create_model()
+    train(model, datamodule, logger=True)
 
 
 if __name__ == "__main__":

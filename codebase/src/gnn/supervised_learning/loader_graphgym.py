@@ -13,6 +13,61 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from gnn.supervised_learning.preprocessing import GraphPipeline
+import torch
+import torch.nn as nn
+from torch_geometric.data import InMemoryDataset
+from torch_geometric.graphgym.register import register_act
+
+# Register additional activation functions for GraphGym compatibility
+register_act('gelu', nn.GELU)
+register_act('leaky_relu', nn.LeakyReLU)
+register_act('tanh', nn.Tanh)
+
+import torch_geometric as pyg
+from torch_geometric.graphgym.register import register_layer
+
+@register_layer('gatv2conv')
+class GATv2Conv(torch.nn.Module):
+    def __init__(self, layer_config, **kwargs):
+        super().__init__()
+        self.model = pyg.nn.GATv2Conv(
+            layer_config.dim_in,
+            layer_config.dim_out,
+            bias=layer_config.has_bias,
+        )
+
+    def forward(self, batch):
+        batch.x = self.model(batch.x, batch.edge_index)
+        return batch
+
+
+import math
+from torch.optim.lr_scheduler import LambdaLR
+from torch_geometric.graphgym.register import register_scheduler
+
+def cosine_with_warmup_scheduler(optimizer, max_epoch):
+    from torch_geometric.graphgym.config import cfg
+    warmup_epochs = getattr(cfg.train, 'epoch_warmup', 5)
+    
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return float(epoch) / float(max(1, warmup_epochs))
+        progress = float(epoch - warmup_epochs) / float(max(1, max_epoch - warmup_epochs))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        
+    return LambdaLR(optimizer, lr_lambda)
+
+register_scheduler('cosine_with_warmup', cosine_with_warmup_scheduler)
+
+
+class ExpressionGraphDataset(InMemoryDataset):
+    def __init__(self, data_list, train_idx, val_idx, test_idx):
+        super().__init__()
+        # Use private _data attribute to prevent PyG warnings
+        self._data, self.slices = self.collate(data_list)
+        self._data.train_graph_index = torch.tensor(train_idx, dtype=torch.long)
+        self._data.val_graph_index = torch.tensor(val_idx, dtype=torch.long)
+        self._data.test_graph_index = torch.tensor(test_idx, dtype=torch.long)
 
 
 def set_custom_cfg(cfg):
@@ -20,16 +75,21 @@ def set_custom_cfg(cfg):
     Registers custom expression graph config parameters inside GraphGym.
     Allows specifying experimental variables inside YAML configuration.
     """
+    print("--- Executing set_custom_cfg ---")
     cfg.expression_graph = CN()
     cfg.expression_graph.mode = "graph"            # "graph", "tree", or "tree_derivatives"
     cfg.expression_graph.enrich = False             # True or False
     cfg.expression_graph.active_features = ""       # Comma-separated list or empty for all
+    cfg.train.mode = "custom"                       # Add custom train mode option
+    cfg.train.epoch_warmup = 0                      # Custom warmup epoch config
+    cfg.train.epochs = 100                          # Custom epochs config
+    cfg.params = 0                                  # Global params key to avoid logger AttributeError
 
 
 register_config("expression_graph", set_custom_cfg)
 
 
-def load_custom_expression_graphs():
+def load_custom_expression_graphs(format, name, dataset_dir):
     """
     GraphGym Loader for custom expression graphs.
     Uses Dependency Injection by reading dataset properties dynamically from GraphGym's global config:
@@ -93,18 +153,24 @@ def load_custom_expression_graphs():
         graph_loader=loader,
     )
 
-    # Use pipeline loaders as requested
-    train_loader, test_loader, _ = pipeline.pipe(
+    # Use pipeline loaders to trigger train/test split inside pipeline
+    pipeline.pipe(
         test_size=0.2,
         batch_size=batch_size,
     )
 
-    # GraphGym expects a dict with train, val, and test loaders
-    return {
-        "train": train_loader,
-        "val": test_loader,
-        "test": test_loader
-    }
+    # Convert the datasets in GraphPipeline to a list of PyG Data objects
+    train_data_list = [pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))]
+    test_data_list = [pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))]
+
+    all_data_list = train_data_list + test_data_list
+
+    train_indices = list(range(len(train_data_list)))
+    val_indices = list(range(len(train_data_list), len(all_data_list)))
+    test_indices = list(range(len(train_data_list), len(all_data_list)))
+
+    # Return the ExpressionGraphDataset to GraphGym
+    return ExpressionGraphDataset(all_data_list, train_indices, val_indices, test_indices)
 
 
 # Register the dependency-injected loader in the GraphGym global registry
