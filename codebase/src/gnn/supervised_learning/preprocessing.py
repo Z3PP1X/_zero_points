@@ -194,15 +194,15 @@ class ProblemRunDataset(Dataset):
 
         data.y = torch.tensor([row["faster_algorithm"]], dtype=torch.long)
         data.global_features = torch.tensor(
-            [row.get("startwert", row.get("x0", 0.0)), row.get("zielwert", row.get("y_target", 0.0))], dtype=torch.float
+            [row.get("x0", 0.0), row.get("y_target", 0.0)], dtype=torch.float
         )
         data.pid = pid
 
         # Initialize virtual nodes once from the dataset (without any Taylor series fallback)
         if hasattr(data, "node_ids") and data.node_ids is not None:
             try:
-                cx_val = row.get("startwert", row.get("x0", 0.0))
-                yt_val = row.get("zielwert", row.get("y_target", 0.0))
+                cx_val = row.get("x0", 0.0)
+                yt_val = row.get("y_target", 0.0)
                 fx_val = row.get("fx", 0.0)  # Default to 0.0 to completely avoid Taylor series fallback
                 
                 if self.mode == "graph":

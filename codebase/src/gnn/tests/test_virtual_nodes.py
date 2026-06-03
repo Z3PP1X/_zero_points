@@ -193,8 +193,8 @@ def test_supervised_learning_preprocessor_static_initialization():
     
     df_no_fx = pd.DataFrame([{
         "problem_id": "P-supervised",
-        "startwert": 2.5,
-        "zielwert": 4.0,
+        "x0": 2.5,
+        "y_target": 4.0,
         "faster_algorithm": 1
     }])
     
@@ -211,8 +211,8 @@ def test_supervised_learning_preprocessor_static_initialization():
 
     df_with_fx = pd.DataFrame([{
         "problem_id": "P-supervised",
-        "startwert": 2.5,
-        "zielwert": 4.0,
+        "x0": 2.5,
+        "y_target": 4.0,
         "fx": 10.12,
         "faster_algorithm": 1
     }])
@@ -309,8 +309,8 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     
     df = pd.DataFrame([{
         "problem_id": "P-slice",
-        "startwert": 2.5,
-        "zielwert": 9.9,
+        "x0": 2.5,
+        "y_target": 9.9,
         "faster_algorithm": 0
     }])
     

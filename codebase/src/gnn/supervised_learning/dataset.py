@@ -50,6 +50,8 @@ class DatasetLoader:
             "y_target": "y_target",
             "ytarget": "y_target",
             "zielwert": "y_target",
+            "startwert": "x0",
+            "x0": "x0",
             "newton_abstime": "Newton_absTime",
             "newtonabstime": "Newton_absTime",
             "avg_abs_time_newton": "Newton_absTime",
@@ -75,17 +77,6 @@ class DatasetLoader:
 
         if rename_dict:
             self._data = self._data.rename(columns=rename_dict)
-
-        # Sync aliases so both keys exist for compatibility
-        if "startwert" in self._data.columns and "x0" not in self._data.columns:
-            self._data["x0"] = self._data["startwert"]
-        elif "x0" in self._data.columns and "startwert" not in self._data.columns:
-            self._data["startwert"] = self._data["x0"]
-
-        if "zielwert" in self._data.columns and "y_target" not in self._data.columns:
-            self._data["y_target"] = self._data["zielwert"]
-        elif "y_target" in self._data.columns and "zielwert" not in self._data.columns:
-            self._data["zielwert"] = self._data["y_target"]
 
     def _load_dataset_from_csv(self):
         filepath = self.working_directory / f"{self.dataset_name}.csv"

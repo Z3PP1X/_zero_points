@@ -101,17 +101,12 @@ class UnifiedDataLoader:
 
     def enrich_x0_if_missing(self, df: pd.DataFrame) -> None:
         """
-        Scans the DataFrame for the 'x0' or 'startwert' key. If missing or null,
+        Scans the DataFrame for the 'x0' key. If missing or null,
         fetches the fitting value from the graph data for that problem ID.
         """
-        # Determine target column name
         target_col = "x0"
-        if "startwert" in df.columns:
-            target_col = "startwert"
-        elif "x0" in df.columns:
-            target_col = "x0"
-        else:
-            df[target_col] = None
+        if "x0" not in df.columns:
+            df["x0"] = None
 
         # Check if column has any missing values
         if df[target_col].isnull().any():
@@ -140,12 +135,6 @@ class UnifiedDataLoader:
                                     df.at[idx, target_col] = float(x0_val)
                     except Exception as e:
                         logger.warning(f"Failed to enrich x0 for problem ID '{pid_str}': {e}")
-
-        # Sync startwert and x0 to make sure both keys exist
-        if "startwert" in df.columns and "x0" not in df.columns:
-            df["x0"] = df["startwert"]
-        elif "x0" in df.columns and "startwert" not in df.columns:
-            df["startwert"] = df["x0"]
 
     @property
     def data(self) -> pd.DataFrame:
