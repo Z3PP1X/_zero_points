@@ -16,6 +16,19 @@ Dieses Repository enthält eine vollständige Pipeline für maschinelles Lernen 
   * `main.py`: Einstiegspunkt für Phase 1 (Optuna Hyperparameter-Tuning).
   * `train_best.py`: Einstiegspunkt für Phase 2 (Bestes PPO-Modell trainieren).
   * `shared/utils/graph_utils.py`: Kernmodul zur Graphml-Konvertierung, Feature-Extraktion und Verknüpfung von Ableitungen.
+  * `shared/utils/unified_loader.py`: Der neue vereinheitlichte `UnifiedDataLoader` (Singleton/Multiton-Muster) zur synchronen Verwaltung von Tabellen- und Graphen-Daten.
+
+---
+
+## 🗃️ Datasets & Unified Loader
+
+Um Redundanzen und Pfadprobleme zu vermeiden, wurden alle Datenquellen vereinheitlicht:
+* **Pfad**: Beide Loader suchen standardmäßig im Ordner `/datasets/` an der Repository-Wurzel:
+  * Tabulardaten (CSV): `/datasets/<run_key>/<dataset_name>.csv`
+  * Graphdaten (JSON): `/datasets/<run_key>/<dataset_name>.json`
+  * Traces (JSONL): `/datasets/<run_key>/traces/`
+  *(Falls `/datasets/` nicht existiert, fallen die Loader abwärtskompatibel auf die alten Verzeichnisse `_datasets/` bzw. `graphs/` zurück).*
+* **UnifiedDataLoader**: Verwaltet Tabellen- und Graph-Daten unter einer konsistenten API. Er lädt CSV-Dateien und verknüpft sie mit den entsprechenden GraphML-Graphen. Fehlende Startwerte (`x0`) werden automatisch aus den Graph-Rohdaten angereichert.
 
 ---
 
@@ -44,19 +57,23 @@ cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/supervised_learni
 # 1. Konfiguration prüfen (Dry-Run):
 python main.py --dry-run
 
-# 2. Standard GNN-Lauf im Graph-Modus (mit virtuellen Knoten) und 8 Basis-Features:
+# 2. Spezifisches Dataset laden (Dry-Run oder Training):
+python main.py --dataset run_20260408_160456/dataset_4 --dry-run
+
+# 3. Standard GNN-Lauf im Graph-Modus (mit virtuellen Knoten) und 8 Basis-Features:
 python main.py --mode graph
 
-# 3. GNN-Lauf im Tree-Modus (Globale Features) mit 19 angereicherten (Enriched) Features:
+# 4. GNN-Lauf im Tree-Modus (Globale Features) mit 19 angereicherten (Enriched) Features:
 python main.py --mode tree --enrich
 
-# 4. GNN-Lauf mit dynamischer Feature-Filterung (Slicing):
+# 5. GNN-Lauf mit dynamischer Feature-Filterung (Slicing):
 python main.py --mode graph --enrich --active-features "node_type,depth,value,virtual_current_x_val"
 ```
 
 #### 📋 CLI-Optionen
 | Parameter | Standard | Optionen | Beschreibung |
 | :--- | :--- | :--- | :--- |
+| `--dataset` | `run_20260408_160456/dataset_4` | String | Pfad zum Dataset (z. B. `run_key/dataset_name`). |
 | `--dry-run` | *aus* | Flag | Lädt den Datensatz kurz, um die Struktur zu validieren (ohne volles Training). |
 | `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` | Bestimmt das Graphen- und Features-Layout:<br>• `graph`: f, f' und f'' verbunden über den globalen Knoten + alle 3 virtuellen Knoten für dynamische Solver-Werte.<br>• `tree`: Nur der Funktionstree f (keine Ableitungen, keine Ableitungsknoten geladen) ohne virtuelle Knoten; dynamische Werte werden direkt als Slots auf dem globalen Knoten platziert.<br>• `tree_derivatives`: f, f' und f'' verbunden über den globalen Knoten (ohne virtuelle Knoten); dynamische Werte werden direkt auf dem globalen Knoten platziert. |
 | `--enrich` | *aus* | Flag | Schaltet zwischen **8 Basis-Features** (ohne Flag) und **19 angereicherten topologischen/spektralen Features** (mit Flag) um. |

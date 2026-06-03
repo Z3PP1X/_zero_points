@@ -139,6 +139,7 @@ python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --continue-
 
 * `main.py`: Haupteinstiegspunkt für Phase 1 (Optuna-Tuning).
 * `train_best.py`: Haupteinstiegspunkt für Phase 2 (Bestes Modell trainieren).
+* `shared/utils/unified_loader.py`: Der vereinheitlichte `UnifiedDataLoader` (Singleton/Multiton-Muster) zur synchronen Verwaltung von Tabellen- und Graphen-Daten.
 * `feature_layout.py`: Definition des Suchraums, der Dimensionen und Aktivierungsfunktionen.
 * `ppo_trial_config.py`: Datenstrukturen (`dataclasses`) für Modell- und Reward-Parameter.
 * `ppo_optuna_search.py`: Logik zur Erzeugung von Parametern durch den Optuna-Sampler.
@@ -146,3 +147,4 @@ python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --continue-
 * `ppo_optuna_workflow.py`: Verbindungsklasse zur Initialisierung des SB3-PPO-Modells.
 * `mathematica_vec_env.py` / `mathematica_env.py`: Gymnasium-Umgebungen zur Kommunikation mit Mathematica.
 * `reward.py`: Nachberechnung der asymmetrischen Rewards und Schrittkosten.
+
