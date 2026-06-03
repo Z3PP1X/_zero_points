@@ -1,0 +1,5 @@
+configs/
+mlruns/
+mlflow.db
+*.csv
+*.png

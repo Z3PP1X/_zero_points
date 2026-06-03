@@ -1,0 +1,21 @@
+# grid.yaml
+gnn.layer_type:
+  - gatv2conv
+  - gcnconv
+  - sageconv
+  - ginconv
+
+gnn.layers_mp:
+  - 2
+  - 3
+  - 4
+
+gnn.dim_inner:
+  - 64
+  - 128
+  - 256
+
+gnn.dropout:
+  - 0.1
+  - 0.2
+  - 0.3

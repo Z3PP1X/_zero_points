@@ -8,7 +8,7 @@ out_dir: results
 # Demontrates Dependency Injection (DI) by passing properties that are read in loader_graphgym.py
 dataset:
   format: custom_expression_graphs   # Registered loader name inside loader_graphgym.py
-  name: run_20260408_160456/dataset_4 # DI: Inject different dataset path prefixes dynamically here!
+  name: run_20260603_123013/parallel_benchmark_results.csv 
   task: graph
   task_type: classification
   transductive: False
@@ -16,11 +16,11 @@ dataset:
 # --- Training Loop Section ---
 train:
   mode: custom
-  batch_size: 256                    # DI: Inject batch size
+  batch_size: 256
   eval_period: 10
   ckpt_period: 20
   epoch_warmup: 5
-  epochs: 100
+  epochs: 25
 
 # --- Model Structure ---
 model:
@@ -37,7 +37,7 @@ gnn:
   dim_inner: 128                    # Injected hidden channel dimension
   layer_type: gatv2conv             # Dynamic backbones: gatv2conv, gcnconv, sageconv, ginconv
   stage_type: stack
-  act: leaky_relu                   # Dynamic activation: relu, leaky_relu, gelu, elu, tanh
+  act: gelu                   # Dynamic activation: relu, leaky_relu, gelu, elu, tanh
   dropout: 0.2
 
 # --- Optimizations ---
