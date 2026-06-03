@@ -3,3 +3,5 @@ mlruns/
 mlflow.db
 *.csv
 *.png
+results/
+
