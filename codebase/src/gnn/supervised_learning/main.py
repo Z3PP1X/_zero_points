@@ -51,8 +51,6 @@ f1_metric = MulticlassF1Score(num_classes=2).to(DEVICE)
 precision_metric = MulticlassPrecision(num_classes=2).to(DEVICE)
 recall_metric = MulticlassRecall(num_classes=2).to(DEVICE)
 
-mlflow.set_tracking_uri("http://localhost:5000")
-
 
 def create_experiment_name(dataset_name: str, mode: str = "graph"):
     return dataset_name + "_" + str(SEED) + "_" + str(EPOCHS) + "_" + mode
@@ -203,7 +201,7 @@ def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_fe
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
-    print(f"Connecting to MLflow server at {mlflow.get_tracking_uri()} ...")
+    print(f"Initializing MLflow tracking at {mlflow.get_tracking_uri()} ...")
     mlflow.set_experiment(dataset_path)
 
     print("Starting MLflow run and training loop...")
