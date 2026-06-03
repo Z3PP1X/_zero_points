@@ -82,6 +82,14 @@ class GraphDataLoader:
 
         for cand in candidates:
             if cand.exists():
+                if cand.is_dir():
+                    # Check if there is a unified JSON file inside the directory matching its name or 'graphs.json'
+                    file_match = cand / f"{cand.name}.json"
+                    if file_match.exists() and file_match.is_file():
+                        return file_match
+                    graphs_file = cand / "graphs.json"
+                    if graphs_file.exists() and graphs_file.is_file():
+                        return graphs_file
                 return cand
 
         # Default fallback target if none exists yet
