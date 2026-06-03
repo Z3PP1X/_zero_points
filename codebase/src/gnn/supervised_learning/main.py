@@ -198,12 +198,15 @@ def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_fe
         num_workers=3,
     )
 
+    print("Initializing GNN model...")
     model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
+    print(f"Connecting to MLflow server at {mlflow.get_tracking_uri()} ...")
     mlflow.set_experiment(dataset_path)
 
+    print("Starting MLflow run and training loop...")
     with mlflow.start_run(run_name=create_experiment_name(dataset_path, mode)):
         mlflow.log_params(
             {
@@ -226,7 +229,10 @@ def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_fe
         best_val_loss = float("inf")
 
         for epoch in range(EPOCHS):
+            print(f"\n--- Epoch {epoch + 1}/{EPOCHS} ---")
+            print("  Training...")
             train_loss = train(model, train_loader, optimizer, criterion)
+            print("  Evaluating...")
             val_loss, val_acc, f1_val, prec_val, rec_val, y_true, y_pred, y_prob = evaluate(
                 model, test_loader, criterion
             )
