@@ -296,8 +296,8 @@ def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_fe
 def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
     if "faster_algorithm" not in df.columns:
         boundaries = [
-            df["avg_abs_time_newton"] < df["avg_abs_time_gmgf"],
-            df["avg_abs_time_newton"] > df["avg_abs_time_gmgf"],
+            df["Newton_absTime"] < df["GMGF_absTime"],
+            df["Newton_absTime"] > df["GMGF_absTime"],
         ]
         values = [0, 1]
         df["faster_algorithm"] = np.select(boundaries, values)

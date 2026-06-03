@@ -27,8 +27,8 @@ class FeatureEngineering:
     def _tag_faster_algorithm(self):
         """Set binary labels for the faster algorithm: 0: Newton, 1: gMGF"""
         boundaries = [
-            self._loader.data["avg_abs_time_newton"] < self._loader.data["avg_abs_time_gmgf"],
-            self._loader.data["avg_abs_time_newton"] > self._loader.data["avg_abs_time_gmgf"],
+            self._loader.data["Newton_absTime"] < self._loader.data["GMGF_absTime"],
+            self._loader.data["Newton_absTime"] > self._loader.data["GMGF_absTime"],
         ]
         values = [0, 1]
         self._loader.add_column("faster_algorithm", np.select(boundaries, values))
@@ -37,7 +37,7 @@ class FeatureEngineering:
         """Conserve relationships between absolute times"""
         self._loader.add_column(
             "conserved_step_rel",
-            self._loader.data["schritte_newton"] / self._loader.data["schritte_gmgf"],
+            self._loader.data["Newton_iterSteps"] / self._loader.data["GMGF_iterSteps"],
         )
 
 

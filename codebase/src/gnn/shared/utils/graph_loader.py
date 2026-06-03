@@ -72,6 +72,7 @@ class GraphDataLoader:
             repo_root / "datasets" / name,
             repo_root / "datasets" / run_key,
             repo_root / "datasets" / run_key / "graphs",
+            repo_root / "datasets" / "graphs",
             repo_root / "graphs" / f"{name}.json",
             repo_root / "graphs" / f"{run_key}.json",
             repo_root / "graphs" / name,
@@ -90,6 +91,9 @@ class GraphDataLoader:
                     graphs_file = cand / "graphs.json"
                     if graphs_file.exists() and graphs_file.is_file():
                         return graphs_file
+                    # Skip directories with no json files
+                    if not any(cand.glob("**/*.json")):
+                        continue
                 return cand
 
         # Default fallback target if none exists yet

@@ -39,11 +39,62 @@ class DatasetLoader:
             return primary
         return base / "_datasets" / self.run_key
 
+    def _normalize_headers(self):
+        if self._data is None:
+            return
+
+        # Define clean normalization mappings (lowercase -> standard key)
+        mapping = {
+            "problem_id": "problem_id",
+            "problemid": "problem_id",
+            "y_target": "y_target",
+            "ytarget": "y_target",
+            "zielwert": "y_target",
+            "newton_abstime": "Newton_absTime",
+            "newtonabstime": "Newton_absTime",
+            "avg_abs_time_newton": "Newton_absTime",
+            "gmgf_abstime": "GMGF_absTime",
+            "gmgfabstime": "GMGF_absTime",
+            "avg_abs_time_gmgf": "GMGF_absTime",
+            "newton_itersteps": "Newton_iterSteps",
+            "newtonitersteps": "Newton_iterSteps",
+            "schritte_newton": "Newton_iterSteps",
+            "gmgf_itersteps": "GMGF_iterSteps",
+            "gmgfitersteps": "GMGF_iterSteps",
+            "schritte_gmgf": "GMGF_iterSteps",
+            "point_index": "point_index",
+            "pointindex": "point_index",
+        }
+
+        rename_dict = {}
+        for col in self._data.columns:
+            # Clean column name: strip spaces, quotes, lowercase
+            clean_col = col.strip().replace('"', '').replace("'", '').lower()
+            if clean_col in mapping:
+                rename_dict[col] = mapping[clean_col]
+
+        if rename_dict:
+            self._data = self._data.rename(columns=rename_dict)
+
+        # Sync aliases so both keys exist for compatibility
+        if "startwert" in self._data.columns and "x0" not in self._data.columns:
+            self._data["x0"] = self._data["startwert"]
+        elif "x0" in self._data.columns and "startwert" not in self._data.columns:
+            self._data["startwert"] = self._data["x0"]
+
+        if "zielwert" in self._data.columns and "y_target" not in self._data.columns:
+            self._data["y_target"] = self._data["zielwert"]
+        elif "y_target" in self._data.columns and "zielwert" not in self._data.columns:
+            self._data["zielwert"] = self._data["y_target"]
+
     def _load_dataset_from_csv(self):
         filepath = self.working_directory / f"{self.dataset_name}.csv"
         self._data = pd.read_csv(filepath, sep=",")
-        self._data["problem_id"] = self._data["problem_id"].astype(str)
-        self._data["point_index"] = self._data["point_index"].astype(int)
+        self._normalize_headers()
+        if "problem_id" in self._data.columns:
+            self._data["problem_id"] = self._data["problem_id"].astype(str)
+        if "point_index" in self._data.columns:
+            self._data["point_index"] = self._data["point_index"].astype(int)
 
     def _import_traces(self):
         traces_dir = self.working_directory / "traces"
