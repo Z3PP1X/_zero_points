@@ -179,12 +179,11 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
     save_dir = repo_root / "_models"
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / "best_model.pth"
-    from gnn.shared.utils.graph_loader import GraphDataLoader
-    loader = GraphDataLoader(
-        name=dataset_path,
+    from gnn.shared.utils.unified_loader import UnifiedDataLoader
+    unified_loader = UnifiedDataLoader.get_instance(
+        dataset_name=dataset_path,
         mode=mode,
         enrich=enrich,
-        heterogeneous=False,
     )
 
     pipeline = GraphPipeline(
@@ -193,7 +192,7 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
         mode=mode,
         enrich=enrich,
         active_features=active_features,
-        graph_loader=loader,
+        unified_loader=unified_loader,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(

@@ -113,13 +113,13 @@ def main() -> None:
         active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
         print(f"Aktivierte Features ({len(active_features)}): {active_features}")
     
-    from gnn.shared.utils.graph_loader import GraphDataLoader
-    loader = GraphDataLoader(
-        name=args.experiment,
+    from gnn.shared.utils.unified_loader import UnifiedDataLoader
+    unified_loader = UnifiedDataLoader.get_instance(
+        dataset_name=args.experiment,
         mode=args.mode,
         enrich=True,
-        heterogeneous=False,
     )
+    loader = unified_loader.graph_loader
     
     preprocessor = Preprocessor(loader=loader, mode=args.mode, active_features=active_features)
     print(

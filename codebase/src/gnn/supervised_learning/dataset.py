@@ -30,6 +30,9 @@ class DatasetLoader:
         # Parents resolved:
         # [0] supervised_learning, [1] gnn, [2] src, [3] codebase, [4] _zero_points (repo root)
         base = Path(__file__).resolve().parents[4]
+        primary = base / "datasets" / self.run_key
+        if primary.exists():
+            return primary
         return base / "_datasets" / self.run_key
 
     def _load_dataset_from_csv(self):

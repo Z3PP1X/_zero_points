@@ -67,6 +67,11 @@ class GraphDataLoader:
 
         # Candidates search order
         candidates = [
+            repo_root / "datasets" / f"{name}.json",
+            repo_root / "datasets" / f"{run_key}.json",
+            repo_root / "datasets" / name,
+            repo_root / "datasets" / run_key,
+            repo_root / "datasets" / run_key / "graphs",
             repo_root / "graphs" / f"{name}.json",
             repo_root / "graphs" / f"{run_key}.json",
             repo_root / "graphs" / name,
@@ -80,7 +85,7 @@ class GraphDataLoader:
                 return cand
 
         # Default fallback target if none exists yet
-        return repo_root / "graphs" / f"{name}.json"
+        return repo_root / "datasets" / f"{name}.json"
 
     def _discover_graphs(self):
         if not self.source_path.exists():

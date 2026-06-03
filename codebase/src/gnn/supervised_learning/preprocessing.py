@@ -16,6 +16,7 @@ if str(src_root) not in sys.path:
 from gnn.supervised_learning.dataset import DatasetLoader
 from gnn.shared.utils.graph_utils import GraphConversionPipeline
 from gnn.shared.utils.graph_loader import GraphDataLoader
+from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
 
 class FeatureEngineering:
@@ -50,29 +51,37 @@ class GraphPipeline:
         enrich: bool = False,
         active_features: list[str] | None = None,
         graph_loader: GraphDataLoader | None = None,
+        unified_loader: UnifiedDataLoader | None = None,
     ):
         self.seed = seed
-        self.loader = DatasetLoader(dataset_name)
         self.mode = mode
         self.enrich = enrich
         self.active_features = active_features
+
+        # Use unified_loader or get/create singleton instance
+        if unified_loader is not None:
+            self.unified_loader = unified_loader
+        else:
+            self.unified_loader = UnifiedDataLoader.get_instance(
+                dataset_name=dataset_name,
+                mode=mode,
+                enrich=enrich,
+            )
+
+        # Backward compatibility aliases
+        self.loader = self.unified_loader.dataset_loader
+        self.graph_loader = self.unified_loader.graph_loader
+        
         fe = FeatureEngineering(self.loader)
         fe._tag_faster_algorithm()
         
-        # Dependency Injection / Fallback
+        # Override graph_loader if explicitly passed (for legacy call sites/tests)
         if graph_loader is not None:
             self.graph_loader = graph_loader
+            self.graphs = self.graph_loader.load_all()
         else:
-            self.graph_loader = GraphDataLoader(
-                name=dataset_name,
-                mode=mode,
-                enrich=enrich,
-                heterogeneous=False,
-                base_dir=experiments_dir if experiments_dir else None
-            )
+            self.graphs = self.unified_loader.load_all()
             
-        self.graphs = self.graph_loader.load_all()
-        # Backward compatibility alias
         self.graph_pipeline = self
         
         self.train_loader = None
