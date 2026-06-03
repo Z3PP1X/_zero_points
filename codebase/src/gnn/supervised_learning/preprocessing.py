@@ -93,7 +93,7 @@ class GraphPipeline:
         self.test_pids = None
 
     def pipe(
-        self, test_size=0.2, batch_size=32, stratify: bool = True, num_workers: int = 0
+        self, test_size=0.2, batch_size=32, stratify: bool = False, num_workers: int = 0
     ):
         df = self.loader.data
         graph_ids = set(self.graphs.keys())
@@ -106,11 +106,18 @@ class GraphPipeline:
             for p in unique_problem_ids
         ]
 
+        # Ensure stratification is only applied if every class has at least 2 problem instances
+        from collections import Counter
+        class_counts = Counter(unique_problem_labels)
+        can_stratify = stratify and all(count >= 2 for count in class_counts.values())
+        if stratify and not can_stratify:
+            print("[Warning] Cannot stratify because one of the classes has fewer than 2 members in unique_problem_labels. Disabling stratification.")
+
         train_pids, test_pids = train_test_split(
             unique_problem_ids,
             test_size=test_size,
             random_state=self.seed,
-            stratify=unique_problem_labels if stratify else None,
+            stratify=unique_problem_labels if can_stratify else None,
         )
 
         train_pids_set = set(train_pids)
