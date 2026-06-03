@@ -194,7 +194,7 @@ class ProblemRunDataset(Dataset):
 
         data.y = torch.tensor([row["faster_algorithm"]], dtype=torch.long)
         data.global_features = torch.tensor(
-            [row["startwert"], row["zielwert"]], dtype=torch.float
+            [row.get("startwert", row.get("x0", 0.0)), row.get("zielwert", row.get("y_target", 0.0))], dtype=torch.float
         )
         data.pid = pid
 

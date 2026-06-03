@@ -141,6 +141,12 @@ class UnifiedDataLoader:
                     except Exception as e:
                         logger.warning(f"Failed to enrich x0 for problem ID '{pid_str}': {e}")
 
+        # Sync startwert and x0 to make sure both keys exist
+        if "startwert" in df.columns and "x0" not in df.columns:
+            df["x0"] = df["startwert"]
+        elif "x0" in df.columns and "startwert" not in df.columns:
+            df["startwert"] = df["x0"]
+
     @property
     def data(self) -> pd.DataFrame:
         """Returns the tabular pandas DataFrame from DatasetLoader."""
