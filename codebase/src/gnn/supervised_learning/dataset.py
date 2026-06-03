@@ -15,18 +15,22 @@ if str(src_root) not in sys.path:
 
 
 class DatasetLoader:
-    def __init__(self, dataset_name: str, run_key: str = None, addTraces=False):
+    def __init__(self, dataset_name: str, run_key: str = None, addTraces=False, base_dir=None):
         # Auto-extract run_key if passed in dataset_name like "run_20260408_160456/dataset_4"
         if "/" in dataset_name and run_key is None:
             run_key, dataset_name = dataset_name.split("/", 1)
         
         self.dataset_name = dataset_name
         self.run_key = run_key
+        self.base_dir = base_dir
         self.working_directory = self._set_working_directory()
         self._data = None
         self.addTraces = addTraces
 
     def _set_working_directory(self):
+        if self.base_dir is not None:
+            p = Path(self.base_dir)
+            return p if p.is_dir() else p.parent
         # Parents resolved:
         # [0] supervised_learning, [1] gnn, [2] src, [3] codebase, [4] _zero_points (repo root)
         base = Path(__file__).resolve().parents[4]
@@ -140,38 +144,6 @@ class DatasetLoader:
         self.data[name] = values
 
 
-class DatasetDescriptor:
-    def __init__(self, dataset_name, dataset: DatasetLoader = None):
-        self.dataset_name = dataset_name
-        self.dataset = dataset
-        self.pandas_dataframe = None
-
-    def _load_dataset(self):
-        """Stellt sicher, dass das Dataframe geladen ist."""
-        if self.pandas_dataframe is None:
-            if self.dataset is None:
-                self.dataset = DatasetLoader(self.dataset_name)
-            self.pandas_dataframe = self.dataset.data
-
-    def print_distribution(self):
-        self._load_dataset()
-
-        counts = self.pandas_dataframe["faster_algorithm"].value_counts()
-        total = len(self.pandas_dataframe)
-
-        newton_count = counts.get(0, 0)
-        gmgf_count = counts.get(1, 0)
-
-        perc_newton = (newton_count / total) * 100
-        perc_gmgf = (gmgf_count / total) * 100
-
-        print(f"--- Verteilung für Dataset: {self.dataset_name} ---")
-        print(f"Gesamtanzahl Samples: {total}")
-        print(f"Klasse 0 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
-        print(f"Klasse 1 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
-        print("-" * (30 + len(self.dataset_name)))
-
-
 if __name__ == "__main__":
     # Test loading
     try:
@@ -181,3 +153,4 @@ if __name__ == "__main__":
         print("DatasetLoader initialized successfully!")
     except Exception as e:
         print(f"DatasetLoader test failed (expected if datasets not present in this sandbox context): {e}")
+

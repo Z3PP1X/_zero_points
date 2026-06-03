@@ -3,7 +3,12 @@ import pytest
 from pathlib import Path
 from torch_geometric.data import Data
 
-from graph_loader import GraphDataLoader
+from unified_loader import UnifiedDataLoader
+
+
+@pytest.fixture(autouse=True)
+def clear_loader_cache():
+    UnifiedDataLoader.clear_instances()
 
 
 @pytest.fixture
@@ -33,7 +38,7 @@ def test_load_from_single_json_dict(tmp_path, sample_graph_data):
     file_path.write_text(json.dumps(raw_dict), encoding="utf-8")
     
     # Use mode="tree" to avoid injecting virtual nodes, keeping node count to exactly 3
-    loader = GraphDataLoader(name="test", base_dir=file_path, enrich=False, mode="tree")
+    loader = UnifiedDataLoader.get_instance(dataset_name="test", base_dir=file_path, enrich=False, mode="tree").graph_loader
     
     assert loader.list_graph_ids() == {"graph_A", "graph_B"}
     assert loader.has_graph("graph_A")
@@ -54,7 +59,7 @@ def test_load_from_single_json_list(tmp_path, sample_graph_data):
     file_path = tmp_path / "dataset_list.json"
     file_path.write_text(json.dumps(raw_list), encoding="utf-8")
     
-    loader = GraphDataLoader(name="test", base_dir=file_path, enrich=False, mode="tree")
+    loader = UnifiedDataLoader.get_instance(dataset_name="test", base_dir=file_path, enrich=False, mode="tree").graph_loader
     
     assert loader.list_graph_ids() == {"P-test-1", "P-test-2"}
     assert loader.has_graph("P-test-1")
@@ -70,7 +75,7 @@ def test_load_from_single_graph_direct(tmp_path, sample_graph_data):
     file_path = tmp_path / "single_graph.json"
     file_path.write_text(json.dumps(sample_graph_data), encoding="utf-8")
     
-    loader = GraphDataLoader(name="my_graph", base_dir=file_path, enrich=False, mode="tree")
+    loader = UnifiedDataLoader.get_instance(dataset_name="my_graph", base_dir=file_path, enrich=False, mode="tree").graph_loader
     
     assert loader.list_graph_ids() == {"P-test-1"}
     assert loader.has_graph("P-test-1")
@@ -93,7 +98,7 @@ def test_load_from_directory_structure(tmp_path, sample_graph_data):
     (dir_path / "P2_meta.json").write_text(json.dumps(meta_data), encoding="utf-8")
     (dir_path / "P2.json").write_text(json.dumps(sample_graph_data), encoding="utf-8")
     
-    loader = GraphDataLoader(name="test", base_dir=dir_path, enrich=False, mode="tree")
+    loader = UnifiedDataLoader.get_instance(dataset_name="test", base_dir=dir_path, enrich=False, mode="tree").graph_loader
     
     # Should resolve P1 and P2 (using P2_meta.json)
     assert loader.list_graph_ids() == {"P1", "P2"}
@@ -107,7 +112,7 @@ def test_caching_and_cloning(tmp_path, sample_graph_data):
     file_path = tmp_path / "single_graph.json"
     file_path.write_text(json.dumps(sample_graph_data), encoding="utf-8")
     
-    loader = GraphDataLoader(name="my_graph", base_dir=file_path, enrich=False, mode="tree")
+    loader = UnifiedDataLoader.get_instance(dataset_name="my_graph", base_dir=file_path, enrich=False, mode="tree").graph_loader
     
     graph_1 = loader.get_graph("P-test-1")
     graph_2 = loader.get_graph("P-test-1")

@@ -17,7 +17,6 @@ if str(src_root) not in sys.path:
 
 from gnn.shared.models.classifiers import TestGraphNetwork
 from gnn.supervised_learning.preprocessing import GraphPipeline
-from gnn.supervised_learning.dataset import DatasetDescriptor
 
 from torchmetrics.classification import (
     MulticlassF1Score,
@@ -26,6 +25,7 @@ from torchmetrics.classification import (
 )
 
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -40,8 +40,6 @@ DEVICE = (
     else "cpu"
 )
 
-DATASET_NAME = "run_20260408_160456/dataset_4"
-EXPERIMENTS_DIR = "../../_datasets/run_20260408_160456/graphs"
 SEED = 42001
 TEST_SIZE = 0.2
 EPOCHS = 100
@@ -56,8 +54,8 @@ recall_metric = MulticlassRecall(num_classes=2).to(DEVICE)
 mlflow.set_tracking_uri("http://localhost:5000")
 
 
-def create_experiment_name(mode: str = "graph"):
-    return DATASET_NAME + "_" + str(SEED) + "_" + str(EPOCHS) + "_" + mode
+def create_experiment_name(dataset_name: str, mode: str = "graph"):
+    return dataset_name + "_" + str(SEED) + "_" + str(EPOCHS) + "_" + mode
 
 
 def train(model, loader, optimizer, criterion):
@@ -171,11 +169,10 @@ def evaluate(model, loader, criterion):
     return avg_loss, accuracy, f1_computed, precision_computed, recall_computed, all_labels, all_preds, all_probs
 
 
-def main(mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
+def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
     # Make paths absolute relative to repo root to avoid cwd dependency issues
     repo_root = Path(__file__).resolve().parents[4]
-    dataset_path = DATASET_NAME
-    experiments_dir = repo_root / "_datasets" / "run_20260408_160456" / "graphs"
+    dataset_path = dataset_name
     save_dir = repo_root / "_models"
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / "best_model.pth"
@@ -205,9 +202,9 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
-    mlflow.set_experiment(DATASET_NAME)
+    mlflow.set_experiment(dataset_path)
 
-    with mlflow.start_run(run_name=create_experiment_name(mode)):
+    with mlflow.start_run(run_name=create_experiment_name(dataset_path, mode)):
         mlflow.log_params(
             {
                 "seed": SEED,
@@ -296,9 +293,37 @@ def main(mode: str = "graph", enrich: bool = False, active_features: list[str] |
 
     print("Training complete.")
 
+def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
+    if "faster_algorithm" not in df.columns:
+        boundaries = [
+            df["avg_abs_time_newton"] < df["avg_abs_time_gmgf"],
+            df["avg_abs_time_newton"] > df["avg_abs_time_gmgf"],
+        ]
+        values = [0, 1]
+        df["faster_algorithm"] = np.select(boundaries, values)
+
+    counts = df["faster_algorithm"].value_counts()
+    total = len(df)
+    newton_count = counts.get(0, 0)
+    gmgf_count = counts.get(1, 0)
+    perc_newton = (newton_count / total) * 100 if total > 0 else 0.0
+    perc_gmgf = (gmgf_count / total) * 100 if total > 0 else 0.0
+
+    print(f"--- Verteilung für Dataset: {dataset_name} ---")
+    print(f"Gesamtanzahl Samples: {total}")
+    print(f"Klasse 0 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
+    print(f"Klasse 1 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
+    print("-" * (30 + len(dataset_name)))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start GNN Supervised Learning experiment")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="run_20260408_160456/dataset_4",
+        help="Dataset name, optionally including run key (e.g. run_key/dataset_name)"
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -326,13 +351,17 @@ if __name__ == "__main__":
 
     # Resolve paths
     repo_root = Path(__file__).resolve().parents[4]
-    experiments_dir = repo_root / "_datasets" / "run_20260408_160456" / "graphs"
 
-    dataset_des = DatasetDescriptor(DATASET_NAME)
+    from gnn.shared.utils.unified_loader import UnifiedDataLoader
     try:
-        dataset_des._load_dataset()
+        loader = UnifiedDataLoader.get_instance(
+            dataset_name=args.dataset,
+            mode=args.mode,
+            enrich=args.enrich
+        )
         print("Dataset loaded successfully!")
-        print(dataset_des.pandas_dataframe.tail())
+        print(loader.data.tail())
+        print_dataset_distribution(args.dataset, loader.data)
     except Exception as e:
         print(f"Note: Dataset files not found in local sandbox, proceeding with verification of imports/arguments. Error: {e}")
 
@@ -342,7 +371,12 @@ if __name__ == "__main__":
             if args.active_features is not None:
                 active_feats = [f.strip() for f in args.active_features.split(",") if f.strip()]
                 print(f"Aktivierte Features: {active_feats}")
-            main(mode=args.mode, enrich=args.enrich, active_features=active_feats)
+            main(
+                dataset_name=args.dataset,
+                mode=args.mode,
+                enrich=args.enrich,
+                active_features=active_feats
+            )
         except Exception as e:
             print(f"Failed to start training run (expected if datasets/connections not available in sandbox): {e}")
     else:
