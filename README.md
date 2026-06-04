@@ -85,6 +85,12 @@ python main.py --mode graph --enrich --active-features "node_type,depth,value,vi
 GraphGym ist ein Framework von PyTorch Geometric zur standardisierten Modell-Evaluierung über YAML-Dateien.
 
 #### 🏃 Ausführen mit GraphGym
+
+python configs_gen.py
+for conf in configs/*.yaml; do
+  python main_graphgym.py --cfg "$conf"
+done
+
 ```bash
 cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/supervised_learning
 python main_graphgym.py --cfg config_supervised.yaml

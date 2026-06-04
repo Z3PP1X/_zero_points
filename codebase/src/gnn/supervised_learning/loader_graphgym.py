@@ -80,6 +80,8 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.mode = "graph"            # "graph", "tree", or "tree_derivatives"
     cfg.expression_graph.enrich = False             # True or False
     cfg.expression_graph.active_features = ""       # Comma-separated list or empty for all
+    cfg.expression_graph.synthetic = False          # True or False
+    cfg.expression_graph.synthetic_dataset = ""     # Synthetic dataset name
     cfg.train.mode = "custom"                       # Add custom train mode option
     cfg.train.epoch_warmup = 0                      # Custom warmup epoch config
     cfg.train.epochs = 100                          # Custom epochs config
@@ -99,6 +101,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     - cfg.expression_graph.mode: injects GNN mode ("graph", "tree", or "tree_derivatives")
     - cfg.expression_graph.enrich: injects GNN feature enrichment (True or False)
     - cfg.expression_graph.active_features: injects list of active features
+    - cfg.expression_graph.synthetic: injects synthetic mode (True or False)
+    - cfg.expression_graph.synthetic_dataset: injects synthetic dataset name
     """
     dataset_name = cfg.dataset.name
     batch_size = cfg.train.batch_size
@@ -108,6 +112,10 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     mode = getattr(cfg.expression_graph, "mode", "graph")
     enrich = getattr(cfg.expression_graph, "enrich", False)
     active_features_str = getattr(cfg.expression_graph, "active_features", "")
+    
+    # Read custom injected synthetic mode properties
+    synthetic = getattr(cfg.expression_graph, "synthetic", False)
+    synthetic_dataset = getattr(cfg.expression_graph, "synthetic_dataset", "")
 
     active_features = None
     if active_features_str:
@@ -129,6 +137,9 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Random Seed:    {seed}")
     print(f"  Injected Mode:           {mode}")
     print(f"  Injected Enrich:         {enrich}")
+    print(f"  Injected Synthetic:      {synthetic}")
+    if synthetic:
+        print(f"  Injected Synth Dataset:  {synthetic_dataset}")
     if active_features is not None:
         print(f"  Injected Features ({len(active_features)}): {active_features}")
     else:
@@ -151,6 +162,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         enrich=enrich,
         active_features=active_features,
         graph_loader=loader,
+        synthetic=synthetic,
+        synthetic_dataset_name=synthetic_dataset,
     )
 
     # Use pipeline loaders to trigger train/test split inside pipeline

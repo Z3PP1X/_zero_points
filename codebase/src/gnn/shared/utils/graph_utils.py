@@ -8,6 +8,20 @@ from torch_geometric.utils import from_networkx
 import numpy as np
 
 
+class ExpressionGraphData(Data):
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key == 'laplacian':
+            return None
+        return super().__cat_dim__(key, value, *args, **kwargs)
+
+
+class ExpressionHeteroData(HeteroData):
+    def __cat_dim__(self, key, value, *args, **kwargs):
+        if key == 'laplacian':
+            return None
+        return super().__cat_dim__(key, value, *args, **kwargs)
+
+
 class TopologicalFeatureExtractor:
     """Extrahiert topologische Features aus einem NetworkX Graphen."""
 
@@ -372,9 +386,11 @@ class ExpressionGraphConverter:
 
         if heterogeneous:
             data = self._to_hetero(G_enriched, raw, topo, enrich)
+            data.__class__ = ExpressionHeteroData
             data["node"].node_ids = node_ids
         else:
             data = self._to_homogeneous(G_enriched, raw, enrich)
+            data.__class__ = ExpressionGraphData
             data.node_ids = node_ids
 
         # Add global graph features

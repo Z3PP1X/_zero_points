@@ -80,19 +80,22 @@ def main():
         config = copy.deepcopy(base_config)
         
         # Build suffix name representing parameter values
-        param_desc = []
+        param_desc_und = [] # Clean representation for yaml filename
+        param_desc_pyg = [] # GraphGym standard naming convention (key=val separated by -)
         for key, val in zip(keys, combination):
             set_nested_value(config, key, val)
             # Use short representations for file naming
             short_key = key.split('.')[-1]
-            param_desc.append(f"{short_key}_{val}")
+            param_desc_und.append(f"{short_key}_{val}")
+            param_desc_pyg.append(f"{short_key}={val}")
         
-        suffix = "_".join(param_desc)
-        config_name = f"config_grid_{suffix}.yaml"
+        suffix_und = "_".join(param_desc_und)
+        suffix_pyg = "-".join(param_desc_pyg)
+        config_name = f"config_grid_{suffix_und}.yaml"
         
         # Override output directory inside config to store results in subfolders
         # GraphGym stores results in: out_dir/config_name/
-        config["out_dir"] = str(Path(base_config.get("out_dir", "results")) / f"grid_{suffix}")
+        config["out_dir"] = str(Path(base_config.get("out_dir", "results")) / f"grid-{suffix_pyg}")
         
         with open(out_dir / config_name, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)

@@ -13,6 +13,9 @@ dataset:
   task_type: classification
   transductive: False
 
+expression_graph:
+  enrich: True
+
 # --- Training Loop Section ---
 train:
   mode: custom
@@ -31,13 +34,13 @@ model:
 
 # --- GNN Backbone Architecture ---
 gnn:
-  layers_pre_mp: 1                  # Projection layers before message passing
-  layers_mp: 3                      # Number of graph convolution layers
-  layers_post_mp: 2                 # Classification MLP tail layers after pooling
-  dim_inner: 128                    # Injected hidden channel dimension
-  layer_type: gatv2conv             # Dynamic backbones: gatv2conv, gcnconv, sageconv, ginconv
+  layers_pre_mp: 1                  
+  layers_mp: 3                      
+  layers_post_mp: 2                 
+  dim_inner: 128                    
+  layer_type: gatv2conv             
   stage_type: stack
-  act: gelu                   # Dynamic activation: relu, leaky_relu, gelu, elu, tanh
+  act: gelu                   
   dropout: 0.2
 
 # --- Optimizations ---

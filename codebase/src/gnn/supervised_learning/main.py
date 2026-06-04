@@ -167,7 +167,14 @@ def evaluate(model, loader, criterion):
     return avg_loss, accuracy, f1_computed, precision_computed, recall_computed, all_labels, all_preds, all_probs
 
 
-def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
+def main(
+    dataset_name: str,
+    mode: str = "graph",
+    enrich: bool = False,
+    active_features: list[str] | None = None,
+    synthetic: bool = False,
+    synthetic_dataset: str | None = None,
+):
     # Make paths absolute relative to repo root to avoid cwd dependency issues
     repo_root = Path(__file__).resolve().parents[4]
     dataset_path = dataset_name
@@ -188,6 +195,8 @@ def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_fe
         enrich=enrich,
         active_features=active_features,
         unified_loader=unified_loader,
+        synthetic=synthetic,
+        synthetic_dataset_name=synthetic_dataset,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(
@@ -221,6 +230,8 @@ def main(dataset_name: str, mode: str = "graph", enrich: bool = False, active_fe
                 "mode": mode,
                 "enrich": enrich,
                 "active_features": active_features,
+                "synthetic": synthetic,
+                "synthetic_dataset": synthetic_dataset,
             }
         )
 
@@ -351,6 +362,17 @@ if __name__ == "__main__":
         default=None,
         help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
     )
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Enables synthetic mode: train on synthetic dataset, validate on curated dataset."
+    )
+    parser.add_argument(
+        "--synthetic-dataset",
+        type=str,
+        default=None,
+        help="Synthetic dataset name, optionally including run key (e.g. synthetic_run_key/synthetic_dataset_name)"
+    )
     args = parser.parse_args()
 
     # Resolve paths
@@ -363,11 +385,24 @@ if __name__ == "__main__":
             mode=args.mode,
             enrich=args.enrich
         )
-        print("Dataset loaded successfully!")
+        print("Curated dataset loaded successfully!")
         print(loader.data.tail())
         print_dataset_distribution(args.dataset, loader.data)
     except Exception as e:
-        print(f"Note: Dataset files not found in local sandbox, proceeding with verification of imports/arguments. Error: {e}")
+        print(f"Note: Curated dataset files not found in local sandbox: {e}")
+
+    if args.synthetic and args.synthetic_dataset:
+        try:
+            synth_loader = UnifiedDataLoader.get_instance(
+                dataset_name=args.synthetic_dataset,
+                mode=args.mode,
+                enrich=args.enrich
+            )
+            print("Synthetic dataset loaded successfully!")
+            print(synth_loader.data.tail())
+            print_dataset_distribution(args.synthetic_dataset, synth_loader.data)
+        except Exception as e:
+            print(f"Note: Synthetic dataset files not found in local sandbox: {e}")
 
     if not args.dry_run:
         try:
@@ -379,7 +414,9 @@ if __name__ == "__main__":
                 dataset_name=args.dataset,
                 mode=args.mode,
                 enrich=args.enrich,
-                active_features=active_feats
+                active_features=active_feats,
+                synthetic=args.synthetic,
+                synthetic_dataset=args.synthetic_dataset,
             )
         except Exception as e:
             print(f"Failed to start training run (expected if datasets/connections not available in sandbox): {e}")
