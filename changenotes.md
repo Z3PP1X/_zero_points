@@ -49,3 +49,14 @@ To prevent node representations from converging to indistinguishable vectors ove
 - **Edge-to-Node verification**: Updated `test_graph_utils.py`, `test_virtual_nodes.py`, and `test_trial_switch.py` to verify the correct computation and projection of edge features and features dimension (22).
 - **Node Count Adjustments**: Updated expected node count assertions in `test_graphml_import.py` and `test_virtual_nodes.py` (from 9 to 10 and 7 to 8 respectively) to account for the new global supernode (type 8).
 - **Full Verification**: Ran the complete test suite (52 tests) and verified that all tests pass successfully.
+
+---
+
+## 4. Enhanced Metrics and Evaluation (PR-AUC & Loss)
+
+To support evaluation on imbalanced datasets, we introduced Precision-Recall AUC (PR-AUC) alongside ROC-AUC and incorporated loss evaluation:
+- **GraphGym Logger Modification**: Updated binary classification logger (`logger.py` in PyTorch Geometric site-packages) to calculate `pr_auc` dynamically using `precision_recall_curve` and `auc` from `sklearn.metrics`. This propagates PR-AUC to `stats.json` and aggregated CSVs automatically.
+- **Evaluation Script Updates (`eval.py`)**:
+  - Expanded `metrics` inside `GNNResultEvaluator` to include `pr_auc` and `loss`, rendering a wider 2x7 grid of heatmaps (at `figsize=(32, 11)`) and placing the summary bar chart in column 6.
+  - Implemented a white-to-red colormap (`self.cmap_loss`) for `loss` heatmaps to intuitively highlight high-loss configuration areas in red.
+  - Included `pr_auc` and `loss` in the overall layer-type architecture comparison bar charts.
