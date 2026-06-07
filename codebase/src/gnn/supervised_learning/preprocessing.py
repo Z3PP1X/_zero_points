@@ -104,6 +104,10 @@ class GraphPipeline:
         
         self.train_loader = None
         self.test_loader = None
+        self.curated_loader = None
+        self.train_dataset = None
+        self.test_dataset = None
+        self.curated_dataset = None
         self.class_weights = None
         self.Y_train = None
         self.Y_test = None
@@ -141,12 +145,33 @@ class GraphPipeline:
             test_df = df_curated[df_curated["problem_id"].isin(graph_ids_curated)].copy()
             train_df = df_synth[df_synth["problem_id"].isin(graph_ids_synth)].copy()
             
-            train_pids = train_df["problem_id"].unique()
-            test_pids = test_df["problem_id"].unique()
+            # Split synthetic dataset based on problem_id
+            unique_synth_pids = train_df["problem_id"].unique()
+            unique_synth_labels = [
+                train_df[train_df["problem_id"] == p]["faster_algorithm"].iloc[0]
+                for p in unique_synth_pids
+            ]
             
-            # Calculate class weights for training dataset
-            class_counts = train_df["faster_algorithm"].value_counts()
-            total_train = len(train_df)
+            from collections import Counter
+            synth_class_counts = Counter(unique_synth_labels)
+            can_stratify_synth = stratify and all(count >= 2 for count in synth_class_counts.values())
+            
+            train_synth_pids, test_synth_pids = train_test_split(
+                unique_synth_pids,
+                test_size=test_size,
+                random_state=self.seed,
+                stratify=unique_synth_labels if can_stratify_synth else None,
+            )
+            
+            train_synth_pids_set = set(train_synth_pids)
+            test_synth_pids_set = set(test_synth_pids)
+            
+            synthetic_train_df = train_df[train_df["problem_id"].isin(train_synth_pids_set)]
+            synthetic_test_df = train_df[train_df["problem_id"].isin(test_synth_pids_set)]
+            
+            # Calculate class weights for synthetic training dataset
+            class_counts = synthetic_train_df["faster_algorithm"].value_counts()
+            total_train = len(synthetic_train_df)
             num_classes = len(class_counts)
             
             weight_0 = total_train / (num_classes * class_counts.get(0, 1))
@@ -154,8 +179,9 @@ class GraphPipeline:
             self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
             
             # Assign datasets
-            self.train_dataset = ProblemRunDataset(train_df, graphs_synth, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
-            self.test_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+            self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+            self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+            self.curated_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
             
             from torch_geometric.loader import DataLoader
             
@@ -165,10 +191,13 @@ class GraphPipeline:
             self.test_loader = DataLoader(
                 self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
             )
+            self.curated_loader = DataLoader(
+                self.curated_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
+            )
             
             print("-" * 40)
-            print(f"[Synthetic Mode] Train-IDs (synthetic): {len(train_pids)}, Test-IDs (curated): {len(test_pids)}")
-            print(f"[Synthetic Mode] Train-runs: {len(self.train_dataset)}, Test-runs: {len(self.test_dataset)}")
+            print(f"[Synthetic Mode] Train-IDs (synthetic): {len(train_synth_pids)}, Test-IDs (synthetic): {len(test_synth_pids)}, Curated-IDs (real): {len(test_df['problem_id'].unique())}")
+            print(f"[Synthetic Mode] Train-runs: {len(self.train_dataset)}, Test-runs: {len(self.test_dataset)}, Curated-runs: {len(self.curated_dataset)}")
             print(f"[Synthetic Mode] Train class distribution: 0: {class_counts.get(0, 0)}, 1: {class_counts.get(1, 0)}")
             print(f"[Synthetic Mode] Computed Weights: 0: {weight_0:.4f}, 1: {weight_1:.4f}")
             print("-" * 40)

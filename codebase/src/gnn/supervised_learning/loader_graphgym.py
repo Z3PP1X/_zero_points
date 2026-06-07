@@ -224,18 +224,35 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         batch_size=batch_size,
     )
 
-    train_data_list = [
-        pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
-    ]
-    test_data_list = [
-        pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
-    ]
+    if synthetic:
+        train_data_list = [
+            pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
+        ]
+        val_data_list = [
+            pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
+        ]
+        curated_data_list = [
+            pipeline.curated_dataset[i] for i in range(len(pipeline.curated_dataset))
+        ]
 
-    all_data_list = train_data_list + test_data_list
+        all_data_list = train_data_list + val_data_list + curated_data_list
 
-    train_indices = list(range(len(train_data_list)))
-    val_indices = list(range(len(train_data_list), len(all_data_list)))
-    test_indices = list(range(len(train_data_list), len(all_data_list)))
+        train_indices = list(range(len(train_data_list)))
+        val_indices = list(range(len(train_data_list), len(train_data_list) + len(val_data_list)))
+        test_indices = list(range(len(train_data_list) + len(val_data_list), len(all_data_list)))
+    else:
+        train_data_list = [
+            pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
+        ]
+        test_data_list = [
+            pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
+        ]
+
+        all_data_list = train_data_list + test_data_list
+
+        train_indices = list(range(len(train_data_list)))
+        val_indices = list(range(len(train_data_list), len(all_data_list)))
+        test_indices = list(range(len(train_data_list), len(all_data_list)))
 
     return ExpressionGraphDataset(
         all_data_list, train_indices, val_indices, test_indices

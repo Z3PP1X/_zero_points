@@ -117,6 +117,10 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     # Check that datasets are correctly isolated
     train_problems = set(pipeline.train_dataset.df["problem_id"].unique())
     test_problems = set(pipeline.test_dataset.df["problem_id"].unique())
+    curated_problems = set(pipeline.curated_dataset.df["problem_id"].unique())
     
-    assert train_problems == {"P_synth_1", "P_synth_2"}
-    assert test_problems == {"P_curated_1", "P_curated_2"}
+    assert train_problems.issubset({"P_synth_1", "P_synth_2"})
+    assert test_problems.issubset({"P_synth_1", "P_synth_2"})
+    assert train_problems.isdisjoint(test_problems)
+    assert train_problems.union(test_problems) == {"P_synth_1", "P_synth_2"}
+    assert curated_problems == {"P_curated_1", "P_curated_2"}

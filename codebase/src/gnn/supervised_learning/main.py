@@ -331,6 +331,38 @@ def main(
                 mlflow.log_metric("best_val_loss", best_val_loss, step=epoch)
                 print(f"  ↳ Saved best model (val_loss={val_loss:.4f})")
 
+        if synthetic and getattr(pipeline, "curated_loader", None) is not None:
+            print("\nEvaluating best saved model on Curated (Real) Dataset...")
+            best_model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
+            best_model.load_state_dict(torch.load(str(save_path)))
+            cur_loss, cur_acc, f1_cur, prec_cur, rec_cur, cur_true, cur_pred, cur_prob = (
+                evaluate(best_model, pipeline.curated_loader, criterion)
+            )
+            cur_true_np = np.array(cur_true)
+            cur_prob_np = np.array(cur_prob)
+            if len(np.unique(cur_true_np)) > 1:
+                cur_roc_auc = float(roc_auc_score(cur_true_np, cur_prob_np))
+            else:
+                cur_roc_auc = 0.5
+            
+            mlflow.log_metrics(
+                {
+                    "Loss/curated": cur_loss,
+                    "Accuracy/curated": cur_acc,
+                    "F1/curated": f1_cur,
+                    "Precision/curated": prec_cur,
+                    "Recall/curated": rec_cur,
+                    "AUC/curated": cur_roc_auc,
+                }
+            )
+            print("-" * 50)
+            print(f"Final Curated (Real) Evaluation | "
+                  f"Loss: {cur_loss:.4f} | "
+                  f"Acc: {cur_acc:.4f} | "
+                  f"F1: {f1_cur:.4f} | "
+                  f"ROC-AUC: {cur_roc_auc:.4f}")
+            print("-" * 50)
+
         mlflow.pytorch.log_model(model, "model")
 
     print("Training complete.")
