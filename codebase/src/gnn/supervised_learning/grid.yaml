@@ -10,12 +10,11 @@ gnn.layers_mp:
   - 3
 
 gnn.dim_inner:
-  - 64
-  - 128
   - 256
-  - 512
 
 gnn.dropout:
-  - 0.1
   - 0.2
-  - 0.3
+
+model.graph_pooling:
+  - add
+  - mean
