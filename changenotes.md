@@ -75,3 +75,66 @@ To maximize training and inference speed on compatible accelerator hardware:
 - **In-Memory Dataset Usage**:
   - In GraphGym supervised experiments, PyG's `InMemoryDataset` (specifically the custom `ExpressionGraphDataset`) is natively leveraged.
   - In standard supervised learning pipelines, graph templates are pre-cached in-memory as a dictionary during initial loading (`UnifiedDataLoader.load_all()`) to prevent redundant disk reads, and cloned on-the-fly inside the dataloader `__getitem__`.
+
+---
+
+## 6. Positive Label Correction for Imbalanced Dataset (Newton = Positive Class)
+
+To ensure that all classification metrics (Precision, Recall, F1, PR-AUC) are correctly computed with respect to the **minority class** (Newton, ~25%), the binary label assignment was corrected:
+
+- **Before**: Newton was assigned label `0` (negative class), gMGF was assigned label `1` (positive class).
+- **After**: Newton is now assigned label `1` (positive class), gMGF is assigned label `0` (negative class).
+
+This ensures that scikit-learn and GraphGym/PyTorch-based metric functions treat Newton as the target `pos_label` by default, so that Precision, Recall, F1, and PR-AUC directly measure how well the model identifies Newton as the faster solver.
+
+**Modified Files:**
+- `preprocessing.py`: Swapped `values = [0, 1]` to `values = [1, 0]` in `_tag_faster_algorithm()` (docstring updated accordingly).
+- `main.py`: Updated `print_dataset_distribution()` to reflect the new class mapping (Newton = Class 1, gMGF = Class 0).
+
+---
+
+## 7. Train / Test / Validation 3-Way Split (Synthetic Mode)
+
+To provide a rigorous evaluation framework with clean separation between model selection and final real-world performance assessment, the supervised learning pipeline was restructured into a **3-way data split** in synthetic mode:
+
+| Split | Data Source | Purpose |
+|---|---|---|
+| **Train** (80%) | Synthetic problems | GNN weight updates |
+| **Test** (20%) | Synthetic problems (unseen) | Epoch-level evaluation, checkpoint selection |
+| **Val** | All curated real problems | Final real-world performance — no influence on training |
+
+**Key Properties:**
+- The **Train/Test split is problem-id-based**: all runs belonging to the same problem ID are kept together in the same split (prevents topology leakage).
+- The **split is stratified**: `stratify=True` is passed to `train_test_split`, ensuring the class ratio (Newton vs. gMGF) is preserved in both train and test splits.
+- The **curated dataset is never used during training or checkpoint selection** — it is only evaluated once at the end, against the best saved model.
+- The **80/20 split ratio** is applied consistently across `main.py` (`TEST_SIZE = 0.2`) and `loader_graphgym.py` (`test_size=0.2`).
+
+**GraphGym Index Assignment (Synthetic Mode):**
+- `train_graph_index` → Synthetic training problems (80%)
+- `val_graph_index` → Curated real-world problems (used as validation during GraphGym training epochs)
+- `test_graph_index` → Unseen synthetic test problems (20%, used for final epoch test reporting)
+
+**Modified Files:**
+- `preprocessing.py`: Added problem-id-based stratified split of synthetic data, added `self.curated_dataset` / `self.curated_loader` attributes, and a 3-way `DataLoader` construction.
+- `loader_graphgym.py`: Corrected `val_indices` to map to curated data and `test_indices` to unseen synthetic data. Enabled `stratify=True` and `num_workers` forwarding.
+- `main.py`: Added a post-training evaluation block that loads the best saved checkpoint and runs it against `pipeline.curated_loader`, logging `Loss/curated`, `Accuracy/curated`, `F1/curated`, `Precision/curated`, `Recall/curated`, and `AUC/curated` metrics to MLflow.
+
+---
+
+## 8. Evaluation & Aggregation Script Updates
+
+To reflect the new 3-way split in result visualizations and to handle the expanded hyperparameter grid:
+
+**`eval.py` (GNNResultEvaluator):**
+- Expanded the list of evaluated run files from 6 (`train_*`, `val_*`) to 9 (`train_*`, `test_*`, `val_*`).
+- Added human-readable labels for each split in plot titles:
+  - `train_*` → "Training (Synthetic)"
+  - `test_*` → "Test (Unseen Synthetic)"
+  - `val_*` → "Validation (Curated Real)"
+- Added a new **`graph_pooling` slicing dimension**: if the results contain a `graph_pooling` column, dedicated slice plots are generated under `eval_plots/.../graph_pooling/{pooling}.png`.
+- Added a new **`generate_summary_comparison()`** method that produces a single `split_comparison.png` chart overlaying Train / Test / Validation best-epoch metrics side-by-side for a direct generalization gap assessment.
+
+**`aggregate_graphgym.py`:**
+- Updated the directory rename regex to flexibly capture all known grid parameters (`layer_type`, `layers_mp`, `dim_inner`, `dropout`, `graph_pooling`, `act`) instead of a hardcoded pattern.
+- Added a final summary report listing all generated aggregated CSV files after batch aggregation completes.
+
