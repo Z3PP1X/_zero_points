@@ -55,7 +55,9 @@ To prevent node representations from converging to indistinguishable vectors ove
 ## 4. Enhanced Metrics and Evaluation (PR-AUC & Loss)
 
 To support evaluation on imbalanced datasets, we introduced Precision-Recall AUC (PR-AUC) alongside ROC-AUC and incorporated loss evaluation:
-- **GraphGym Logger Modification**: Updated binary classification logger (`logger.py` in PyTorch Geometric site-packages) to calculate `pr_auc` dynamically using `precision_recall_curve` and `auc` from `sklearn.metrics`. This propagates PR-AUC to `stats.json` and aggregated CSVs automatically.
+- **GraphGym Logger Modification**: Updated binary classification logger to calculate `pr_auc` dynamically using `precision_recall_curve` and `auc` from `sklearn.metrics`. This propagates PR-AUC to `stats.json` and aggregated CSVs automatically.
+  - *WSL Environment Patch*: Directly patched `/home/zapp1x/miniconda3/envs/pytorch/lib/python3.12/site-packages/torch_geometric/graphgym/logger.py` to ensure local experiments compute the metric.
+  - *Cloud/Multi-Machine Monkey Patch*: Implemented dynamic runtime monkey patching inside `loader_graphgym.py` (which is tracked in git and loaded automatically by `main_graphgym.py`). This intercepts PyG's `Logger.classification_binary` method on-the-fly and overrides it with our PR-AUC implementation. This guarantees `pr_auc` is recorded on **any external environment (such as your cloud GPU)** without needing manual installation adjustments.
 - **Evaluation Script Updates (`eval.py`)**:
   - Expanded `metrics` inside `GNNResultEvaluator` to include `pr_auc` and `loss`, rendering a wider 2x7 grid of heatmaps (at `figsize=(32, 11)`) and placing the summary bar chart in column 6.
   - Implemented a white-to-red colormap (`self.cmap_loss`) for `loss` heatmaps to intuitively highlight high-loss configuration areas in red.

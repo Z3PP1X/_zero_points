@@ -24,6 +24,49 @@ if str(src_root) not in sys.path:
 from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa
 
 
+# Monkey patch GraphGym Logger to compute PR-AUC dynamically on any system/environment (e.g. Cloud GPU)
+import torch_geometric.graphgym.logger as pyg_logger
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    precision_recall_curve,
+    auc,
+)
+
+def custom_classification_binary(self):
+    true, pred_score = torch.cat(self._true), torch.cat(self._pred)
+    pred_int = self._get_pred_int(pred_score)
+    try:
+        r_a_score = roc_auc_score(true, pred_score)
+    except ValueError:
+        r_a_score = 0.0
+        
+    try:
+        if len(pred_score.shape) > 1 and pred_score.shape[1] > 1:
+            scores = pred_score[:, 1].cpu().numpy() if hasattr(pred_score, 'cpu') else pred_score[:, 1]
+        else:
+            scores = pred_score.cpu().numpy() if hasattr(pred_score, 'cpu') else pred_score
+        y_true_np = true.cpu().numpy() if hasattr(true, 'cpu') else true
+        precision_pts, recall_pts, _ = precision_recall_curve(y_true_np, scores)
+        pr_auc_score = auc(recall_pts, precision_pts)
+    except Exception:
+        pr_auc_score = 0.0
+
+    return {
+        'accuracy': round(accuracy_score(true, pred_int), pyg_logger.cfg.round),
+        'precision': round(precision_score(true, pred_int), pyg_logger.cfg.round),
+        'recall': round(recall_score(true, pred_int), pyg_logger.cfg.round),
+        'f1': round(f1_score(true, pred_int), pyg_logger.cfg.round),
+        'auc': round(r_a_score, pyg_logger.cfg.round),
+        'pr_auc': round(pr_auc_score, pyg_logger.cfg.round),
+    }
+
+pyg_logger.Logger.classification_binary = custom_classification_binary
+
+
 register_act("gelu", nn.GELU)
 register_act("leaky_relu", nn.LeakyReLU)
 register_act("tanh", nn.Tanh)
