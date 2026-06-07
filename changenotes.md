@@ -60,3 +60,14 @@ To support evaluation on imbalanced datasets, we introduced Precision-Recall AUC
   - Expanded `metrics` inside `GNNResultEvaluator` to include `pr_auc` and `loss`, rendering a wider 2x7 grid of heatmaps (at `figsize=(32, 11)`) and placing the summary bar chart in column 6.
   - Implemented a white-to-red colormap (`self.cmap_loss`) for `loss` heatmaps to intuitively highlight high-loss configuration areas in red.
   - Included `pr_auc` and `loss` in the overall layer-type architecture comparison bar charts.
+
+---
+
+## 5. Performance, Memory, and Hardware Precision Optimizations
+
+To maximize training and inference speed on compatible accelerator hardware:
+- **`pin_memory` Support**: Enabled page-locked (`pin_memory=torch.cuda.is_available()`) memory allocation in standard and synthetic supervised `DataLoader` objects inside `preprocessing.py`. This optimizes host-to-device CUDA data transfer.
+- **Float32 Matrix Multiplication Precision**: Added configuration to leverage TensorFloat-32 (TF32) on Ampere or newer GPUs by setting `torch.set_float32_matmul_precision('high')` at the entry points of `supervised_learning/main.py`, `supervised_learning/main_graphgym.py`, and `reinforcement_learning/main.py`.
+- **In-Memory Dataset Usage**:
+  - In GraphGym supervised experiments, PyG's `InMemoryDataset` (specifically the custom `ExpressionGraphDataset`) is natively leveraged.
+  - In standard supervised learning pipelines, graph templates are pre-cached in-memory as a dictionary during initial loading (`UnifiedDataLoader.load_all()`) to prevent redundant disk reads, and cloned on-the-fly inside the dataloader `__getitem__`.

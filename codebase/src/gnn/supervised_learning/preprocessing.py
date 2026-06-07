@@ -160,10 +160,10 @@ class GraphPipeline:
             from torch_geometric.loader import DataLoader
             
             self.train_loader = DataLoader(
-                self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+                self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available()
             )
             self.test_loader = DataLoader(
-                self.test_dataset, batch_size=batch_size, num_workers=num_workers
+                self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
             )
             
             print("-" * 40)
@@ -221,10 +221,10 @@ class GraphPipeline:
             from torch_geometric.loader import DataLoader
 
             self.train_loader = DataLoader(
-                self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+                self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available()
             )
             self.test_loader = DataLoader(
-                self.test_dataset, batch_size=batch_size, num_workers=num_workers
+                self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
             )
 
             print("-" * 40)

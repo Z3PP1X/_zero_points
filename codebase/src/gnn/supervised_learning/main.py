@@ -40,6 +40,9 @@ from gnn.shared.models.classifiers import TestGraphNetwork # noqa
 NUM_CORES = 6
 torch.set_num_threads(NUM_CORES)
 
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision('high')
+
 DEVICE = (
     torch.accelerator.current_accelerator().type
     if torch.accelerator.is_available()

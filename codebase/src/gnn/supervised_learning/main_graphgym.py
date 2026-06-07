@@ -21,6 +21,9 @@ set_cfg(cfg)
 
 
 def main():
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+        
     args = parse_args()
     load_cfg(cfg, args)
     if cfg.accelerator == "auto":

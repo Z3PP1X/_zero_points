@@ -2,6 +2,7 @@ import sys
 import argparse
 import os
 from pathlib import Path
+import torch
 
 import mlflow
 
@@ -84,6 +85,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+        
     parser = build_argument_parser()
     args = parser.parse_args()
 
