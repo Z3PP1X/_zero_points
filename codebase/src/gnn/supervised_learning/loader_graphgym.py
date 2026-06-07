@@ -222,6 +222,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     pipeline.pipe(
         test_size=0.2,
         batch_size=batch_size,
+        stratify=True,
+        num_workers=getattr(cfg, 'num_workers', 0),
     )
 
     if synthetic:

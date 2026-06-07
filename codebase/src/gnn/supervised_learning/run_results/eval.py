@@ -15,8 +15,13 @@ from pathlib import Path
 
 class GNNResultEvaluator:
     """
-    Evaluates GNN training and validation runs, plotting pivot grid heatmaps
+    Evaluates GNN training, test and validation runs, plotting pivot grid heatmaps
     of performance metrics and comparing layer summaries.
+    
+    In synthetic mode:
+      - train_*: Training on synthetic data
+      - test_*:  Test on unseen synthetic data (problem_id-based split)
+      - val_*:   Validation on curated real-world problems
     """
     def __init__(self, naming_var: str, base_dir: Path = None):
         """
@@ -33,8 +38,28 @@ class GNNResultEvaluator:
         self.data_dir = self.base_dir / self.naming_var / "agg"
         self.output_dir = self.base_dir / self.naming_var / "eval_plots"
         
-        # Datasets to evaluate
-        self.runs = ["train_best", "train_bestepoch", "train", "val_best", "val_bestepoch", "val"]
+        # Datasets to evaluate, grouped by purpose
+        # train: Training performance (synthetic data)
+        # test:  Test performance (unseen synthetic data, problem_id-based split)  
+        # val:   Validation performance (curated real-world problems)
+        self.runs = [
+            "train_best", "train_bestepoch", "train",
+            "test_best", "test_bestepoch", "test",
+            "val_best", "val_bestepoch", "val",
+        ]
+        
+        # Human-readable labels for each run type
+        self.run_labels = {
+            "train": "Training (Synthetic)",
+            "train_best": "Training Best (Synthetic)",
+            "train_bestepoch": "Training Best Epoch (Synthetic)",
+            "test": "Test (Unseen Synthetic)",
+            "test_best": "Test Best (Unseen Synthetic)",
+            "test_bestepoch": "Test Best Epoch (Unseen Synthetic)",
+            "val": "Validation (Curated Real)",
+            "val_best": "Validation Best (Curated Real)",
+            "val_bestepoch": "Validation Best Epoch (Curated Real)",
+        }
         
         # Heatmap colormap (white to premium emerald green)
         # Using a sleek color gradient
@@ -170,6 +195,12 @@ class GNNResultEvaluator:
             group_col = 'layer_type'
             legend_title = "Model Architecture"
             chart_title = f"Architecture Comparison for {df['act'].iloc[0]}"
+        # If the slice is filtered to one graph_pooling, keep architecture grouping
+        elif 'graph_pooling' in df.columns and df['graph_pooling'].nunique() == 1:
+            if group_col is None and 'layer_type' in overall_df.columns:
+                group_col = 'layer_type'
+                legend_title = "Model Architecture"
+                chart_title = f"Architecture Comparison for pooling={df['graph_pooling'].iloc[0]}"
             
         if group_col is not None and len(present_metrics) > 0:
             # Group the current slice's data (or overall_df if it's overall plot) to show comparison
@@ -229,6 +260,76 @@ class GNNResultEvaluator:
         plt.savefig(output_path, bbox_inches='tight')
         plt.close(fig)
 
+    def generate_summary_comparison(self, output_path: Path):
+        """
+        Generates a comparison plot across train/test/val splits showing
+        best-epoch metrics side-by-side.
+        """
+        split_files = {
+            "Train (Synthetic)": "train_bestepoch",
+            "Test (Unseen Synthetic)": "test_bestepoch",
+            "Val (Curated Real)": "val_bestepoch",
+        }
+        
+        summary_metrics = ['auc', 'pr_auc', 'accuracy', 'precision', 'recall', 'f1', 'loss']
+        split_data = {}
+        
+        for label, filename in split_files.items():
+            try:
+                df = self.load_data(filename)
+                present = [m for m in summary_metrics if m in df.columns]
+                split_data[label] = df[present].mean()
+            except FileNotFoundError:
+                continue
+        
+        if len(split_data) < 2:
+            return  # Not enough splits to compare
+        
+        summary_df = pd.DataFrame(split_data)
+        present_metrics = list(summary_df.index)
+        
+        fig, ax = plt.subplots(figsize=(14, 7), dpi=150)
+        
+        premium_palette = ['#2A9D8F', '#E76F51', '#264653']
+        colors = [premium_palette[i % len(premium_palette)] for i in range(len(summary_df.columns))]
+        
+        summary_df.plot(kind='bar', ax=ax, width=0.75, color=colors, edgecolor='none')
+        
+        ax.set_title("Train / Test / Validation Comparison (Best Epoch Avg)", fontsize=15, fontweight='bold', pad=12)
+        ax.set_xlabel("Performance Metrics", fontsize=11, fontweight='bold', labelpad=8)
+        ax.set_ylabel("Metric Score", fontsize=11, fontweight='bold', labelpad=8)
+        ax.set_ylim(0, max(1.1, summary_df.max().max() * 1.1))
+        ax.grid(axis='y', linestyle='--', alpha=0.5)
+        ax.legend(
+            title="Data Split",
+            frameon=True,
+            facecolor='#f8f9fa',
+            edgecolor='none',
+            fontsize=10,
+            title_fontsize=11
+        )
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_color('#cccccc')
+        ax.spines['bottom'].set_color('#cccccc')
+        ax.set_xticklabels([m.upper() for m in present_metrics], rotation=0, fontsize=10)
+        
+        for p in ax.patches:
+            height = p.get_height()
+            if height > 0:
+                ax.annotate(f"{height:.3f}",
+                            xy=(p.get_x() + p.get_width() / 2, height),
+                            xytext=(0, 4),
+                            textcoords="offset points",
+                            ha='center', va='bottom', fontsize=8, rotation=90, fontweight='semibold')
+        
+        plt.suptitle(f"Split Comparison — {self.naming_var}", fontsize=17, fontweight='bold', y=1.01)
+        
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, bbox_inches='tight')
+        plt.close(fig)
+        print(f"    Saved split comparison plot: {output_path}")
+
     def run_all(self):
         """Runs the entire evaluation pipeline for all runs and slices."""
         print(f"Starting GNN Evaluation on '{self.naming_var}'...")
@@ -236,7 +337,8 @@ class GNNResultEvaluator:
         print(f"Output directory: {self.output_dir}")
         
         for run in self.runs:
-            print(f"  Evaluating run: {run}...")
+            label = self.run_labels.get(run, run)
+            print(f"  Evaluating run: {run} ({label})...")
             try:
                 df = self.load_data(run)
             except FileNotFoundError as e:
@@ -251,7 +353,7 @@ class GNNResultEvaluator:
                 df=df,
                 overall_df=df,
                 output_path=run_out_dir / "overall.png",
-                title=f"Run: {run} - Overall Hyperparameter Grid ({self.naming_var})"
+                title=f"{label} - Overall Hyperparameter Grid ({self.naming_var})"
             )
             
             # 2. Diagrams by observed layer_type
@@ -265,7 +367,7 @@ class GNNResultEvaluator:
                             df=sub_df,
                             overall_df=df,
                             output_path=layer_dir / f"{lt}.png",
-                            title=f"Run: {run} - Layer: {lt} Hyperparameter Grid ({self.naming_var})"
+                            title=f"{label} - Layer: {lt} ({self.naming_var})"
                         )
             
             # 3. Diagrams by observed layers_mp
@@ -279,7 +381,7 @@ class GNNResultEvaluator:
                             df=sub_df,
                             overall_df=df,
                             output_path=mp_dir / f"{mp}_layers.png",
-                            title=f"Run: {run} - MP Layers: {mp} Hyperparameter Grid ({self.naming_var})"
+                            title=f"{label} - MP Layers: {mp} ({self.naming_var})"
                         )
 
             # 4. Diagrams by observed act (activation function)
@@ -293,9 +395,29 @@ class GNNResultEvaluator:
                             df=sub_df,
                             overall_df=df,
                             output_path=act_dir / f"{act}.png",
-                            title=f"Run: {run} - Activation: {act} Hyperparameter Grid ({self.naming_var})"
+                            title=f"{label} - Activation: {act} ({self.naming_var})"
+                        )
+
+            # 5. Diagrams by observed graph_pooling
+            if 'graph_pooling' in df.columns:
+                pooling_values = df['graph_pooling'].dropna().unique()
+                pooling_dir = run_out_dir / "graph_pooling"
+                for pooling in pooling_values:
+                    sub_df = df[df['graph_pooling'] == pooling]
+                    if not sub_df.empty:
+                        self.generate_plots_for_df(
+                            df=sub_df,
+                            overall_df=df,
+                            output_path=pooling_dir / f"{pooling}.png",
+                            title=f"{label} - Pooling: {pooling} ({self.naming_var})"
                         )
                         
+        # 6. Generate cross-split comparison plot
+        print("  Generating split comparison plot...")
+        self.generate_summary_comparison(
+            output_path=self.output_dir / "split_comparison.png"
+        )
+
         print(f"Evaluation complete! Plots saved to {self.output_dir}")
 
 if __name__ == "__main__":
