@@ -57,9 +57,9 @@ def custom_classification_binary(self):
 
     return {
         'accuracy': round(accuracy_score(true, pred_int), pyg_logger.cfg.round),
-        'precision': round(precision_score(true, pred_int), pyg_logger.cfg.round),
-        'recall': round(recall_score(true, pred_int), pyg_logger.cfg.round),
-        'f1': round(f1_score(true, pred_int), pyg_logger.cfg.round),
+        'precision': round(precision_score(true, pred_int, zero_division=0), pyg_logger.cfg.round),
+        'recall': round(recall_score(true, pred_int, zero_division=0), pyg_logger.cfg.round),
+        'f1': round(f1_score(true, pred_int, zero_division=0), pyg_logger.cfg.round),
         'auc': round(r_a_score, pyg_logger.cfg.round),
         'pr_auc': round(pr_auc_score, pyg_logger.cfg.round),
     }
