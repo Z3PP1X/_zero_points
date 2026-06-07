@@ -1,4 +1,8 @@
 import sys
+import warnings
+# Suppress harmless PyG internal GraphGym InMemoryDataset deprecation warning
+warnings.filterwarnings("ignore", message=".*InMemoryDataset.*")
+
 from pathlib import Path
 import torch
 from torch_geometric.graphgym.cmd_args import parse_args
