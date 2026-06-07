@@ -226,24 +226,23 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         num_workers=getattr(cfg, 'num_workers', 0),
     )
 
-    if synthetic:
         train_data_list = [
             pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
         ]
-        val_data_list = [  # synthetic test data (unseen synthetic data)
+        val_data_list = [  # unseen synthetic test data — evaluated every eval_period for checkpoint selection
             pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
         ]
-        curated_data_list = [  # curated data (real-world problems)
+        curated_data_list = [  # curated real-world problems — evaluated ONCE at the end with the best model
             pipeline.curated_dataset[i] for i in range(len(pipeline.curated_dataset))
         ]
 
-        all_data_list = train_data_list + curated_data_list + val_data_list
+        all_data_list = train_data_list + val_data_list + curated_data_list
 
         train_indices = list(range(len(train_data_list)))
-        # Validation is on curated (real-world) data
-        val_indices = list(range(len(train_data_list), len(train_data_list) + len(curated_data_list)))
-        # Test is on unseen synthetic test data
-        test_indices = list(range(len(train_data_list) + len(curated_data_list), len(all_data_list)))
+        # val = unseen synthetic (20%): runs every eval_period epoch, used for checkpoint selection
+        val_indices = list(range(len(train_data_list), len(train_data_list) + len(val_data_list)))
+        # test = curated real-world: runs ONCE after training ends with the best saved model
+        test_indices = list(range(len(train_data_list) + len(val_data_list), len(all_data_list)))
     else:
         train_data_list = [
             pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
