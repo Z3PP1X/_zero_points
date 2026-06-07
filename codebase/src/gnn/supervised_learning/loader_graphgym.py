@@ -226,6 +226,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         num_workers=getattr(cfg, 'num_workers', 0),
     )
 
+    if synthetic:
         train_data_list = [
             pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
         ]
