@@ -1,11 +1,11 @@
 import sys
-import os
+
 import pandas as pd
 from pathlib import Path
 import json
 import shutil
 
-# Dynamic sys.path resolution to support package imports when run as scripts
+
 gnn_root = Path(__file__).resolve().parents[2]
 if str(gnn_root) not in sys.path:
     sys.path.insert(0, str(gnn_root))
@@ -15,11 +15,12 @@ if str(src_root) not in sys.path:
 
 
 class DatasetLoader:
-    def __init__(self, dataset_name: str, run_key: str = None, addTraces=False, base_dir=None):
-        # Auto-extract run_key if passed in dataset_name like "run_20260408_160456/dataset_4"
+    def __init__(
+        self, dataset_name: str, run_key: str = None, addTraces=False, base_dir=None
+    ):
         if "/" in dataset_name and run_key is None:
             run_key, dataset_name = dataset_name.split("/", 1)
-        
+
         self.dataset_name = dataset_name
         self.run_key = run_key
         self.base_dir = base_dir
@@ -31,8 +32,7 @@ class DatasetLoader:
         if self.base_dir is not None:
             p = Path(self.base_dir)
             return p if p.is_dir() else p.parent
-        # Parents resolved:
-        # [0] supervised_learning, [1] gnn, [2] src, [3] codebase, [4] _zero_points (repo root)
+
         base = Path(__file__).resolve().parents[4]
         primary = base / "datasets" / self.run_key
         if primary.exists():
@@ -43,7 +43,6 @@ class DatasetLoader:
         if self._data is None:
             return
 
-        # Define clean normalization mappings (lowercase -> standard key)
         mapping = {
             "problem_id": "problem_id",
             "problemid": "problem_id",
@@ -70,8 +69,7 @@ class DatasetLoader:
 
         rename_dict = {}
         for col in self._data.columns:
-            # Clean column name: strip spaces, quotes, lowercase
-            clean_col = col.strip().replace('"', '').replace("'", '').lower()
+            clean_col = col.strip().replace('"', "").replace("'", "").lower()
             if clean_col in mapping:
                 rename_dict[col] = mapping[clean_col]
 
@@ -187,12 +185,13 @@ class DatasetLoader:
 
 
 if __name__ == "__main__":
-    # Test loading
     try:
         data_loader = DatasetLoader(
             run_key="run_20260419_110821", addTraces=True, dataset_name="dataset1"
         )
         print("DatasetLoader initialized successfully!")
     except Exception as e:
-        print(f"DatasetLoader test failed (expected if datasets not present in this sandbox context): {e}")
-
+        print(
+            "DatasetLoader test failed (expected if datasets not present in this "
+            f" sandbox context): {e}"
+        )

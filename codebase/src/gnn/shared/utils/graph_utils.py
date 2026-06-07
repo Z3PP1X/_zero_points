@@ -180,6 +180,7 @@ class ExpressionGraphConverter:
         "virtual_current_x": 5,
         "virtual_f_x": 6,
         "virtual_y_target": 7,
+        "virtual_supernode": 8,
     }
 
     def __init__(self):
@@ -262,6 +263,13 @@ class ExpressionGraphConverter:
                 "type": "virtual_y_target",
                 "value": None
             })
+            # Add virtual_supernode
+            raw["nodes"].append({
+                "id": "virtual_supernode",
+                "label": "virtual_supernode",
+                "type": "virtual_supernode",
+                "value": None
+            })
             
             # Add virtual edges:
             # virtual_current_x -> all variables
@@ -313,6 +321,26 @@ class ExpressionGraphConverter:
         
         if enrich:
             # Full 16-feature set (RL mode)
+            node_child_indices = {nid: 0.0 for nid in node_ids}
+            parent_edge_betweenness = {nid: 0.0 for nid in node_ids}
+            parent_relation_types = {nid: 0.0 for nid in node_ids}
+            child_counters = {}
+            for edge in raw.get("edges", []):
+                parent = edge["source"]
+                child = edge["target"]
+                etype = edge["type"]
+
+                child_idx = child_counters.get(parent, 0)
+                child_counters[parent] = child_idx + 1
+                node_child_indices[child] = float(child_idx)
+
+                # Fetch edge betweenness centrality
+                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
+                # For DAGs/multiple parents, take the maximum
+                parent_edge_betweenness[child] = max(parent_edge_betweenness[child], eb_val)
+                
+                parent_relation_types[child] = float(self._encode_edge_type(etype))
+
             for i, node in enumerate(node_ids):
                 attrs = G_directed.nodes[node]
                 enriched_attrs = attrs.copy()
@@ -333,6 +361,11 @@ class ExpressionGraphConverter:
                 enriched_attrs["rwpe_2"] = float(topo["rwpe"][i, 1])
                 enriched_attrs["rwpe_3"] = float(topo["rwpe"][i, 2])
                 enriched_attrs["rwpe_4"] = float(topo["rwpe"][i, 3])
+                
+                # New Node-projected Edge features
+                enriched_attrs["node_child_index"] = node_child_indices[node]
+                enriched_attrs["parent_edge_betweenness"] = parent_edge_betweenness[node]
+                enriched_attrs["parent_relation_type"] = parent_relation_types[node]
                 
                 G_enriched.add_node(node, **enriched_attrs)
 
@@ -368,6 +401,30 @@ class ExpressionGraphConverter:
                     relation_type=float(self._encode_edge_type(etype + "_reverse")),
                     edge_betweenness_centrality=eb_val,
                 )
+
+            # Add virtual supernode edges here, after all other edges are constructed
+            if "virtual_supernode" in node_ids:
+                supernode_etype = self._encode_edge_type("virtual")
+                for node in node_ids:
+                    if node != "virtual_supernode":
+                        # Forward Edge (virtual_supernode -> node)
+                        G_enriched.add_edge(
+                            "virtual_supernode",
+                            node,
+                            child_index=0.0,
+                            direction=0.0,
+                            relation_type=float(supernode_etype),
+                            edge_betweenness_centrality=0.0,
+                        )
+                        # Backward Edge (node -> virtual_supernode)
+                        G_enriched.add_edge(
+                            node,
+                            "virtual_supernode",
+                            child_index=0.0,
+                            direction=1.0,
+                            relation_type=float(self._encode_edge_type("virtual_reverse")),
+                            edge_betweenness_centrality=0.0,
+                        )
         else:
             # Basic 5-feature set (Supervised learning mode)
             for node in node_ids:
@@ -383,6 +440,22 @@ class ExpressionGraphConverter:
                     edge["target"],
                     edge_type=self._encode_edge_type(edge["type"]),
                 )
+
+            # Add supernode edges when enrich=False
+            if "virtual_supernode" in node_ids:
+                supernode_etype = self._encode_edge_type("virtual")
+                for node in node_ids:
+                    if node != "virtual_supernode":
+                        G_enriched.add_edge(
+                            "virtual_supernode",
+                            node,
+                            edge_type=supernode_etype,
+                        )
+                        G_enriched.add_edge(
+                            node,
+                            "virtual_supernode",
+                            edge_type=self._encode_edge_type("virtual_reverse"),
+                        )
 
         if heterogeneous:
             data = self._to_hetero(G_enriched, raw, topo, enrich)
@@ -477,6 +550,9 @@ class ExpressionGraphConverter:
                         "virtual_current_x_val",
                         "virtual_f_x_val",
                         "virtual_y_target_val",
+                        "node_child_index",
+                        "parent_edge_betweenness",
+                        "parent_relation_type",
                     ],
                 )
                 data.edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -499,6 +575,9 @@ class ExpressionGraphConverter:
                     "virtual_current_x_val",
                     "virtual_f_x_val",
                     "virtual_y_target_val",
+                    "node_child_index",
+                    "parent_edge_betweenness",
+                    "parent_relation_type",
                 ],
                 group_edge_attrs=["child_index", "direction", "relation_type", "edge_betweenness_centrality"],
             )
@@ -556,13 +635,18 @@ class ExpressionGraphConverter:
             betweenness = torch.tensor([G.nodes[n]["betweenness_centrality"] for n in node_ids], dtype=torch.float)
             lpe = torch.tensor(topo["lpe"], dtype=torch.float)
             rwpe = torch.tensor(topo["rwpe"], dtype=torch.float)
+            
+            n_child_idx = torch.tensor([G.nodes[n]["node_child_index"] for n in node_ids], dtype=torch.float)
+            p_edge_eb = torch.tensor([G.nodes[n]["parent_edge_betweenness"] for n in node_ids], dtype=torch.float)
+            p_rel_type = torch.tensor([G.nodes[n]["parent_relation_type"] for n in node_ids], dtype=torch.float)
 
             x = torch.stack(
                 [
                     node_type.float(), depth, height, subtree_size, out_degree, betweenness, label_id.float(), value,
                     lpe[:, 0], lpe[:, 1], lpe[:, 2], lpe[:, 3],
                     rwpe[:, 0], rwpe[:, 1], rwpe[:, 2], rwpe[:, 3],
-                    v_cx, v_fx, v_yt
+                    v_cx, v_fx, v_yt,
+                    n_child_idx, p_edge_eb, p_rel_type
                 ],
                 dim=1
             )
@@ -581,6 +665,14 @@ class ExpressionGraphConverter:
             edge_buckets.setdefault(etype, []).append((src, tgt))
             if enrich:
                 edge_buckets.setdefault(etype + "_reverse", []).append((tgt, src))
+
+        if "virtual_supernode" in id_to_idx:
+            sup_idx = id_to_idx["virtual_supernode"]
+            for node_id, n_idx in id_to_idx.items():
+                if node_id != "virtual_supernode":
+                    edge_buckets.setdefault("supernode_connection", []).append((sup_idx, n_idx))
+                    if enrich:
+                        edge_buckets.setdefault("supernode_connection_reverse", []).append((n_idx, sup_idx))
 
         hetero = HeteroData()
         hetero["node"].x = x
@@ -651,7 +743,8 @@ class GraphConversionPipeline:
             return [
                 "node_type", "depth", "height", "subtree_size", "out_degree", "betweenness_centrality", "label_id", "value",
                 "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
-                "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
+                "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val",
+                "node_child_index", "parent_edge_betweenness", "parent_relation_type"
             ]
         else:
             return [
@@ -666,7 +759,8 @@ def slice_active_features(x: torch.Tensor, active_features: list[str] | None, en
     full_schema = [
         "node_type", "depth", "height", "subtree_size", "out_degree", "betweenness_centrality", "label_id", "value",
         "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
-        "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
+        "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val",
+        "node_child_index", "parent_edge_betweenness", "parent_relation_type"
     ] if enrich else [
         "node_type", "label_id", "value", "has_value", "degree_centrality",
         "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"

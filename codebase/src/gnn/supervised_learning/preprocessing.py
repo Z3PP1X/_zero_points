@@ -77,6 +77,7 @@ class GraphPipeline:
                 dataset_name=self.synthetic_dataset_name,
                 mode=mode,
                 enrich=enrich,
+                is_synthetic=True,
             )
         else:
             self.synthetic_unified_loader = None
@@ -255,6 +256,24 @@ class GraphPipeline:
         return 2
 
 
+def parse_float(val) -> float:
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        val = val.strip()
+        try:
+            if "/" in val:
+                parts = val.split("/")
+                if len(parts) == 2:
+                    return float(parts[0]) / float(parts[1])
+            return float(val)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
 class ProblemRunDataset(Dataset):
     def __init__(self, df, base_graphs, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
         self.df = df.reset_index(drop=True)
@@ -273,18 +292,20 @@ class ProblemRunDataset(Dataset):
         data = self.base_graphs[pid].clone()
 
         data.y = torch.tensor([row["faster_algorithm"]], dtype=torch.long)
+        
+        # Parse inputs safely to support fraction strings (e.g. from Mathematica)
+        cx_val = parse_float(row.get("x0", 0.0))
+        yt_val = parse_float(row.get("y_target", 0.0))
+        fx_val = parse_float(row.get("fx", 0.0))
+
         data.global_features = torch.tensor(
-            [row.get("x0", 0.0), row.get("y_target", 0.0)], dtype=torch.float
+            [cx_val, yt_val], dtype=torch.float
         )
         data.pid = pid
 
         # Initialize virtual nodes once from the dataset (without any Taylor series fallback)
         if hasattr(data, "node_ids") and data.node_ids is not None:
             try:
-                cx_val = row.get("x0", 0.0)
-                yt_val = row.get("y_target", 0.0)
-                fx_val = row.get("fx", 0.0)  # Default to 0.0 to completely avoid Taylor series fallback
-                
                 if self.mode == "graph":
                     idx_cx = data.node_ids.index("virtual_current_x")
                     idx_fx = data.node_ids.index("virtual_f_x")

@@ -25,11 +25,13 @@ class GraphDataLoader:
         enrich: bool = True,
         heterogeneous: bool = False,
         base_dir: Union[Path, str, None] = None,
+        is_synthetic: bool = False,
     ):
         self.name = name
         self.mode = mode
         self.enrich = enrich
         self.heterogeneous = heterogeneous
+        self.is_synthetic = is_synthetic
         self.converter = ExpressionGraphConverter()
 
         # Resolve the source path (root graphs vs legacy fallbacks)
@@ -66,7 +68,14 @@ class GraphDataLoader:
             run_key = name
 
         # Candidates search order
-        candidates = [
+        candidates = []
+        if self.is_synthetic:
+            candidates.extend([
+                repo_root / "datasets" / "graphs" / "synthetic_graphs.json",
+                repo_root / "datasets" / "synthetic_graphs.json",
+                repo_root / "graphs" / "synthetic_graphs.json",
+            ])
+        candidates.extend([
             repo_root / "datasets" / f"{name}.json",
             repo_root / "datasets" / f"{run_key}.json",
             repo_root / "datasets" / name,
@@ -79,7 +88,7 @@ class GraphDataLoader:
             repo_root / "graphs" / run_key,
             repo_root / "codebase" / "src" / "gnn" / "graphs" / name,
             repo_root / "_datasets" / run_key / "graphs",
-        ]
+        ])
 
         for cand in candidates:
             if cand.exists():

@@ -1,9 +1,9 @@
 # grid.yaml
 gnn.layer_type:
+  - sageconv
   - gcnconv
   - ginconv
   - gatv2conv
-  - gcn2conv
 
 gnn.layers_mp:
   - 2

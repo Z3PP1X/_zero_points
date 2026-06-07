@@ -28,7 +28,7 @@ def test_convert_ignores_legacy_taylor_coeff_fields(tmp_path):
     data = ExpressionGraphConverter().convert(raw)
 
     assert data.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
-    assert data.x.shape[1] == 19
+    assert data.x.shape[1] == 22
     assert not hasattr(data, "taylor_coeffs")
     assert not hasattr(data, "inv_taylor_coeffs")
 
@@ -84,8 +84,8 @@ def test_enriched_graph_features(tmp_path):
     assert data.treewidth == 2 or data.tree_width == 2
 
     # 2. Node feature shape and values
-    # Node features: [node_type, depth, height, subtree_size, out_degree, betweenness, label_id, value, LPE1-4, RWPE1-4, cx, fx, yt]
-    assert data.x.shape == (3, 19)
+    # Node features: [node_type, depth, height, subtree_size, out_degree, betweenness, label_id, value, LPE1-4, RWPE1-4, cx, fx, yt, child_idx, parent_eb, parent_rel_type]
+    assert data.x.shape == (3, 22)
 
     root_idx = 0  # since order of nodes is preserved in networkx
     child1_idx = 1
@@ -101,6 +101,11 @@ def test_enriched_graph_features(tmp_path):
     assert root_features[5] > 0.0   # root betweenness centrality should be non-zero (since it connects children)
     assert root_features[7] == 0.0  # value
 
+    # Verify new node-projected edge features on root f1
+    assert root_features[19] == 0.0  # node_child_index (no parent)
+    assert root_features[20] == 0.0  # parent_edge_betweenness (no parent)
+    assert root_features[21] == 0.0  # parent_relation_type (no parent)
+
     # Verify Child 2 node (f3)
     child2_features = data.x[child2_idx].tolist()
     assert child2_features[0] == 2.0  # type (constant)
@@ -110,6 +115,17 @@ def test_enriched_graph_features(tmp_path):
     assert child2_features[4] == 0.0  # out_degree
     assert child2_features[5] == 0.0  # leaf betweenness centrality should be 0.0
     assert child2_features[7] == 2.0  # value (0.2 * 10^1 = 2.0)
+
+    # Verify new node-projected edge features on child 2 f3
+    assert child2_features[19] == 1.0  # node_child_index (second child)
+    assert child2_features[20] > 0.0   # parent_edge_betweenness should be > 0.0
+    assert child2_features[21] >= 0.0  # parent_relation_type should be encoded child_of index
+
+    # Verify child 1 node (f2)
+    child1_features = data.x[child1_idx].tolist()
+    assert child1_features[19] == 0.0  # node_child_index (first child)
+    assert child1_features[20] > 0.0   # parent_edge_betweenness should be > 0.0
+    assert child1_features[21] >= 0.0  # parent_relation_type
 
     # 3. LPE and RWPE Assertions
     # Check that they exist and have valid values (LPE columns are 8-11, RWPE columns are 12-15)

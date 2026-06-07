@@ -6,16 +6,6 @@ import torch.nn as nn
 from torch import optim
 from pathlib import Path
 import mlflow
-
-# Dynamic sys.path resolution to support package imports when run as scripts
-gnn_root = Path(__file__).resolve().parents[2]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[3]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
-
-from gnn.shared.models.classifiers import TestGraphNetwork
 from gnn.supervised_learning.preprocessing import GraphPipeline
 
 from torchmetrics.classification import (
@@ -23,13 +13,29 @@ from torchmetrics.classification import (
     MulticlassPrecision,
     MulticlassRecall,
 )
-
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, confusion_matrix
+from sklearn.metrics import (
+    roc_auc_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    confusion_matrix,
+)
+
+gnn_root = Path(__file__).resolve().parents[2]
+if str(gnn_root) not in sys.path:
+    sys.path.insert(0, str(gnn_root))
+src_root = Path(__file__).resolve().parents[3]
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
+
+from gnn.shared.models.classifiers import TestGraphNetwork # noqa
+
 
 NUM_CORES = 6
 torch.set_num_threads(NUM_CORES)
@@ -77,43 +83,46 @@ def train(model, loader, optimizer, criterion):
 def log_confusion_matrix(y_true, y_pred, epoch: int):
     # Compute confusion matrix
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-    
+
     # Plot confusion matrix
     fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+    im = ax.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
     ax.figure.colorbar(im, ax=ax)
-    
-    # We want to show all ticks...
-    ax.set(xticks=[0, 1],
-           yticks=[0, 1],
-           xticklabels=['Class 0', 'Class 1'],
-           yticklabels=['Class 0', 'Class 1'],
-           title=f'Confusion Matrix - Epoch {epoch + 1}',
-           ylabel='True label',
-           xlabel='Predicted label')
 
-    # Loop over data dimensions and create text annotations.
-    thresh = cm.max() / 2.
+    # We want to show all ticks...
+    ax.set(
+        xticks=[0, 1],
+        yticks=[0, 1],
+        xticklabels=["Class 0", "Class 1"],
+        yticklabels=["Class 0", "Class 1"],
+        title=f"Confusion Matrix - Epoch {epoch + 1}",
+        ylabel="True label",
+        xlabel="Predicted label",
+    )
+
+    thresh = cm.max() / 2.0
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
-            ax.text(j, i, format(cm[i, j], 'd'),
-                    ha="center", va="center",
-                    color="white" if cm[i, j] > thresh else "black")
-    
+            ax.text(
+                j,
+                i,
+                format(cm[i, j], "d"),
+                ha="center",
+                va="center",
+                color="white" if cm[i, j] > thresh else "black",
+            )
+
     fig.tight_layout()
-    
-    # Save to a temporary file
+
     temp_path = f"temp_cm_epoch_{epoch}.png"
     plt.savefig(temp_path, dpi=100)
     plt.close(fig)
-    
-    # Log to MLflow
+
     try:
         mlflow.log_artifact(temp_path, artifact_path="confusion_matrices")
     except Exception as e:
         print(f"Warning: Failed to log confusion matrix to MLflow: {e}")
-        
-    # Clean up temp file
+
     if os.path.exists(temp_path):
         try:
             os.remove(temp_path)
@@ -164,7 +173,16 @@ def evaluate(model, loader, criterion):
     precision_computed = precision_metric.compute().item()
     recall_computed = recall_metric.compute().item()
 
-    return avg_loss, accuracy, f1_computed, precision_computed, recall_computed, all_labels, all_preds, all_probs
+    return (
+        avg_loss,
+        accuracy,
+        f1_computed,
+        precision_computed,
+        recall_computed,
+        all_labels,
+        all_preds,
+        all_probs,
+    )
 
 
 def main(
@@ -175,13 +193,13 @@ def main(
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
 ):
-    # Make paths absolute relative to repo root to avoid cwd dependency issues
     repo_root = Path(__file__).resolve().parents[4]
     dataset_path = dataset_name
     save_dir = repo_root / "_models"
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / "best_model.pth"
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
+
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=dataset_path,
         mode=mode,
@@ -242,8 +260,8 @@ def main(
             print("  Training...")
             train_loss = train(model, train_loader, optimizer, criterion)
             print("  Evaluating...")
-            val_loss, val_acc, f1_val, prec_val, rec_val, y_true, y_pred, y_prob = evaluate(
-                model, test_loader, criterion
+            val_loss, val_acc, f1_val, prec_val, rec_val, y_true, y_pred, y_prob = (
+                evaluate(model, test_loader, criterion)
             )
 
             # Compute advanced metrics
@@ -256,9 +274,15 @@ def main(
             else:
                 roc_auc = 0.5
 
-            f1_classes = f1_score(y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0)
-            prec_classes = precision_score(y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0)
-            rec_classes = recall_score(y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0)
+            f1_classes = f1_score(
+                y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0
+            )
+            prec_classes = precision_score(
+                y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0
+            )
+            rec_classes = recall_score(
+                y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0
+            )
 
             f1_c0, f1_c1 = float(f1_classes[0]), float(f1_classes[1])
             prec_c0, prec_c1 = float(prec_classes[0]), float(prec_classes[1])
@@ -308,6 +332,7 @@ def main(
 
     print("Training complete.")
 
+
 def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
     if "faster_algorithm" not in df.columns:
         boundaries = [
@@ -332,12 +357,14 @@ def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Start GNN Supervised Learning experiment")
+    parser = argparse.ArgumentParser(
+        description="Start GNN Supervised Learning experiment"
+    )
     parser.add_argument(
         "--dataset",
         type=str,
         default="run_20260408_160456/dataset_4",
-        help="Dataset name, optionally including run key (e.g. run_key/dataset_name)"
+        help="Dataset name, optionally including run key (e.g. run_key/dataset_name)",
     )
     parser.add_argument(
         "--dry-run",
@@ -349,29 +376,29 @@ if __name__ == "__main__":
         type=str,
         default="graph",
         choices=["graph", "tree", "tree_derivatives"],
-        help="Select GNN experiment mode: graph (with virtual nodes), tree (features on global node, f only) or tree_derivatives (f, f', f'' connected via global node)"
+        help="Select GNN experiment mode: graph (with virtual nodes), tree (features on global node, f only) or tree_derivatives (f, f', f'' connected via global node)",
     )
     parser.add_argument(
         "--enrich",
         action="store_true",
-        help="Toggles enriched features in supervised learning pipeline (uses 19 features instead of 8)."
+        help="Toggles enriched features in supervised learning pipeline (uses 19 features instead of 8).",
     )
     parser.add_argument(
         "--active-features",
         type=str,
         default=None,
-        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
+        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions).",
     )
     parser.add_argument(
         "--synthetic",
         action="store_true",
-        help="Enables synthetic mode: train on synthetic dataset, validate on curated dataset."
+        help="Enables synthetic mode: train on synthetic dataset, validate on curated dataset.",
     )
     parser.add_argument(
         "--synthetic-dataset",
         type=str,
         default=None,
-        help="Synthetic dataset name, optionally including run key (e.g. synthetic_run_key/synthetic_dataset_name)"
+        help="Synthetic dataset name, optionally including run key (e.g. synthetic_run_key/synthetic_dataset_name)",
     )
     args = parser.parse_args()
 
@@ -379,11 +406,10 @@ if __name__ == "__main__":
     repo_root = Path(__file__).resolve().parents[4]
 
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
+
     try:
         loader = UnifiedDataLoader.get_instance(
-            dataset_name=args.dataset,
-            mode=args.mode,
-            enrich=args.enrich
+            dataset_name=args.dataset, mode=args.mode, enrich=args.enrich
         )
         print("Curated dataset loaded successfully!")
         print(loader.data.tail())
@@ -394,9 +420,7 @@ if __name__ == "__main__":
     if args.synthetic and args.synthetic_dataset:
         try:
             synth_loader = UnifiedDataLoader.get_instance(
-                dataset_name=args.synthetic_dataset,
-                mode=args.mode,
-                enrich=args.enrich
+                dataset_name=args.synthetic_dataset, mode=args.mode, enrich=args.enrich
             )
             print("Synthetic dataset loaded successfully!")
             print(synth_loader.data.tail())
@@ -408,7 +432,9 @@ if __name__ == "__main__":
         try:
             active_feats = None
             if args.active_features is not None:
-                active_feats = [f.strip() for f in args.active_features.split(",") if f.strip()]
+                active_feats = [
+                    f.strip() for f in args.active_features.split(",") if f.strip()
+                ]
                 print(f"Aktivierte Features: {active_feats}")
             main(
                 dataset_name=args.dataset,
@@ -419,6 +445,8 @@ if __name__ == "__main__":
                 synthetic_dataset=args.synthetic_dataset,
             )
         except Exception as e:
-            print(f"Failed to start training run (expected if datasets/connections not available in sandbox): {e}")
+            print(
+                f"Failed to start training run (expected if datasets/connections not available in sandbox): {e}"
+            )
     else:
         print("[Dry Run] Supervised script verification completed successfully.")

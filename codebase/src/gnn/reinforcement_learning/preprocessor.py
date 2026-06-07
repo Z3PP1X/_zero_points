@@ -68,7 +68,7 @@ class Preprocessor:
     def padded_node_feature_count(self) -> int:
         if self.active_features is not None:
             return len(self.active_features)
-        return 19
+        return 22
 
     @property
     def known_problem_ids(self) -> FrozenSet[str]:
@@ -135,7 +135,7 @@ class Preprocessor:
                     
                     if data.x is not None and len(data.x.shape) == 2:
                         num_features = data.x.shape[1]
-                        if num_features == 19:  # enrich=True (16 native + 3 custom slots)
+                        if num_features == 22:  # enrich=True (19 native + 3 custom slots)
                             data.x[idx_cx, 7] = float(cx_val)
                             data.x[idx_fx, 7] = float(fx_val)
                             data.x[idx_yt, 7] = float(yt_val)
@@ -152,7 +152,7 @@ class Preprocessor:
                     idx_global = data.node_ids.index("global")
                     if data.x is not None and len(data.x.shape) == 2:
                         num_features = data.x.shape[1]
-                        if num_features == 19:  # enrich=True (custom slots are indices 16, 17, 18)
+                        if num_features == 22:  # enrich=True (custom slots are indices 16, 17, 18)
                             data.x[idx_global, 16] = float(cx_val)
                             data.x[idx_global, 17] = float(fx_val)
                             data.x[idx_global, 18] = float(yt_val)

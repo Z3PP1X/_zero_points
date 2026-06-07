@@ -15,6 +15,8 @@ dataset:
 
 expression_graph:
   enrich: True
+  synthetic: True
+  synthetic_dataset: run_20260604_154509/parallel_benchmark_results
 
 # --- Training Loop Section ---
 train:
@@ -46,6 +48,6 @@ gnn:
 # --- Optimizations ---
 optim:
   optimizer: adam
-  base_lr: 0.001
+  base_lr: 0.0001
   weight_decay: 0.0005
   scheduler: cosine_with_warmup

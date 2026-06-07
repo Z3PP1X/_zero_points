@@ -65,10 +65,11 @@ def test_virtual_nodes_injection_and_connections():
     converter = ExpressionGraphConverter()
     data_basic_graph = converter.convert(raw, heterogeneous=False, enrich=False, mode="graph")
 
-    # We expect 4 original nodes + 3 virtual nodes = 7 nodes, with 8 feature dimensions
-    assert data_basic_graph.num_nodes == 7
+    # We expect 4 original nodes + 3 virtual nodes + 1 virtual supernode = 8 nodes, with 8 feature dimensions
+    assert data_basic_graph.num_nodes == 8
     assert data_basic_graph.x.shape[1] == 8
-    assert len(data_basic_graph.node_ids) == 7
+    assert len(data_basic_graph.node_ids) == 8
+    assert "virtual_supernode" in data_basic_graph.node_ids
     assert "virtual_current_x" in data_basic_graph.node_ids
     assert "virtual_f_x" in data_basic_graph.node_ids
     assert "virtual_y_target" in data_basic_graph.node_ids
@@ -91,14 +92,15 @@ def test_virtual_nodes_injection_and_connections():
 
     # Test rich (RL, enrich=True) conversion in Graph Mode
     data_rich_graph = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph")
-    assert data_rich_graph.num_nodes == 7
-    assert data_rich_graph.x.shape[1] == 19
+    assert data_rich_graph.num_nodes == 8
+    assert data_rich_graph.x.shape[1] == 22
+    assert "virtual_supernode" in data_rich_graph.node_ids
     assert data_rich_graph.x[idx_cx, 0].item() == 5.0
 
     # Test rich conversion in Tree Mode
     data_rich_tree = converter.convert(raw, heterogeneous=False, enrich=True, mode="tree")
     assert data_rich_tree.num_nodes == 4
-    assert data_rich_tree.x.shape[1] == 19
+    assert data_rich_tree.x.shape[1] == 22
 
 
 def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
@@ -142,7 +144,7 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     idx_fx = data_graph.node_ids.index("virtual_f_x")
     idx_yt = data_graph.node_ids.index("virtual_y_target")
     
-    # In preprocessor, enrich=True is used by default (node features = 19)
+    # In preprocessor, enrich=True is used by default (node features = 22)
     # Value column is index 7
     assert data_graph.x[idx_cx, 7].item() == pytest.approx(1.5)
     assert data_graph.x[idx_fx, 7].item() == pytest.approx(-2.7)
@@ -268,7 +270,7 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     active_feats = ["node_type", "value", "virtual_current_x_val"]
     
     data_full = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph")
-    assert data_full.x.shape[1] == 19
+    assert data_full.x.shape[1] == 22
     
     from graph_utils import slice_active_features
     data_sliced = data_full.clone()

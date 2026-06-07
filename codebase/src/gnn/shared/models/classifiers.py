@@ -40,7 +40,7 @@ class TestGraphNetwork(nn.Module):
         self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False)
 
         self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim + global_dim, hidden_dim),
+            nn.Linear(2 * hidden_dim + global_dim, hidden_dim),
             LeakyReLU(),
             nn.Dropout(0.2),
             nn.Linear(hidden_dim, output_dim),
@@ -54,14 +54,31 @@ class TestGraphNetwork(nn.Module):
         return cls(input_dim=input_dim, global_dim=global_dim, **kwargs)
 
     def forward(self, x, edge_index, batch, global_features=None):
+        # Identify virtual nodes based on the input node features before transformation
+        node_types = x[:, 0].round().long()
+        is_virtual = (node_types >= 5) & (node_types <= 8)
+        is_real = ~is_virtual
+
         x = self.activation(self.conv1(x, edge_index))
         x = self.activation(self.conv2(x, edge_index))
         x = self.activation(self.conv3(x, edge_index))
-
-        x = global_mean_pool(x, batch)
+        
+        num_graphs = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        
+        if is_real.any():
+            x_real_pooled = global_mean_pool(x[is_real], batch[is_real], size=num_graphs)
+        else:
+            x_real_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
+            
+        if is_virtual.any():
+            x_virt_pooled = global_mean_pool(x[is_virtual], batch[is_virtual], size=num_graphs)
+        else:
+            x_virt_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
+            
+        x_pooled = torch.cat([x_real_pooled, x_virt_pooled], dim=-1)
 
         if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
-            x = torch.cat([x, global_features], dim=-1)
+            global_features = global_features.view(x_pooled.size(0), -1)
+            x_pooled = torch.cat([x_pooled, global_features], dim=-1)
 
-        return self.classifier(x)
+        return self.classifier(x_pooled)

@@ -6,6 +6,22 @@ import torch.nn as nn
 from torch.nn import LeakyReLU
 from torch_geometric.nn import GATv2Conv, GCNConv, GINConv, SAGEConv, global_mean_pool
 
+def split_global_mean_pool(x: torch.Tensor, batch_index: torch.Tensor, is_virtual: torch.Tensor) -> torch.Tensor:
+    num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+    is_real = ~is_virtual
+    
+    if is_real.any():
+        x_real_pooled = global_mean_pool(x[is_real], batch_index[is_real], size=num_graphs)
+    else:
+        x_real_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
+        
+    if is_virtual.any():
+        x_virt_pooled = global_mean_pool(x[is_virtual], batch_index[is_virtual], size=num_graphs)
+    else:
+        x_virt_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
+        
+    return torch.cat([x_real_pooled, x_virt_pooled], dim=-1)
+
 # Architecture choices
 ARCHITECTURE_NAMES: List[str] = [
     "gatv2_stack",
@@ -226,9 +242,23 @@ class GraphPolicyBackbone(nn.Module):
         self.activation = get_activation_module(activation)
         self.convs = nn.ModuleList(self._build_convs(architecture, layout, hidden_dim, heads, self.activation))
         
-        # Build shared projection head
+        # Task 3: Seed projections
+        self.current_x_proj = nn.Linear(1, layout.node_input_dim)
+        self.y_target_proj = nn.Linear(1, layout.node_input_dim)
+        
+        # Task 4: Virtual update MLPs
+        self.virtual_update_mlps = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU()
+            )
+            for _ in range(num_layers)
+        ])
+        
+        # Build shared projection head (Task 1: input size is 2 * hidden_dim + global)
         self.shared = nn.Sequential(
-            nn.Linear(hidden_dim + layout.global_input_dim, hidden_dim),
+            nn.Linear(2 * hidden_dim + layout.global_input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             self.activation,
             nn.Dropout(dropout),
@@ -303,18 +333,72 @@ class GraphPolicyBackbone(nn.Module):
         return layers
 
     def forward(self, x, edge_index, batch_index, global_features=None):
-        x = self.activation(self.node_encoder(x))
-        for conv in self.convs:
-            x = self.activation(conv(x, edge_index))
-        x = global_mean_pool(x, batch_index)
+        # Identify node types and masks
+        node_types = x[:, 0].round().long()
+        is_cx = (node_types == 5)
+        is_fx = (node_types == 6)
+        is_yt = (node_types == 7)
+        is_super = (node_types == 8)
+        is_virtual = (node_types >= 5) & (node_types <= 8)
+        is_real = ~is_virtual
+        is_func_op = (node_types == 1) | (node_types == 4)
+        
+        # Base encoding of all nodes
+        x_enc = self.activation(self.node_encoder(x))
+        
+        # Task 3: Seed virtual nodes from graph content
         if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
+            current_x = global_features[:, 0:1] # [num_graphs, 1]
+            y_target = global_features[:, 1:2]  # [num_graphs, 1]
+            
+            cx_proj = self.current_x_proj(current_x) # [num_graphs, node_input_dim]
+            yt_proj = self.y_target_proj(y_target)   # [num_graphs, node_input_dim]
+            
+            if is_cx.any():
+                x_enc[is_cx] = x_enc[is_cx] + cx_proj[batch_index[is_cx]]
+            if is_yt.any():
+                x_enc[is_yt] = x_enc[is_yt] + yt_proj[batch_index[is_yt]]
+
+        num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+        
+        # Seed virtual_f_x with mean of function/operator node embeddings
+        if is_func_op.any() and is_fx.any():
+            fo_mean = global_mean_pool(x_enc[is_func_op], batch_index[is_func_op], size=num_graphs)
+            x_enc[is_fx] = x_enc[is_fx] + fo_mean[batch_index[is_fx]]
+            
+        # Seed global supernode with mean of all node embeddings
+        if is_super.any():
+            all_mean = global_mean_pool(x_enc, batch_index, size=num_graphs)
+            x_enc[is_super] = x_enc[is_super] + all_mean[batch_index[is_super]]
+            
+        # Run GNN convolutions with between-layer updates (Task 4)
+        h = x_enc
+        for layer_idx, conv in enumerate(self.convs):
+            h = self.activation(conv(h, edge_index))
+            
+            # Update virtual node embeddings
+            if is_virtual.any():
+                h_virt = h[is_virtual]
+                h_virt_updated = self.virtual_update_mlps[layer_idx](h_virt)
+                h[is_virtual] = h_virt_updated
+                
+            # Broadcast updated supernode embedding (type 8) to all real nodes
+            if is_super.any() and is_real.any():
+                super_embeddings = h[is_super]
+                h[is_real] = h[is_real] + super_embeddings[batch_index[is_real]]
+                
+        # Task 1: Split pooling
+        h_pooled = split_global_mean_pool(h, batch_index, is_virtual)
+        
+        if global_features is not None:
+            global_features = global_features.view(h_pooled.size(0), -1)
             global_features = self.activation(self.global_encoder(global_features))
-            x = torch.cat([x, global_features], dim=-1)
+            h_pooled = torch.cat([h_pooled, global_features], dim=-1)
         else:
-            dummy_global = torch.zeros(x.size(0), self.layout.global_input_dim, device=x.device, dtype=x.dtype)
-            x = torch.cat([x, dummy_global], dim=-1)
-        return self.shared(x)
+            dummy_global = torch.zeros(h_pooled.size(0), self.layout.global_input_dim, device=h_pooled.device, dtype=h_pooled.dtype)
+            h_pooled = torch.cat([h_pooled, dummy_global], dim=-1)
+            
+        return self.shared(h_pooled)
 
 
 def build_graph_policy_backbone(
