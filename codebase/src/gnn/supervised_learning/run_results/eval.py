@@ -146,25 +146,45 @@ class GNNResultEvaluator:
         # Plot Layer Summary Bar Chart on the right (spanning both rows)
         ax_summary = fig.add_subplot(gs[:, 6])
         
-        # Compute layer summary comparison (always computed from overall_df to show global comparison)
+        # Compute layer summary comparison
         summary_metrics = ['auc', 'pr_auc', 'accuracy', 'precision', 'recall', 'f1', 'loss']
-        # Filter metrics to only those present in the dataframe columns
         present_metrics = [m for m in summary_metrics if m in overall_df.columns]
         
-        if 'layer_type' in overall_df.columns and len(present_metrics) > 0:
-            layer_summary = overall_df.groupby('layer_type')[present_metrics].mean()
+        # Decide grouping column and title dynamically based on the current slice
+        group_col = None
+        legend_title = ""
+        chart_title = ""
+        
+        if 'layer_type' in overall_df.columns:
+            group_col = 'layer_type'
+            legend_title = "Model Architecture"
+            chart_title = "Architecture Comparison (Overall mean)"
+            
+        # If the slice is filtered to one layer_type, group by activation function instead if available
+        if 'layer_type' in df.columns and df['layer_type'].nunique() == 1 and 'act' in overall_df.columns:
+            group_col = 'act'
+            legend_title = "Activation Function"
+            chart_title = f"Activation Function Comparison for {df['layer_type'].iloc[0]}"
+        # If the slice is filtered to one activation function, group by layer_type
+        elif 'act' in df.columns and df['act'].nunique() == 1 and 'layer_type' in overall_df.columns:
+            group_col = 'layer_type'
+            legend_title = "Model Architecture"
+            chart_title = f"Architecture Comparison for {df['act'].iloc[0]}"
+            
+        if group_col is not None and len(present_metrics) > 0:
+            # Group the current slice's data (or overall_df if it's overall plot) to show comparison
+            comparison_df = df if (df[group_col].nunique() > 1) else overall_df
+            layer_summary = comparison_df.groupby(group_col)[present_metrics].mean()
             
             # Premium color palette using qualitative maps
-            # Choose from a beautiful palette: Deep Teals, Coral, Muted Purple, Amber, Slate Blue
             premium_palette = ['#2A9D8F', '#E76F51', '#264653', '#F4A261', '#E9C46A', '#457B9D', '#1D3557']
-            num_layers = len(layer_summary)
-            # Use color palette, wrap around if needed
-            colors = [premium_palette[i % len(premium_palette)] for i in range(num_layers)]
+            num_groups = len(layer_summary)
+            colors = [premium_palette[i % len(premium_palette)] for i in range(num_groups)]
             
-            # Plot bar chart (transposed so metrics are on X-axis, layer types are bars)
+            # Plot bar chart (transposed so metrics are on X-axis, layer types/activations are bars)
             layer_summary.T.plot(kind='bar', ax=ax_summary, width=0.8, color=colors, edgecolor='none')
             
-            ax_summary.set_title("Architecture Comparison (Overall mean)", fontsize=13, fontweight='bold', pad=12)
+            ax_summary.set_title(chart_title, fontsize=13, fontweight='bold', pad=12)
             ax_summary.set_xlabel("Performance Metrics", fontsize=10, fontweight='bold', labelpad=8)
             ax_summary.set_ylabel("Metric Score", fontsize=10, fontweight='bold', labelpad=8)
             ax_summary.set_ylim(0, 1.1)
@@ -172,7 +192,7 @@ class GNNResultEvaluator:
             
             # Style legend
             ax_summary.legend(
-                title="Model Architecture", 
+                title=legend_title, 
                 frameon=True, 
                 facecolor='#f8f9fa', 
                 edgecolor='none', 
@@ -260,6 +280,20 @@ class GNNResultEvaluator:
                             overall_df=df,
                             output_path=mp_dir / f"{mp}_layers.png",
                             title=f"Run: {run} - MP Layers: {mp} Hyperparameter Grid ({self.naming_var})"
+                        )
+
+            # 4. Diagrams by observed act (activation function)
+            if 'act' in df.columns:
+                act_values = df['act'].dropna().unique()
+                act_dir = run_out_dir / "act"
+                for act in act_values:
+                    sub_df = df[df['act'] == act]
+                    if not sub_df.empty:
+                        self.generate_plots_for_df(
+                            df=sub_df,
+                            overall_df=df,
+                            output_path=act_dir / f"{act}.png",
+                            title=f"Run: {run} - Activation: {act} Hyperparameter Grid ({self.naming_var})"
                         )
                         
         print(f"Evaluation complete! Plots saved to {self.output_dir}")

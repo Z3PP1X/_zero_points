@@ -60,6 +60,8 @@ To support evaluation on imbalanced datasets, we introduced Precision-Recall AUC
   - Expanded `metrics` inside `GNNResultEvaluator` to include `pr_auc` and `loss`, rendering a wider 2x7 grid of heatmaps (at `figsize=(32, 11)`) and placing the summary bar chart in column 6.
   - Implemented a white-to-red colormap (`self.cmap_loss`) for `loss` heatmaps to intuitively highlight high-loss configuration areas in red.
   - Included `pr_auc` and `loss` in the overall layer-type architecture comparison bar charts.
+  - Added support for activation function sweeps. If an `'act'` column is present in the results, it automatically generates slice plots under `eval_plots/.../act/{activation_function}.png` comparing that activation across layer types.
+  - Made the summary bar chart dynamic: if evaluating a single layer type, it automatically switches to compare different activation functions; if evaluating a single activation function, it switches to compare layer types.
 
 ---
 
