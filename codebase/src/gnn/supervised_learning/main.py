@@ -342,20 +342,20 @@ def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
             df["Newton_absTime"] < df["GMGF_absTime"],
             df["Newton_absTime"] > df["GMGF_absTime"],
         ]
-        values = [0, 1]
+        values = [1, 0]
         df["faster_algorithm"] = np.select(boundaries, values)
 
     counts = df["faster_algorithm"].value_counts()
     total = len(df)
-    newton_count = counts.get(0, 0)
-    gmgf_count = counts.get(1, 0)
+    newton_count = counts.get(1, 0)
+    gmgf_count = counts.get(0, 0)
     perc_newton = (newton_count / total) * 100 if total > 0 else 0.0
     perc_gmgf = (gmgf_count / total) * 100 if total > 0 else 0.0
 
     print(f"--- Verteilung für Dataset: {dataset_name} ---")
     print(f"Gesamtanzahl Samples: {total}")
-    print(f"Klasse 0 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
-    print(f"Klasse 1 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
+    print(f"Klasse 1 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
+    print(f"Klasse 0 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
     print("-" * (30 + len(dataset_name)))
 
 

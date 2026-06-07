@@ -25,12 +25,12 @@ class FeatureEngineering:
         self._loader = loader
 
     def _tag_faster_algorithm(self):
-        """Set binary labels for the faster algorithm: 0: Newton, 1: gMGF"""
+        """Set binary labels for the faster algorithm: 1: Newton, 0: gMGF"""
         boundaries = [
             self._loader.data["Newton_absTime"] < self._loader.data["GMGF_absTime"],
             self._loader.data["Newton_absTime"] > self._loader.data["GMGF_absTime"],
         ]
-        values = [0, 1]
+        values = [1, 0]
         self._loader.add_column("faster_algorithm", np.select(boundaries, values))
 
     def _conserve_relationships(self):
