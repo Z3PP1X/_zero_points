@@ -298,17 +298,25 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         # PyG's compute_loss() checks register.loss_dict BEFORE falling through to the default
         # F.nll_loss path (see torch_geometric/graphgym/loss.py lines 27-30).
         # The custom function receives pred/true AFTER the squeeze in loss.py lines 23-24.
+        # IMPORTANT: This function must NEVER return None, so it always intercepts and
+        # prevents fallthrough to the cfg.model.loss_fun check.
         _class_weights = class_weights  # capture in closure
 
         @register_loss('weighted_cross_entropy')
         def weighted_cross_entropy_loss(pred, true):
+            device = pred.device
+            w = _class_weights.to(device)
             # Multiclass path: pred is [N, C], true is [N]
             if pred.ndim > 1 and true.ndim == 1:
-                device = pred.device
-                w = _class_weights.to(device)
                 log_pred = F.log_softmax(pred, dim=-1)
                 return F.nll_loss(log_pred, true.long(), weight=w), log_pred
-            return None  # fall through to default for other cases
+            # Binary/multilabel fallback: pred is [N], true is [N]
+            else:
+                true = true.float()
+                bce_loss = torch.nn.BCEWithLogitsLoss(
+                    pos_weight=w[1] / w[0]  # ratio of positive class weight
+                )
+                return bce_loss(pred, true), torch.sigmoid(pred)
 
     except Exception as e:
         print(f"[Warning] Failed to compute class weights or register weighted loss: {e}")
