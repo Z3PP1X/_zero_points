@@ -138,3 +138,24 @@ To reflect the new 3-way split in result visualizations and to handle the expand
 - Updated the directory rename regex to flexibly capture all known grid parameters (`layer_type`, `layers_mp`, `dim_inner`, `dropout`, `graph_pooling`, `act`) instead of a hardcoded pattern.
 - Added a final summary report listing all generated aggregated CSV files after batch aggregation completes.
 
+---
+
+## 9. Architecture-Based Evaluation Plot Organization
+
+To ensure that hyperparameter slicing plots (e.g. by layer count, activation function, and pooling strategy) are not misleadingly aggregated across different GNN architectures, the evaluation pipeline in `eval.py` has been updated to organize plots under architecture-specific subdirectories:
+- **Nested Directory Structure**: Hyperparameter slice plots are now nested under the respective model architecture directory (e.g. `layer_type/gatv2conv/layers_mp/`, `layer_type/gatv2conv/act/`, and `layer_type/gatv2conv/graph_pooling/`).
+- **Targeted Slice Filtering**: Each slice plot is computed and plotted specifically on the filtered subset of data belonging to that architecture, with the summary bar chart on the right comparing other configurations within the same architecture.
+- **Run-Level Comparison**: The global overall plot comparing architectures and the cross-split comparison charts are kept at the run-level.
+- **Flexible Summary Grouping**: Modified `generate_plots_for_df` to accept an explicit `group_col` argument, enabling correct title labeling and legend mapping depending on the active slice variable.
+
+---
+
+## 10. Epoch-by-Epoch Validation of Both Splits (Synthetic vs Curated)
+
+To support tracking generalization during training, we restructured the validation step in GraphGym to evaluate both the unseen synthetic data and the curated real-world data at each epoch without either influencing training weight updates:
+- **Multiple Validation Dataloaders**: Overrode `val_dataloader` in `main_graphgym.py` to return `[val_loader, test_loader]` (synthetic test split + curated split) in synthetic mode.
+- **Dataloader-Aware LoggerCallback**: Patched `LoggerCallback.on_validation_batch_end` and `on_validation_epoch_end` in `loader_graphgym.py` to route batch statistics to `val_logger` (for synthetic) and `test_logger` (for curated) separately.
+- **Metric Isolation**: Modified `ValMetricLogger` in `main_graphgym.py` to accumulate and log metrics per dataloader index, using `val_pr_auc` (on index 0) for ModelCheckpoint selection, and logging `val_pr_auc_curated` (on index 1) for visualization.
+- **Epoch-by-Epoch Test Aggregation**: Patched `is_split` and `agg_runs` in `aggregate_graphgym.py` to allow the `test` split (curated validation) to be aggregated epoch-by-epoch just like `val` (synthetic validation), generating `test.csv`, `test_best.csv`, and `test_bestepoch.csv` automatically.
+- **Evaluation Labels**: Updated `run_labels` and the summary comparison chart in `eval.py` to distinguish between `Validation Synthetic (Unseen Synthetic)` and `Validation Curated (Curated Real)`.
+

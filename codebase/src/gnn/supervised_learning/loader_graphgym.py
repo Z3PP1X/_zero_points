@@ -67,6 +67,25 @@ def custom_classification_binary(self):
 pyg_logger.Logger.classification_binary = custom_classification_binary
 
 
+# Patch LoggerCallback to support multiple validation loaders
+def custom_on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+    if outputs is None:
+        return
+    stats = self._get_stats(self._val_epoch_start_time, outputs, trainer)
+    if dataloader_idx == 0:
+        self.val_logger.update_stats(**stats)
+    elif dataloader_idx == 1 and len(self._logger) > 2:
+        self.test_logger.update_stats(**stats)
+
+def custom_on_validation_epoch_end(self, trainer, pl_module):
+    self.val_logger.write_epoch(trainer.current_epoch)
+    if len(self._logger) > 2:
+        self.test_logger.write_epoch(trainer.current_epoch)
+
+pyg_logger.LoggerCallback.on_validation_batch_end = custom_on_validation_batch_end
+pyg_logger.LoggerCallback.on_validation_epoch_end = custom_on_validation_epoch_end
+
+
 register_act("gelu", nn.GELU)
 register_act("leaky_relu", nn.LeakyReLU)
 register_act("tanh", nn.Tanh)

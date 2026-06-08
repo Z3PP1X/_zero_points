@@ -53,12 +53,12 @@ class GNNResultEvaluator:
             "train": "Training (Synthetic)",
             "train_best": "Training Best (Synthetic)",
             "train_bestepoch": "Training Best Epoch (Synthetic)",
-            "test": "Test (Unseen Synthetic)",
-            "test_best": "Test Best (Unseen Synthetic)",
-            "test_bestepoch": "Test Best Epoch (Unseen Synthetic)",
-            "val": "Validation (Curated Real)",
-            "val_best": "Validation Best (Curated Real)",
-            "val_bestepoch": "Validation Best Epoch (Curated Real)",
+            "val": "Validation Synthetic (Unseen Synthetic)",
+            "val_best": "Validation Synthetic Best (Unseen Synthetic)",
+            "val_bestepoch": "Validation Synthetic Best Epoch (Unseen Synthetic)",
+            "test": "Validation Curated (Curated Real)",
+            "test_best": "Validation Curated Best (Curated Real)",
+            "test_bestepoch": "Validation Curated Best Epoch (Curated Real)",
         }
         
         # Heatmap colormap (white to premium emerald green)
@@ -79,7 +79,7 @@ class GNNResultEvaluator:
             raise FileNotFoundError(f"Data file not found: {file_path}")
         return pd.read_csv(file_path)
 
-    def generate_plots_for_df(self, df: pd.DataFrame, overall_df: pd.DataFrame, output_path: Path, title: str):
+    def generate_plots_for_df(self, df: pd.DataFrame, overall_df: pd.DataFrame, output_path: Path, title: str, group_col: str = None):
         """
         Generates a unified plot containing a 2x4 grid of pivot heatmaps
         and a layer summary comparison bar chart.
@@ -176,31 +176,69 @@ class GNNResultEvaluator:
         present_metrics = [m for m in summary_metrics if m in overall_df.columns]
         
         # Decide grouping column and title dynamically based on the current slice
-        group_col = None
         legend_title = ""
         chart_title = ""
         
-        if 'layer_type' in overall_df.columns:
-            group_col = 'layer_type'
-            legend_title = "Model Architecture"
-            chart_title = "Architecture Comparison (Overall mean)"
-            
-        # If the slice is filtered to one layer_type, group by activation function instead if available
-        if 'layer_type' in df.columns and df['layer_type'].nunique() == 1 and 'act' in overall_df.columns:
-            group_col = 'act'
-            legend_title = "Activation Function"
-            chart_title = f"Activation Function Comparison for {df['layer_type'].iloc[0]}"
-        # If the slice is filtered to one activation function, group by layer_type
-        elif 'act' in df.columns and df['act'].nunique() == 1 and 'layer_type' in overall_df.columns:
-            group_col = 'layer_type'
-            legend_title = "Model Architecture"
-            chart_title = f"Architecture Comparison for {df['act'].iloc[0]}"
-        # If the slice is filtered to one graph_pooling, keep architecture grouping
-        elif 'graph_pooling' in df.columns and df['graph_pooling'].nunique() == 1:
-            if group_col is None and 'layer_type' in overall_df.columns:
+        if group_col is not None:
+            # Map explicit group_col to titles and legends
+            if group_col == 'layers_mp':
+                legend_title = "MP Layers"
+                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
+                    chart_title = f"MP Layers Comparison for {df['layer_type'].iloc[0]}"
+                else:
+                    chart_title = "MP Layers Comparison"
+            elif group_col == 'act':
+                legend_title = "Activation Function"
+                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
+                    chart_title = f"Activation Function Comparison for {df['layer_type'].iloc[0]}"
+                else:
+                    chart_title = "Activation Function Comparison"
+            elif group_col == 'graph_pooling':
+                legend_title = "Graph Pooling"
+                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
+                    chart_title = f"Pooling Comparison for {df['layer_type'].iloc[0]}"
+                else:
+                    chart_title = "Pooling Comparison"
+            elif group_col == 'layer_type':
+                legend_title = "Model Architecture"
+                chart_title = "Architecture Comparison (Overall mean)"
+        else:
+            # Auto-detect grouping column
+            if 'layer_type' in overall_df.columns and overall_df['layer_type'].nunique() > 1:
                 group_col = 'layer_type'
                 legend_title = "Model Architecture"
-                chart_title = f"Architecture Comparison for pooling={df['graph_pooling'].iloc[0]}"
+                chart_title = "Architecture Comparison (Overall mean)"
+            elif 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
+                lt = df['layer_type'].iloc[0]
+                if 'act' in overall_df.columns and overall_df['act'].nunique() > 1:
+                    group_col = 'act'
+                    legend_title = "Activation Function"
+                    chart_title = f"Activation Function Comparison for {lt}"
+                elif 'layers_mp' in overall_df.columns and overall_df['layers_mp'].nunique() > 1:
+                    group_col = 'layers_mp'
+                    legend_title = "MP Layers"
+                    chart_title = f"MP Layers Comparison for {lt}"
+                elif 'graph_pooling' in overall_df.columns and overall_df['graph_pooling'].nunique() > 1:
+                    group_col = 'graph_pooling'
+                    legend_title = "Graph Pooling"
+                    chart_title = f"Pooling Comparison for {lt}"
+                else:
+                    group_col = 'layer_type'
+                    legend_title = "Model Architecture"
+                    chart_title = f"Architecture Comparison for {lt}"
+            else:
+                if 'layer_type' in overall_df.columns:
+                    group_col = 'layer_type'
+                    legend_title = "Model Architecture"
+                    chart_title = "Architecture Comparison"
+                elif 'act' in overall_df.columns:
+                    group_col = 'act'
+                    legend_title = "Activation Function"
+                    chart_title = "Activation Function Comparison"
+                elif 'layers_mp' in overall_df.columns:
+                    group_col = 'layers_mp'
+                    legend_title = "MP Layers"
+                    chart_title = "MP Layers Comparison"
             
         if group_col is not None and len(present_metrics) > 0:
             # Group the current slice's data (or overall_df if it's overall plot) to show comparison
@@ -267,8 +305,8 @@ class GNNResultEvaluator:
         """
         split_files = {
             "Train (Synthetic)": "train_bestepoch",
-            "Test (Unseen Synthetic)": "test_bestepoch",
-            "Val (Curated Real)": "val_bestepoch",
+            "Validation Synthetic": "val_bestepoch",
+            "Validation Curated": "test_bestepoch",
         }
         
         summary_metrics = ['auc', 'pr_auc', 'accuracy', 'precision', 'recall', 'f1', 'loss']
@@ -356,61 +394,70 @@ class GNNResultEvaluator:
                 title=f"{label} - Overall Hyperparameter Grid ({self.naming_var})"
             )
             
-            # 2. Diagrams by observed layer_type
+            # 2. Diagrams by observed layer_type (nested architecture folders)
             if 'layer_type' in df.columns:
                 layer_types = df['layer_type'].dropna().unique()
-                layer_dir = run_out_dir / "layer_type"
                 for lt in layer_types:
-                    sub_df = df[df['layer_type'] == lt]
-                    if not sub_df.empty:
-                        self.generate_plots_for_df(
-                            df=sub_df,
-                            overall_df=df,
-                            output_path=layer_dir / f"{lt}.png",
-                            title=f"{label} - Layer: {lt} ({self.naming_var})"
-                        )
-            
-            # 3. Diagrams by observed layers_mp
-            if 'layers_mp' in df.columns:
-                mp_values = df['layers_mp'].dropna().unique()
-                mp_dir = run_out_dir / "layers_mp"
-                for mp in mp_values:
-                    sub_df = df[df['layers_mp'] == mp]
-                    if not sub_df.empty:
-                        self.generate_plots_for_df(
-                            df=sub_df,
-                            overall_df=df,
-                            output_path=mp_dir / f"{mp}_layers.png",
-                            title=f"{label} - MP Layers: {mp} ({self.naming_var})"
-                        )
-
-            # 4. Diagrams by observed act (activation function)
-            if 'act' in df.columns:
-                act_values = df['act'].dropna().unique()
-                act_dir = run_out_dir / "act"
-                for act in act_values:
-                    sub_df = df[df['act'] == act]
-                    if not sub_df.empty:
-                        self.generate_plots_for_df(
-                            df=sub_df,
-                            overall_df=df,
-                            output_path=act_dir / f"{act}.png",
-                            title=f"{label} - Activation: {act} ({self.naming_var})"
-                        )
-
-            # 5. Diagrams by observed graph_pooling
-            if 'graph_pooling' in df.columns:
-                pooling_values = df['graph_pooling'].dropna().unique()
-                pooling_dir = run_out_dir / "graph_pooling"
-                for pooling in pooling_values:
-                    sub_df = df[df['graph_pooling'] == pooling]
-                    if not sub_df.empty:
-                        self.generate_plots_for_df(
-                            df=sub_df,
-                            overall_df=df,
-                            output_path=pooling_dir / f"{pooling}.png",
-                            title=f"{label} - Pooling: {pooling} ({self.naming_var})"
-                        )
+                    arch_df = df[df['layer_type'] == lt]
+                    if arch_df.empty:
+                        continue
+                        
+                    # Create architecture subdirectory
+                    arch_dir = run_out_dir / "layer_type" / lt
+                    arch_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # 2a. Architecture Overall Diagram
+                    self.generate_plots_for_df(
+                        df=arch_df,
+                        overall_df=arch_df,
+                        output_path=arch_dir / "overall.png",
+                        title=f"{label} - Layer: {lt} - Overall ({self.naming_var})"
+                    )
+                    
+                    # 2b. Slices by observed layers_mp (within this architecture)
+                    if 'layers_mp' in arch_df.columns:
+                        mp_values = arch_df['layers_mp'].dropna().unique()
+                        mp_dir = arch_dir / "layers_mp"
+                        for mp in mp_values:
+                            sub_df = arch_df[arch_df['layers_mp'] == mp]
+                            if not sub_df.empty:
+                                self.generate_plots_for_df(
+                                    df=sub_df,
+                                    overall_df=arch_df,
+                                    output_path=mp_dir / f"{mp}_layers.png",
+                                    title=f"{label} - Layer: {lt} - MP Layers: {mp} ({self.naming_var})",
+                                    group_col="layers_mp"
+                                )
+        
+                    # 2c. Slices by observed act (activation function, within this architecture)
+                    if 'act' in arch_df.columns:
+                        act_values = arch_df['act'].dropna().unique()
+                        act_dir = arch_dir / "act"
+                        for act in act_values:
+                            sub_df = arch_df[arch_df['act'] == act]
+                            if not sub_df.empty:
+                                self.generate_plots_for_df(
+                                    df=sub_df,
+                                    overall_df=arch_df,
+                                    output_path=act_dir / f"{act}.png",
+                                    title=f"{label} - Layer: {lt} - Activation: {act} ({self.naming_var})",
+                                    group_col="act"
+                                )
+        
+                    # 2d. Slices by observed graph_pooling (pooling function, within this architecture)
+                    if 'graph_pooling' in arch_df.columns:
+                        pooling_values = arch_df['graph_pooling'].dropna().unique()
+                        pooling_dir = arch_dir / "graph_pooling"
+                        for pooling in pooling_values:
+                            sub_df = arch_df[arch_df['graph_pooling'] == pooling]
+                            if not sub_df.empty:
+                                self.generate_plots_for_df(
+                                    df=sub_df,
+                                    overall_df=arch_df,
+                                    output_path=pooling_dir / f"{pooling}.png",
+                                    title=f"{label} - Layer: {lt} - Pooling: {pooling} ({self.naming_var})",
+                                    group_col="graph_pooling"
+                                )
                         
         # 6. Generate cross-split comparison plot
         print("  Generating split comparison plot...")
