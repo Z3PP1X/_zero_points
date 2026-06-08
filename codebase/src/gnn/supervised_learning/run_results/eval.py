@@ -319,6 +319,12 @@ class GNNResultEvaluator:
             elif group_col == 'layer_type':
                 legend_title = "Model Architecture"
                 chart_title = "Architecture Comparison (Overall mean)"
+            elif group_col == 'base_lr':
+                legend_title = "Learning Rate"
+                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
+                    chart_title = f"Learning Rate Comparison for {df['layer_type'].iloc[0]}"
+                else:
+                    chart_title = "Learning Rate Comparison"
         else:
             # Auto-detect grouping column
             if 'layer_type' in overall_df.columns and overall_df['layer_type'].nunique() > 1:
@@ -339,6 +345,10 @@ class GNNResultEvaluator:
                     group_col = 'graph_pooling'
                     legend_title = "Graph Pooling"
                     chart_title = f"Pooling Comparison for {lt}"
+                elif 'base_lr' in overall_df.columns and overall_df['base_lr'].nunique() > 1:
+                    group_col = 'base_lr'
+                    legend_title = "Learning Rate"
+                    chart_title = f"Learning Rate Comparison for {lt}"
                 else:
                     group_col = 'layer_type'
                     legend_title = "Model Architecture"
@@ -356,6 +366,10 @@ class GNNResultEvaluator:
                     group_col = 'layers_mp'
                     legend_title = "MP Layers"
                     chart_title = "MP Layers Comparison"
+                elif 'base_lr' in overall_df.columns:
+                    group_col = 'base_lr'
+                    legend_title = "Learning Rate"
+                    chart_title = "Learning Rate Comparison"
             
         if group_col is not None and len(present_metrics) > 0:
             # Group the current slice's data (or overall_df if it's overall plot) to show comparison
@@ -574,14 +588,29 @@ class GNNResultEvaluator:
                         for pooling in pooling_values:
                             sub_df = arch_df[arch_df['graph_pooling'] == pooling]
                             if not sub_df.empty:
-                                self.generate_plots_for_df(
-                                    df=sub_df,
-                                    overall_df=arch_df,
-                                    output_path=pooling_dir / f"{pooling}.png",
-                                    title=f"{label} - Layer: {lt} - Pooling: {pooling} ({self.naming_var})",
-                                    group_col="graph_pooling"
-                                )
+                                    self.generate_plots_for_df(
+                                        df=sub_df,
+                                        overall_df=arch_df,
+                                        output_path=pooling_dir / f"{pooling}.png",
+                                        title=f"{label} - Layer: {lt} - Pooling: {pooling} ({self.naming_var})",
+                                        group_col="graph_pooling"
+                                    )
                         
+                    # 2e. Slices by observed base_lr (learning rate, within this architecture)
+                    if 'base_lr' in arch_df.columns:
+                        lr_values = arch_df['base_lr'].dropna().unique()
+                        if len(lr_values) > 1:
+                            lr_dir = arch_dir / "base_lr"
+                            for lr in lr_values:
+                                sub_df = arch_df[arch_df['base_lr'] == lr]
+                                if not sub_df.empty:
+                                    self.generate_plots_for_df(
+                                        df=sub_df,
+                                        overall_df=arch_df,
+                                        output_path=lr_dir / f"lr_{lr}.png",
+                                        title=f"{label} - Layer: {lt} - Learning Rate: {lr} ({self.naming_var})",
+                                        group_col="base_lr"
+                                    )                      
         # 6. Generate cross-split comparison plot
         print("  Generating split comparison plot...")
         self.generate_summary_comparison(

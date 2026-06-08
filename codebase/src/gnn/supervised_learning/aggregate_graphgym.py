@@ -134,12 +134,12 @@ def main():
             # Split into key-value pairs: key1_val1_key2_val2_...
             # The pattern is: word_word_word_value where value can be numeric
             # Use a more robust approach: find known parameter names
-            known_params = ['layer_type', 'layers_mp', 'dim_inner', 'dropout', 'graph_pooling', 'act']
+            known_params = ['layer_type', 'layers_mp', 'dim_inner', 'dropout', 'graph_pooling', 'act', 'base_lr']
             
             remaining = parts
             extracted = {}
             for param in known_params:
-                pattern = rf"{param}_([a-zA-Z0-9\.]+)"
+                pattern = rf"{param}_([a-zA-Z0-9\.-]+)"
                 m = re.search(pattern, remaining)
                 if m:
                     extracted[param] = m.group(1)
