@@ -97,8 +97,20 @@ agg_runs_mod.agg_runs = custom_agg_runs
 from torch_geometric.graphgym.utils.agg_runs import agg_runs, agg_batch
 
 def main():
+    import sys
     script_dir = Path(__file__).resolve().parent
-    results_dir = script_dir / "results"
+    
+    if len(sys.argv) > 1:
+        target = sys.argv[1]
+        # Check run_results first, then relative/absolute paths
+        if (script_dir / "run_results" / target).exists():
+            results_dir = script_dir / "run_results" / target
+        elif Path(target).exists():
+            results_dir = Path(target)
+        else:
+            results_dir = script_dir / target
+    else:
+        results_dir = script_dir / "results"
 
     if not results_dir.exists():
         print(f"Error: results directory not found at {results_dir}")

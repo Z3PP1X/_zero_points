@@ -153,7 +153,12 @@ class GNNResultEvaluator:
                     json.dump(self.class_balance, f, indent=4)
                 print(f"Saved computed class balance to {cb_file}")
             except Exception as e:
-                print(f"Warning: Fallback class balance calculation failed: {e}")
+                if isinstance(e, ModuleNotFoundError) and any(m in str(e) for m in ["torch", "gnn"]):
+                    print("\n[Warning] Fallback dataset loading failed because PyTorch or codebase dependencies are missing in this environment.")
+                    print("Please run the script using the correct Conda environment:")
+                    print("  /home/zapp1x/miniconda3/envs/pytorch/bin/python eval.py <naming_var>\n")
+                else:
+                    print(f"Warning: Fallback class balance calculation failed: {e}")
                 
     def get_class_balance_str(self) -> str:
         """Constructs a formatted string of the class balances."""
