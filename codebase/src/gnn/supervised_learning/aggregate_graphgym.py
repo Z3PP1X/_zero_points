@@ -11,7 +11,7 @@ def custom_is_split(s):
 
 def custom_agg_runs(dir, metric_best='auto'):
     import numpy as np
-    from torch_geometric.graphgym.utils.agg_runs import json_to_dict_list, join_list, agg_dict_list, makedirs_rm_exist, dict_list_to_json, dict_to_tb, dict_to_json, SummaryWriter, is_seed
+    from torch_geometric.graphgym.utils.agg_runs import json_to_dict_list, join_list, agg_dict_list, makedirs_rm_exist, dict_list_to_json, dict_list_to_tb, dict_to_json, SummaryWriter, is_seed
     from torch_geometric.graphgym.config import cfg
     
     results = {'train': None, 'val': None, 'test': None}
@@ -95,6 +95,7 @@ agg_runs_mod.is_split = custom_is_split
 agg_runs_mod.agg_runs = custom_agg_runs
 
 from torch_geometric.graphgym.utils.agg_runs import agg_runs, agg_batch
+agg_runs = custom_agg_runs
 
 def main():
     import sys
