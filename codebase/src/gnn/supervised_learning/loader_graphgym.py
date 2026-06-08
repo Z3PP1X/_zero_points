@@ -5,10 +5,11 @@ from torch_geometric.graphgym.register import register_loader, register_config
 from yacs.config import CfgNode as CN
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.graphgym.register import register_act
 import torch_geometric as pyg
-from torch_geometric.graphgym.register import register_layer
+from torch_geometric.graphgym.register import register_layer, register_loss
 from torch_geometric.nn.conv import GINEConv
 import math
 from torch.optim.lr_scheduler import LambdaLR
@@ -276,6 +277,42 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         train_indices = list(range(len(train_data_list)))
         val_indices = list(range(len(train_data_list), len(all_data_list)))
         test_indices = list(range(len(train_data_list), len(all_data_list)))
+
+    # --- Compute class weights from training data and register weighted cross entropy loss ---
+    try:
+        train_labels = torch.tensor(
+            [pipeline.train_dataset[i].y.item() for i in range(len(pipeline.train_dataset))]
+        )
+        class_counts = torch.bincount(train_labels.long(), minlength=2)
+        total_train = len(train_labels)
+        num_classes = len(class_counts)
+        # Same formula as main.py / preprocessing.py: total / (num_classes * count_per_class)
+        class_weights = total_train / (num_classes * class_counts.float().clamp(min=1))
+        class_weights = class_weights.to(torch.float)
+
+        print(f"[GraphGym] Computed class weights from {total_train} training samples:")
+        print(f"  Class 0 (gMGF):   count={class_counts[0].item()}, weight={class_weights[0].item():.4f}")
+        print(f"  Class 1 (Newton): count={class_counts[1].item()}, weight={class_weights[1].item():.4f}")
+
+        # Register a custom weighted cross entropy loss that overrides the default unweighted one.
+        # PyG's compute_loss() checks register.loss_dict BEFORE falling through to the default
+        # F.nll_loss path (see torch_geometric/graphgym/loss.py lines 27-30).
+        # The custom function receives pred/true AFTER the squeeze in loss.py lines 23-24.
+        _class_weights = class_weights  # capture in closure
+
+        @register_loss('weighted_cross_entropy')
+        def weighted_cross_entropy_loss(pred, true):
+            # Multiclass path: pred is [N, C], true is [N]
+            if pred.ndim > 1 and true.ndim == 1:
+                device = pred.device
+                w = _class_weights.to(device)
+                log_pred = F.log_softmax(pred, dim=-1)
+                return F.nll_loss(log_pred, true.long(), weight=w), log_pred
+            return None  # fall through to default for other cases
+
+    except Exception as e:
+        print(f"[Warning] Failed to compute class weights or register weighted loss: {e}")
+        print("[Warning] Falling back to unweighted cross entropy loss.")
 
     # Calculate and save class balance information for validation synthetic and curated datasets
     try:
