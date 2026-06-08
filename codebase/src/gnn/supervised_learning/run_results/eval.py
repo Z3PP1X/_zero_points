@@ -72,6 +72,118 @@ class GNNResultEvaluator:
             "premium_red", ["#FFFFFF", "#F8D7DA", "#842029"]
         )
         
+        # Load class balance information if available
+        self.class_balance = None
+        self.load_class_balance()
+        
+    def load_class_balance(self):
+        """Loads class_balance.json or dynamically computes it as a fallback."""
+        import json
+        cb_file = self.data_dir / "class_balance.json"
+        if cb_file.exists():
+            try:
+                with open(cb_file, "r", encoding="utf-8") as f:
+                    self.class_balance = json.load(f)
+                print(f"Loaded class balance from {cb_file}")
+            except Exception as e:
+                print(f"Warning: Failed to load class balance from {cb_file}: {e}")
+        else:
+            # Fallback: dynamically calculate it from datasets if possible
+            print(f"class_balance.json not found in {self.data_dir}. Attempting fallback calculation...")
+            try:
+                # Try loading dataset config to get names
+                config_file = self.base_dir.parent / "config_supervised.yaml"
+                dataset_name = "run_20260603_123013/parallel_benchmark_results"
+                synthetic_dataset_name = "run_20260604_154509/parallel_benchmark_results"
+                
+                if config_file.exists():
+                    import yaml
+                    with open(config_file, "r", encoding="utf-8") as f:
+                        cfg_data = yaml.safe_load(f)
+                    dataset_name = cfg_data.get("dataset", {}).get("name", dataset_name)
+                    synthetic_dataset_name = cfg_data.get("expression_graph", {}).get("synthetic_dataset", synthetic_dataset_name)
+                
+                # Import pipeline inside fallback
+                src_path = str(self.base_dir.parents[2])
+                if src_path not in sys.path:
+                    sys.path.insert(0, src_path)
+                    
+                from gnn.supervised_learning.preprocessing import GraphPipeline
+                from gnn.shared.utils.graph_loader import GraphDataLoader
+                
+                print(f"  Loading dataset for class balance: {dataset_name} / {synthetic_dataset_name}")
+                loader = GraphDataLoader(name=dataset_name, mode="graph", enrich=True)
+                pipeline = GraphPipeline(
+                    dataset_name=dataset_name,
+                    seed=42001,
+                    mode="graph",
+                    enrich=True,
+                    graph_loader=loader,
+                    synthetic=True,
+                    synthetic_dataset_name=synthetic_dataset_name,
+                )
+                pipeline.pipe(test_size=0.2, batch_size=256, stratify=True)
+                
+                val_syn_df = pipeline.test_dataset.df
+                val_syn_0 = int((val_syn_df["faster_algorithm"] == 0).sum())
+                val_syn_1 = int((val_syn_df["faster_algorithm"] == 1).sum())
+                val_syn_total = len(val_syn_df)
+                
+                val_cur_df = pipeline.curated_dataset.df
+                val_cur_0 = int((val_cur_df["faster_algorithm"] == 0).sum())
+                val_cur_1 = int((val_cur_df["faster_algorithm"] == 1).sum())
+                val_cur_total = len(val_cur_df)
+                
+                self.class_balance = {
+                    "validation_synthetic": {
+                        "0": val_syn_0,
+                        "1": val_syn_1,
+                        "total": val_syn_total
+                    },
+                    "validation_curated": {
+                        "0": val_cur_0,
+                        "1": val_cur_1,
+                        "total": val_cur_total
+                    }
+                }
+                
+                # Save to self.data_dir / class_balance.json for future use
+                self.data_dir.mkdir(parents=True, exist_ok=True)
+                with open(cb_file, "w", encoding="utf-8") as f:
+                    json.dump(self.class_balance, f, indent=4)
+                print(f"Saved computed class balance to {cb_file}")
+            except Exception as e:
+                print(f"Warning: Fallback class balance calculation failed: {e}")
+                
+    def get_class_balance_str(self) -> str:
+        """Constructs a formatted string of the class balances."""
+        if not self.class_balance:
+            return ""
+        
+        syn = self.class_balance.get("validation_synthetic", {})
+        cur = self.class_balance.get("validation_curated", {})
+        
+        parts = []
+        if syn and syn.get("total", 0) > 0:
+            s0 = syn.get("0", 0)
+            s1 = syn.get("1", 0)
+            st = syn.get("total", 0)
+            p0 = (s0 / st) * 100 if st > 0 else 0
+            p1 = (s1 / st) * 100 if st > 0 else 0
+            parts.append(f"Validation Synthetic: 0 (gMGF): {s0} ({p0:.1f}%) / 1 (Newton): {s1} ({p1:.1f}%)")
+            
+        if cur and cur.get("total", 0) > 0:
+            c0 = cur.get("0", 0)
+            c1 = cur.get("1", 0)
+            ct = cur.get("total", 0)
+            cp0 = (c0 / ct) * 100 if ct > 0 else 0
+            cp1 = (c1 / ct) * 100 if ct > 0 else 0
+            parts.append(f"Validation Curated: 0 (gMGF): {c0} ({cp0:.1f}%) / 1 (Newton): {c1} ({cp1:.1f}%)")
+            
+        if not parts:
+            return ""
+        return " | ".join(parts)
+
     def load_data(self, run_name: str) -> pd.DataFrame:
         """Loads the CSV file for a given run."""
         file_path = self.data_dir / f"{run_name}.csv"
@@ -292,6 +404,9 @@ class GNNResultEvaluator:
                 
         # Main Figure Title
         plt.suptitle(title, fontsize=18, fontweight='bold', y=0.98)
+        balance_info = self.get_class_balance_str()
+        if balance_info:
+            plt.figtext(0.5, 0.94, balance_info, ha='center', va='center', fontsize=11, style='italic', color='#555555')
         
         # Save and close
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -362,6 +477,9 @@ class GNNResultEvaluator:
                             ha='center', va='bottom', fontsize=8, rotation=90, fontweight='semibold')
         
         plt.suptitle(f"Split Comparison — {self.naming_var}", fontsize=17, fontweight='bold', y=1.01)
+        balance_info = self.get_class_balance_str()
+        if balance_info:
+            plt.figtext(0.5, 0.96, balance_info, ha='center', va='center', fontsize=10, style='italic', color='#555555')
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, bbox_inches='tight')

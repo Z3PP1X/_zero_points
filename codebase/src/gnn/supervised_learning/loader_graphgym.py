@@ -277,6 +277,50 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         val_indices = list(range(len(train_data_list), len(all_data_list)))
         test_indices = list(range(len(train_data_list), len(all_data_list)))
 
+    # Calculate and save class balance information for validation synthetic and curated datasets
+    try:
+        import json
+        
+        # Calculate counts for validation synthetic (always present)
+        val_syn_df = pipeline.test_dataset.df
+        val_syn_0 = int((val_syn_df["faster_algorithm"] == 0).sum())
+        val_syn_1 = int((val_syn_df["faster_algorithm"] == 1).sum())
+        val_syn_total = len(val_syn_df)
+        
+        if synthetic:
+            # Calculate counts for validation curated
+            val_cur_df = pipeline.curated_dataset.df
+            val_cur_0 = int((val_cur_df["faster_algorithm"] == 0).sum())
+            val_cur_1 = int((val_cur_df["faster_algorithm"] == 1).sum())
+            val_cur_total = len(val_cur_df)
+        else:
+            val_cur_0 = 0
+            val_cur_1 = 0
+            val_cur_total = 0
+            
+        balance_info = {
+            "validation_synthetic": {
+                "0": val_syn_0,
+                "1": val_syn_1,
+                "total": val_syn_total
+            },
+            "validation_curated": {
+                "0": val_cur_0,
+                "1": val_cur_1,
+                "total": val_cur_total
+            }
+        }
+        
+        # Write to results/agg/class_balance.json
+        out_path = Path(cfg.out_dir)
+        agg_dir = out_path.parent / "agg"
+        agg_dir.mkdir(parents=True, exist_ok=True)
+        with open(agg_dir / "class_balance.json", "w", encoding="utf-8") as f:
+            json.dump(balance_info, f, indent=4)
+        print(f"[GraphGym] Saved class balance info to {agg_dir / 'class_balance.json'}")
+    except Exception as e:
+        print(f"[Warning] Failed to calculate or save class balance info: {e}")
+
     return ExpressionGraphDataset(
         all_data_list, train_indices, val_indices, test_indices
     )
