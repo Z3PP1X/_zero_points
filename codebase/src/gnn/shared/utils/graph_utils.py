@@ -110,6 +110,48 @@ def encode_edge_type(etype: str) -> int:
     return CANONICAL_EDGE_TYPE_VOCAB.get(etype, CANONICAL_EDGE_TYPE_VOCAB["<UNK>"])
 
 
+def get_hetero_node_type(raw_type: str) -> str:
+    if raw_type in ("operator", "function"):
+        return "operator"
+    elif raw_type == "variable":
+        return "variable"
+    elif raw_type == "constant":
+        return "constant"
+    elif raw_type in ("global", "virtual_current_x", "virtual_y_target", "virtual_supernode", "f_root", "d1_root", "d2_root"):
+        return "virtual"
+    else:
+        return "virtual"
+
+
+def fourier_frequency_encoding(val: float) -> list[float]:
+    # 8-dimensional multi-scale sinusoidal/fourier frequency encoding vector
+    frequencies = [2.0 ** i for i in range(4)]
+    enc = []
+    for freq in frequencies:
+        enc.append(math.sin(val * freq))
+        enc.append(math.cos(val * freq))
+    return enc
+
+
+def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
+    is_reverse = etype.endswith("_reverse")
+    base_etype = etype[:-8] if is_reverse else etype
+    
+    if base_etype == "child_of":
+        if parent_label in ("Plus", "Times", "GLOBAL", "f_root", "d1_root", "d2_root") or parent_label.startswith("virtual"):
+            return "child_of_reverse" if is_reverse else "child_of"
+        else:
+            if child_index == 0.0:
+                return "left_operand_reverse" if is_reverse else "left_operand"
+            elif child_index == 1.0:
+                return "right_operand_reverse" if is_reverse else "right_operand"
+            else:
+                return "left_operand_reverse" if is_reverse else "left_operand"
+    else:
+        return etype
+
+
+
 def _compute_belongs_to_subtree(
     raw: dict,
     prov_edge_type: str,
@@ -712,6 +754,7 @@ class ExpressionGraphConverter:
                     direction=0.0,
                     relation_type=float(self._encode_edge_type(etype)),
                     edge_betweenness_centrality=eb_val,
+                    etype=etype,
                 )
 
                 # Backward Edge
@@ -722,6 +765,7 @@ class ExpressionGraphConverter:
                     direction=1.0,
                     relation_type=float(self._encode_edge_type(etype + "_reverse")),
                     edge_betweenness_centrality=eb_val,
+                    etype=etype + "_reverse",
                 )
 
             # Add virtual supernode edges here, after all other edges are constructed
@@ -737,6 +781,7 @@ class ExpressionGraphConverter:
                             direction=0.0,
                             relation_type=float(supernode_etype),
                             edge_betweenness_centrality=0.0,
+                            etype="supernode_connection",
                         )
                         # Backward Edge (node -> virtual_supernode)
                         G_enriched.add_edge(
@@ -746,6 +791,7 @@ class ExpressionGraphConverter:
                             direction=1.0,
                             relation_type=float(self._encode_edge_type("virtual_reverse")),
                             edge_betweenness_centrality=0.0,
+                            etype="supernode_connection_reverse",
                         )
         else:
             ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
@@ -755,11 +801,22 @@ class ExpressionGraphConverter:
                 enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
                 G_enriched.add_node(node, **enriched_attrs)
 
+            # Build edges for basic representation
+            child_counters = {}
             for edge in raw.get("edges", []):
+                parent = edge["source"]
+                child = edge["target"]
+                etype = edge["type"]
+
+                child_idx = child_counters.get(parent, 0)
+                child_counters[parent] = child_idx + 1
+
                 G_enriched.add_edge(
-                    edge["source"],
-                    edge["target"],
-                    edge_type=self._encode_edge_type(edge["type"]),
+                    parent,
+                    child,
+                    edge_type=self._encode_edge_type(etype),
+                    child_index=float(child_idx),
+                    etype=etype,
                 )
 
             # Add supernode edges when enrich=False
@@ -771,17 +828,21 @@ class ExpressionGraphConverter:
                             "virtual_supernode",
                             node,
                             edge_type=supernode_etype,
+                            child_index=0.0,
+                            etype="supernode_connection",
                         )
                         G_enriched.add_edge(
                             node,
                             "virtual_supernode",
                             edge_type=self._encode_edge_type("virtual_reverse"),
+                            child_index=0.0,
+                            etype="supernode_connection_reverse",
                         )
 
         if heterogeneous:
             data = self._to_hetero(G_enriched, raw, topo, enrich)
             data.__class__ = ExpressionHeteroData
-            data["node"].node_ids = node_ids
+            data.node_ids = node_ids
         else:
             data = self._to_homogeneous(G_enriched, raw, enrich)
             data.__class__ = ExpressionGraphData
@@ -803,11 +864,8 @@ class ExpressionGraphConverter:
             [G_directed.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float
         )
         if heterogeneous:
-            data["node"].node_type = node_type_tensor
-            data["node"].label_id = label_id_tensor
-            data["node"].belongs_to_f = belongs_to_f_tensor
-            data["node"].belongs_to_d1 = belongs_to_d1_tensor
-            data["node"].belongs_to_d2 = belongs_to_d2_tensor
+            # Bypassed because true heterogeneous doesn't use a monolithic 'node' type
+            pass
         else:
             data.node_type = node_type_tensor
             data.label_id = label_id_tensor
@@ -884,6 +942,8 @@ class ExpressionGraphConverter:
                 virtual_d1_x_val=0.0,
                 virtual_d2_x_val=0.0,
                 virtual_y_target_val=0.0,
+                type=node["type"],
+                label=node["label"],
             )
         for edge in raw["edges"]:
             G.add_edge(
@@ -929,86 +989,198 @@ class ExpressionGraphConverter:
 
     def _to_hetero(self, G: nx.DiGraph, raw: dict, topo: dict, enrich: bool) -> HeteroData:
         node_ids = list(G.nodes)
-        id_to_idx = {nid: i for i, nid in enumerate(node_ids)}
-
-        node_type = torch.tensor([G.nodes[n]["node_type"] for n in node_ids], dtype=torch.long)
-        label_id = torch.tensor([G.nodes[n]["label_id"] for n in node_ids], dtype=torch.long)
-        value = torch.tensor([G.nodes[n]["value"] for n in node_ids], dtype=torch.float)
         
-        v_cx = torch.tensor([G.nodes[n]["virtual_current_x_val"] for n in node_ids], dtype=torch.float)
-        v_fx = torch.tensor([G.nodes[n]["virtual_f_x_val"] for n in node_ids], dtype=torch.float)
-        v_d1x = torch.tensor([G.nodes[n]["virtual_d1_x_val"] for n in node_ids], dtype=torch.float)
-        v_d2x = torch.tensor([G.nodes[n]["virtual_d2_x_val"] for n in node_ids], dtype=torch.float)
-        v_yt = torch.tensor([G.nodes[n]["virtual_y_target_val"] for n in node_ids], dtype=torch.float)
+        # 1. Separate node IDs by their heterogeneous type
+        operators = []
+        variables = []
+        constants = []
+        virtuals = []
 
-        if enrich:
-            depth = torch.tensor([G.nodes[n]["depth"] for n in node_ids], dtype=torch.float)
-            height = torch.tensor([G.nodes[n]["height"] for n in node_ids], dtype=torch.float)
-            subtree_size = torch.tensor([G.nodes[n]["subtree_size"] for n in node_ids], dtype=torch.float)
-            out_degree = torch.tensor([G.nodes[n]["out_degree"] for n in node_ids], dtype=torch.float)
-            betweenness = torch.tensor([G.nodes[n]["betweenness_centrality"] for n in node_ids], dtype=torch.float)
-            has_value = torch.tensor([G.nodes[n]["has_value"] for n in node_ids], dtype=torch.float)
-            belongs_to_f = torch.tensor([G.nodes[n]["belongs_to_f"] for n in node_ids], dtype=torch.float)
-            belongs_to_d1 = torch.tensor([G.nodes[n]["belongs_to_d1"] for n in node_ids], dtype=torch.float)
-            belongs_to_d2 = torch.tensor([G.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float)
-            lpe_cols = [
-                torch.tensor([G.nodes[n][f"lpe_{i}"] for n in node_ids], dtype=torch.float)
-                for i in range(1, 5)
-            ]
-            rwpe_cols = [
-                torch.tensor([G.nodes[n][f"rwpe_{i}"] for n in node_ids], dtype=torch.float)
-                for i in range(1, 5)
-            ]
+        for nid in node_ids:
+            attrs = G.nodes[nid]
+            raw_type = attrs.get("type", "")
+            h_type = get_hetero_node_type(raw_type)
+            if h_type == "operator":
+                operators.append(nid)
+            elif h_type == "variable":
+                variables.append(nid)
+            elif h_type == "constant":
+                constants.append(nid)
+            else:
+                virtuals.append(nid)
 
-            x = torch.stack(
-                [
-                    node_type.float(), label_id.float(), depth, height, subtree_size, out_degree,
-                    betweenness, value, has_value,
-                    *lpe_cols, *rwpe_cols,
-                    v_cx, v_fx, v_d1x, v_d2x, v_yt, belongs_to_f, belongs_to_d1, belongs_to_d2,
-                ],
-                dim=1
-            )
+        # 2. Local re-indexing mappings
+        op_idx = {nid: i for i, nid in enumerate(operators)}
+        var_idx = {nid: i for i, nid in enumerate(variables)}
+        const_idx = {nid: i for i, nid in enumerate(constants)}
+        virt_idx = {nid: i for i, nid in enumerate(virtuals)}
+
+        type_to_local_idx = {
+            "operator": op_idx,
+            "variable": var_idx,
+            "constant": const_idx,
+            "virtual": virt_idx,
+        }
+
+        # Helper to construct LPE and RWPE
+        def get_lpe_rwpe(nid: str, ast_idx: int | None):
+            if ast_idx is not None:
+                if "lpe" in topo and topo["lpe"] is not None:
+                    lpe_vals = [float(topo["lpe"][ast_idx, j]) for j in range(4)]
+                else:
+                    lpe_vals = [0.0] * 4
+                if "rwpe" in topo and topo["rwpe"] is not None:
+                    rwpe_vals = [float(topo["rwpe"][ast_idx, j]) for j in range(4)]
+                else:
+                    rwpe_vals = [0.0] * 4
+            else:
+                lpe_vals = [0.0] * 4
+                rwpe_vals = [0.0] * 4
+            return lpe_vals, rwpe_vals
+
+        # Helper to construct topology features
+        def get_topology(nid: str):
+            if nid in topo.get("depths", {}):
+                depth = float(topo["depths"].get(nid, 0.0))
+                height = float(topo["heights"].get(nid, 0.0)) if "heights" in topo else 0.0
+                subtree_size = float(topo["subtree_sizes"].get(nid, 1.0)) if "subtree_sizes" in topo else 1.0
+                out_degree = float(topo["out_degrees"].get(nid, 0.0)) if "out_degrees" in topo else 0.0
+                betweenness = float(topo["betweenness"].get(nid, 0.0)) if "betweenness" in topo else 0.0
+            else:
+                depth = 0.0
+                height = 0.0
+                subtree_size = 1.0
+                out_degree = 0.0
+                betweenness = 0.0
+            return [depth, height, subtree_size, out_degree, betweenness]
+
+        # 3. Build features for 'operator'
+        x_ops_list = []
+        ast_node_ids = [nid for nid in node_ids if nid not in ("virtual_current_x", "virtual_y_target", "virtual_supernode")]
+        ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
+
+        for nid in operators:
+            attrs = G.nodes[nid]
+            label_id = attrs["label_id"]
+            # One-hot label encoding
+            label_oh = torch.zeros(len(CANONICAL_LABELS), dtype=torch.float)
+            label_oh[label_id] = 1.0
+            
+            # Topology metrics
+            topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
+            
+            # LPE / RWPE
+            ast_idx = ast_id_to_idx.get(nid)
+            lpe_vals, rwpe_vals = get_lpe_rwpe(nid, ast_idx)
+            struct_feats = torch.tensor(lpe_vals + rwpe_vals, dtype=torch.float)
+            
+            # Combine
+            x_ops_list.append(torch.cat([label_oh, topo_feats, struct_feats]))
+            
+        if x_ops_list:
+            x_ops = torch.stack(x_ops_list, dim=0)
         else:
-            has_value = torch.tensor([G.nodes[n]["has_value"] for n in node_ids], dtype=torch.float)
-            belongs_to_f = torch.tensor([G.nodes[n]["belongs_to_f"] for n in node_ids], dtype=torch.float)
-            belongs_to_d1 = torch.tensor([G.nodes[n]["belongs_to_d1"] for n in node_ids], dtype=torch.float)
-            belongs_to_d2 = torch.tensor([G.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float)
-            deg_cent = torch.tensor([G.nodes[n]["degree_centrality"] for n in node_ids], dtype=torch.float)
-            x = torch.stack(
-                [
-                    node_type.float(), label_id.float(), value, has_value, deg_cent,
-                    v_cx, v_fx, v_d1x, v_d2x, v_yt, belongs_to_f, belongs_to_d1, belongs_to_d2,
-                ],
-                dim=1
-            )
+            x_ops = torch.empty((0, 59), dtype=torch.float)
 
-        edge_buckets: dict[str, list[tuple[int, int]]] = {}
-        for edge in raw["edges"]:
-            etype = edge["type"]
-            src = id_to_idx[edge["source"]]
-            tgt = id_to_idx[edge["target"]]
-            edge_buckets.setdefault(etype, []).append((src, tgt))
-            if enrich:
-                edge_buckets.setdefault(etype + "_reverse", []).append((tgt, src))
+        # 4. Build features for 'variable'
+        x_vars_list = []
+        for nid in variables:
+            attrs = G.nodes[nid]
+            label_id = attrs["label_id"]
+            label_oh = torch.zeros(len(CANONICAL_LABELS), dtype=torch.float)
+            label_oh[label_id] = 1.0
+            
+            topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
+            
+            ast_idx = ast_id_to_idx.get(nid)
+            lpe_vals, rwpe_vals = get_lpe_rwpe(nid, ast_idx)
+            struct_feats = torch.tensor(lpe_vals + rwpe_vals, dtype=torch.float)
+            
+            x_vars_list.append(torch.cat([label_oh, topo_feats, struct_feats]))
+            
+        if x_vars_list:
+            x_vars = torch.stack(x_vars_list, dim=0)
+        else:
+            x_vars = torch.empty((0, 59), dtype=torch.float)
 
-        if "virtual_supernode" in id_to_idx:
-            sup_idx = id_to_idx["virtual_supernode"]
-            for node_id, n_idx in id_to_idx.items():
-                if node_id != "virtual_supernode":
-                    edge_buckets.setdefault("supernode_connection", []).append((sup_idx, n_idx))
-                    if enrich:
-                        edge_buckets.setdefault("supernode_connection_reverse", []).append((n_idx, sup_idx))
+        # 5. Build features for 'constant'
+        x_consts_list = []
+        for nid in constants:
+            attrs = G.nodes[nid]
+            val = attrs["value"]
+            
+            fourier = torch.tensor(fourier_frequency_encoding(val), dtype=torch.float)
+            val_tensor = torch.tensor([val], dtype=torch.float)
+            x_consts_list.append(torch.cat([val_tensor, fourier]))
+            
+        if x_consts_list:
+            x_consts = torch.stack(x_consts_list, dim=0)
+        else:
+            x_consts = torch.empty((0, 9), dtype=torch.float)
 
+        # 6. Build features for 'virtual'
+        x_virts_list = []
+        for nid in virtuals:
+            attrs = G.nodes[nid]
+            v_cx = attrs["virtual_current_x_val"]
+            v_fx = attrs["virtual_f_x_val"]
+            v_d1x = attrs["virtual_d1_x_val"]
+            v_d2x = attrs["virtual_d2_x_val"]
+            v_yt = attrs["virtual_y_target_val"]
+            
+            belongs_f = attrs["belongs_to_f"]
+            belongs_d1 = attrs["belongs_to_d1"]
+            belongs_d2 = attrs["belongs_to_d2"]
+            
+            x_virts_list.append(torch.tensor([
+                v_cx, v_fx, v_d1x, v_d2x, v_yt,
+                belongs_f, belongs_d1, belongs_d2
+            ], dtype=torch.float))
+            
+        if x_virts_list:
+            x_virt = torch.stack(x_virts_list, dim=0)
+        else:
+            x_virt = torch.empty((0, 8), dtype=torch.float)
+
+        # 7. Map edges to metapaths
+        edge_buckets: dict[tuple[str, str, str], list[tuple[int, int]]] = {}
+        for u, v, attrs in G.edges(data=True):
+            src_type = get_hetero_node_type(G.nodes[u].get("type", ""))
+            dst_type = get_hetero_node_type(G.nodes[v].get("type", ""))
+            
+            is_reverse = (attrs.get("direction", 0.0) == 1.0)
+            parent = v if is_reverse else u
+            parent_label = G.nodes[parent].get("label", "")
+            
+            etype = attrs.get("etype", "")
+            if not etype:
+                etype = "child_of"
+                
+            child_idx = attrs.get("child_index", 0.0)
+            relation_type = get_relation_type(parent_label, etype, child_idx)
+            
+            src_local = type_to_local_idx[src_type][u]
+            dst_local = type_to_local_idx[dst_type][v]
+            
+            triplet = (src_type, relation_type, dst_type)
+            edge_buckets.setdefault(triplet, []).append((src_local, dst_local))
+
+        # 8. Construct HeteroData
         hetero = HeteroData()
-        hetero["node"].x = x
-        hetero["node"].node_type = node_type
-        hetero["node"].label_id = label_id
+        hetero["operator"].x = x_ops
+        hetero["variable"].x = x_vars
+        hetero["constant"].x = x_consts
+        hetero["virtual"].x = x_virt
+        
+        hetero["operator"].node_ids = operators
+        hetero["variable"].node_ids = variables
+        hetero["constant"].node_ids = constants
+        hetero["virtual"].node_ids = virtuals
 
-        for etype, pairs in edge_buckets.items():
-            src_ids, tgt_ids = zip(*pairs)
-            hetero["node", etype, "node"].edge_index = torch.tensor(
-                [list(src_ids), list(tgt_ids)], dtype=torch.long
+        for triplet, pairs in edge_buckets.items():
+            src_ids, dst_ids = zip(*pairs)
+            hetero[triplet].edge_index = torch.tensor(
+                [list(src_ids), list(dst_ids)], dtype=torch.long
             )
 
         return hetero
@@ -1088,6 +1260,40 @@ def populate_task_virtual_values(
     set_has_value: bool = False,
 ) -> None:
     """Write current iterate / function values onto task virtual and aggregator nodes."""
+    if isinstance(data, HeteroData):
+        if 'virtual' not in data.node_types or not hasattr(data['virtual'], 'node_ids') or data['virtual'].node_ids is None:
+            return
+        if not hasattr(data['virtual'], 'x') or data['virtual'].x is None:
+            return
+            
+        virtual_node_ids = data['virtual'].node_ids
+        
+        def write_hetero(node_id: str, col_idx: int, value: float) -> None:
+            if node_id in virtual_node_ids:
+                idx = virtual_node_ids.index(node_id)
+                data['virtual'].x[idx, col_idx] = float(signed_log_value(value))
+                
+        try:
+            if mode == "graph":
+                write_hetero("virtual_current_x", 0, cx_val)
+                write_hetero("virtual_y_target", 4, yt_val)
+                for agg_id, col_idx, value in (
+                    ("f_root", 1, fx_val),
+                    ("d1_root", 2, d1x_val),
+                    ("d2_root", 3, d2x_val),
+                ):
+                    write_hetero(agg_id, col_idx, value)
+            elif mode in ("tree", "tree_derivatives"):
+                task_target = "f_root" if "f_root" in virtual_node_ids else "global"
+                write_hetero(task_target, 0, cx_val)
+                write_hetero(task_target, 1, fx_val)
+                write_hetero(task_target, 4, yt_val)
+                write_hetero("d1_root", 2, d1x_val)
+                write_hetero("d2_root", 3, d2x_val)
+        except ValueError:
+            pass
+        return
+
     if not hasattr(data, "node_ids") or data.node_ids is None or data.x is None:
         return
     if len(data.x.shape) != 2:

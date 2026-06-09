@@ -201,3 +201,25 @@ To support tracking generalization during training, we restructured the validati
 - **Epoch-by-Epoch Test Aggregation**: Patched `is_split` and `agg_runs` in `aggregate_graphgym.py` to allow the `test` split (curated validation) to be aggregated epoch-by-epoch just like `val` (synthetic validation), generating `test.csv`, `test_best.csv`, and `test_bestepoch.csv` automatically.
 - **Evaluation Labels**: Updated `run_labels` and the summary comparison chart in `eval.py` to distinguish between `Validation Synthetic (Unseen Synthetic)` and `Validation Curated (Curated Real)`.
 
+---
+
+## 11. True Heterogeneous Architecture for Mathematical Expression Graph Pipeline
+
+Refactored the GNN mathematical expression graph pipeline from a single-node homogeneous packing (`torch_geometric.data.Data`) with zero-padding into a heterogeneous architecture (`torch_geometric.data.HeteroData`) using PyTorch Geometric (PyG).
+
+### Key Architectural Adjustments:
+- **Node Type Partitioning**: Partitioned raw expression tree nodes into 4 distinct types: `"operator"`, `"variable"`, `"constant"`, and `"virtual"`.
+- **Feature Optimization**: Eliminated zero-padding of features by tailoring feature matrices (`x`) exactly to each node type:
+  - `operator`: 32-dim one-hot Label ID + 5 topology metrics + 8 structural LPE/RWPE dimensions = 45 features.
+  - `variable`: 32-dim one-hot token ID + 5 topology metrics + 8 structural LPE/RWPE dimensions = 45 features.
+  - `constant`: 1-dim signed log value + 8-dim sinusoidal Fourier frequency encodings = 9 features.
+  - `virtual`: 8-dim dynamic value features.
+- **Relational Metapath Triplets**: Defined explicit metapaths for relations rather than relying on flat edge indexing, supporting type-local re-indexing. Also split non-commutative child relations into explicit `left_operand` and `right_operand` edges to capture mathematical non-commutativity.
+- **Dynamic State Injection**: Refactored `populate_task_virtual_values` to dynamically detect and mutate type-local virtual features directly in `HeteroData` node attributes.
+- **Testing & Verification**: Introduced a new validation suite under `test_heterogeneous_pipeline.py` verifying shape and indexing correctness, and regression-tested homogeneous path configurations.
+
+**Modified Files:**
+- `codebase/src/gnn/shared/utils/graph_utils.py`: Added node splitting, relation/metapath mapping, Fourier encoding, and updated conversion and state injection logic.
+- `codebase/src/gnn/tests/test_heterogeneous_pipeline.py`: Added complete heterogeneous pipeline tests.
+
+
