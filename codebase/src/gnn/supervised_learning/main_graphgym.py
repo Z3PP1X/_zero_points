@@ -22,6 +22,7 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 import gnn.supervised_learning.loader_graphgym  # noqa
+from gnn.supervised_learning.loader_graphgym import compute_binary_metrics
 from gnn.supervised_learning.preprocessing import GraphPipeline # noqa
 
 set_cfg(cfg)
@@ -61,47 +62,24 @@ class ValMetricLogger(pl.callbacks.Callback):
         self._val_data[dataloader_idx]['pred'].append(outputs['pred_score'].detach().cpu())
     
     def on_validation_epoch_end(self, trainer, pl_module):
-        import numpy as np
-        from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
-        
         for idx, data in self._val_data.items():
             if data['count'] == 0:
                 continue
-                
+
             avg_loss = data['loss_sum'] / data['count']
-            true = torch.cat(data['true']).numpy()
+            true = torch.cat(data['true'])
             pred = torch.cat(data['pred'])
-            
-            # Get probability scores for positive class
-            if len(pred.shape) > 1 and pred.shape[1] > 1:
-                scores = pred[:, 1].numpy()
-            else:
-                scores = pred.numpy()
-            
-            try:
-                val_auc = roc_auc_score(true, scores)
-            except ValueError:
-                val_auc = 0.0
-            
-            try:
-                prec_pts, rec_pts, _ = precision_recall_curve(true, scores)
-                val_pr_auc = auc(rec_pts, prec_pts)
-            except Exception:
-                val_pr_auc = 0.0
-            
-            # Log separate names depending on the loader index
+            metrics = compute_binary_metrics(true, pred)
+
             if idx == 0:
-                # Log metrics so ModelCheckpoint can see them
                 pl_module.log('val_loss', avg_loss, prog_bar=True, sync_dist=True)
-                pl_module.log('val_auc', val_auc, prog_bar=True, sync_dist=True)
-                pl_module.log('val_pr_auc', val_pr_auc, prog_bar=True, sync_dist=True)
+                pl_module.log('val_auc', metrics['auc'], prog_bar=True, sync_dist=True)
+                pl_module.log('val_pr_auc', metrics['pr_auc'], prog_bar=True, sync_dist=True)
             elif idx == 1:
-                # Log separate names for curated validation
                 pl_module.log('val_loss_curated', avg_loss, prog_bar=True, sync_dist=True)
-                pl_module.log('val_auc_curated', val_auc, prog_bar=True, sync_dist=True)
-                pl_module.log('val_pr_auc_curated', val_pr_auc, prog_bar=True, sync_dist=True)
-                
-        # Reset accumulators
+                pl_module.log('val_auc_curated', metrics['auc'], prog_bar=True, sync_dist=True)
+                pl_module.log('val_pr_auc_curated', metrics['pr_auc'], prog_bar=True, sync_dist=True)
+
         self._val_data = {}
 
 
@@ -125,14 +103,15 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     # 2. Our ValMetricLogger bridge (makes val metrics visible to Lightning)
     callbacks.append(ValMetricLogger())
     
-    # 3. ModelCheckpoint — monitors val_pr_auc to save the BEST model
+    # 3. ModelCheckpoint — monitors val_pr_auc on synthetic holdout (no curated influence)
+    ckpt_cbk = None
     if cfg.train.enable_ckpt:
         ckpt_cbk = pl.callbacks.ModelCheckpoint(
             dirpath=get_ckpt_dir(),
-            monitor='val_pr_auc',      # Select best model by validation PR-AUC
-            mode='max',                # Higher PR-AUC = better
-            save_top_k=1,             # Keep only the single best checkpoint
-            save_last=True,            # Also keep the last-epoch checkpoint for comparison
+            monitor='val_pr_auc',
+            mode='max',
+            save_top_k=1,
+            save_last=True,
             filename='best-{epoch}-{val_pr_auc:.4f}',
             verbose=True,
         )
@@ -155,7 +134,11 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     trainer.fit(model, datamodule=datamodule)
     
     # Test using the BEST checkpoint (by val_pr_auc), not the last epoch
-    best_path = ckpt_cbk.best_model_path if cfg.train.enable_ckpt and ckpt_cbk.best_model_path else None
+    best_path = (
+        ckpt_cbk.best_model_path
+        if ckpt_cbk is not None and ckpt_cbk.best_model_path
+        else None
+    )
     
     if best_path:
         print(f"\n[GraphGym] Loading BEST checkpoint for final test: {best_path}")

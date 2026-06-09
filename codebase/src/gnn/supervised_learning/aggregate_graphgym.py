@@ -9,6 +9,20 @@ import torch_geometric.graphgym.utils.agg_runs as agg_runs_mod
 def custom_is_split(s):
     return s in ['train', 'val', 'test']
 
+BEST_METRIC = 'pr_auc'
+KEYS_TO_STRIP = ['eta', 'eta_std', 'params_std']
+
+
+def _resolve_best_metric(metric_best, stats_list):
+    if metric_best == 'auto':
+        if 'pr_auc' in stats_list[0]:
+            return 'pr_auc'
+        if 'auc' in stats_list[0]:
+            return 'auc'
+        return 'accuracy'
+    return metric_best
+
+
 def custom_agg_runs(dir, metric_best='auto'):
     import numpy as np
     from torch_geometric.graphgym.utils.agg_runs import json_to_dict_list, join_list, agg_dict_list, makedirs_rm_exist, dict_list_to_json, dict_list_to_tb, dict_to_json, SummaryWriter, is_seed
@@ -25,10 +39,7 @@ def custom_agg_runs(dir, metric_best='auto'):
                 dir_split = osp.join(dir_seed, split)
                 fname_stats = osp.join(dir_split, 'stats.json')
                 stats_list = json_to_dict_list(fname_stats)
-                if metric_best == 'auto':
-                    metric = 'auc' if 'auc' in stats_list[0] else 'accuracy'
-                else:
-                    metric = metric_best
+                metric = _resolve_best_metric(metric_best, stats_list)
                 performance_np = np.array(
                     [stats[metric] for stats in stats_list])
                 best_epoch = \
@@ -91,11 +102,137 @@ def custom_agg_runs(dir, metric_best='auto'):
         fname = osp.join(dir_out, 'best.json')
         dict_to_json(value, fname)
 
+def custom_agg_batch(dir, metric_best='auto'):
+    """Batch aggregation aligned with checkpoint selection (pr_auc) and full logging."""
+    import numpy as np
+    import pandas as pd
+    from torch_geometric.graphgym.utils.agg_runs import (
+        name_to_dict,
+        json_to_dict_list,
+        makedirs_rm_exist,
+    )
+    from torch_geometric.graphgym.config import cfg
+
+    def _strip_keys(stats):
+        for key in KEYS_TO_STRIP:
+            stats.pop(key, None)
+        return stats
+
+    # best.json → *_best.csv (metrics at best val epoch per seed, then mean-aggregated)
+    results = {'train': [], 'val': [], 'test': []}
+    for run in os.listdir(dir):
+        if run == 'agg':
+            continue
+        dict_name = name_to_dict(run)
+        dir_run = osp.join(dir, run, 'agg')
+        if not osp.isdir(dir_run):
+            continue
+        for split in os.listdir(dir_run):
+            fname_stats = osp.join(dir_run, split, 'best.json')
+            if not osp.exists(fname_stats):
+                continue
+            dict_stats = json_to_dict_list(fname_stats)[-1]
+            results[split].append({**dict_name, **_strip_keys(dict_stats)})
+
+    dir_out = osp.join(dir, 'agg')
+    makedirs_rm_exist(dir_out)
+    sort_keys = None
+    for key in results:
+        if len(results[key]) == 0:
+            continue
+        results[key] = pd.DataFrame(results[key])
+        if sort_keys is None and len(results[key].columns):
+            sort_keys = [c for c in results[key].columns if c not in (
+                'epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1',
+                'auc', 'pr_auc', 'lr', 'base_lr', 'params', 'time_iter',
+                'gpu_memory', 'loss_std', 'accuracy_std', 'precision_std',
+                'recall_std', 'f1_std', 'auc_std', 'pr_auc_std', 'lr_std',
+                'base_lr_std', 'params_std', 'time_iter_std',
+            )]
+        if sort_keys:
+            present = [k for k in sort_keys if k in results[key].columns]
+            if present:
+                results[key] = results[key].sort_values(
+                    present, ascending=[True] * len(present)
+                )
+        results[key].to_csv(osp.join(dir_out, f'{key}_best.csv'), index=False)
+
+    # stats.json → *.csv (last epoch per configuration)
+    results = {'train': [], 'val': [], 'test': []}
+    for run in os.listdir(dir):
+        if run == 'agg':
+            continue
+        dict_name = name_to_dict(run)
+        dir_run = osp.join(dir, run, 'agg')
+        if not osp.isdir(dir_run):
+            continue
+        for split in os.listdir(dir_run):
+            fname_stats = osp.join(dir_run, split, 'stats.json')
+            if not osp.exists(fname_stats):
+                continue
+            dict_stats = json_to_dict_list(fname_stats)[-1]
+            results[split].append({**dict_name, **_strip_keys(dict_stats)})
+
+    for key in results:
+        if len(results[key]) == 0:
+            continue
+        results[key] = pd.DataFrame(results[key])
+        if sort_keys:
+            present = [k for k in sort_keys if k in results[key].columns]
+            if present:
+                results[key] = results[key].sort_values(
+                    present, ascending=[True] * len(present)
+                )
+        results[key].to_csv(osp.join(dir_out, f'{key}.csv'), index=False)
+
+    # stats.json → *_bestepoch.csv (best epoch by pr_auc on synthetic val split)
+    results = {'train': [], 'val': [], 'test': []}
+    for run in os.listdir(dir):
+        if run == 'agg':
+            continue
+        dict_name = name_to_dict(run)
+        dir_run = osp.join(dir, run, 'agg')
+        if not osp.isdir(dir_run):
+            continue
+        val_stats_path = osp.join(dir_run, 'val', 'stats.json')
+        if not osp.exists(val_stats_path):
+            continue
+        val_stats = json_to_dict_list(val_stats_path)
+        metric = _resolve_best_metric(metric_best, val_stats)
+        performance_np = np.array([stats[metric] for stats in val_stats])
+        best_epoch = val_stats[eval(f"performance_np.{cfg.metric_agg}()")]['epoch']
+
+        for split in os.listdir(dir_run):
+            fname_stats = osp.join(dir_run, split, 'stats.json')
+            if not osp.exists(fname_stats):
+                continue
+            dict_stats_list = json_to_dict_list(fname_stats)
+            matches = [s for s in dict_stats_list if s['epoch'] == best_epoch]
+            dict_stats = matches[0] if matches else dict_stats_list[-1]
+            results[split].append({**dict_name, **_strip_keys(dict_stats)})
+
+    for key in results:
+        if len(results[key]) == 0:
+            continue
+        results[key] = pd.DataFrame(results[key])
+        if sort_keys:
+            present = [k for k in sort_keys if k in results[key].columns]
+            if present:
+                results[key] = results[key].sort_values(
+                    present, ascending=[True] * len(present)
+                )
+        results[key].to_csv(osp.join(dir_out, f'{key}_bestepoch.csv'), index=False)
+
+    print(f'Results aggregated across models saved in {dir_out}')
+
+
 agg_runs_mod.is_split = custom_is_split
 agg_runs_mod.agg_runs = custom_agg_runs
+agg_runs_mod.agg_batch = custom_agg_batch
 
 from torch_geometric.graphgym.utils.agg_runs import agg_runs, agg_batch
 agg_runs = custom_agg_runs
+agg_batch = custom_agg_batch
 
 def main():
     import sys
@@ -159,13 +296,13 @@ def main():
         run_dir = results_dir / run
         if run_dir.is_dir() and run != "agg":
             try:
-                agg_runs(str(run_dir), metric_best='accuracy')
+                agg_runs(str(run_dir), metric_best=BEST_METRIC)
             except Exception as e:
                 print(f"Warning: Failed to aggregate runs for {run}: {e}")
 
-    # 3. Run batch-level aggregation across all configurations using PyG built-in
+    # 3. Run batch-level aggregation across all configurations
     try:
-        agg_batch(str(results_dir), metric_best='accuracy')
+        agg_batch(str(results_dir), metric_best=BEST_METRIC)
         print(f"Successfully aggregated batch results inside: {results_dir / 'agg'}")
     except Exception as e:
         print(f"Error running batch aggregation: {e}")

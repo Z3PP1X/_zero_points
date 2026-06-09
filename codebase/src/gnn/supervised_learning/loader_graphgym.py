@@ -37,35 +37,116 @@ from sklearn.metrics import (
     auc,
 )
 
-def custom_classification_binary(self):
-    true, pred_score = torch.cat(self._true), torch.cat(self._pred)
-    pred_int = self._get_pred_int(pred_score)
+
+def set_pos_label_from_train_labels(train_labels: torch.Tensor) -> int:
+    """Pick the minority class from training labels for metric evaluation."""
+    counts = torch.bincount(train_labels.long(), minlength=2)
+    pos_label = int(counts.argmin().item())
+    cfg.expression_graph.pos_label = pos_label
+    print(
+        f"[GraphGym] Minority class for metrics: {pos_label} "
+        f"(counts: class0={counts[0].item()}, class1={counts[1].item()})"
+    )
+    return pos_label
+
+
+def get_pos_label() -> int:
+    return int(getattr(cfg.expression_graph, "pos_label", 1))
+
+
+def _to_numpy(tensor):
+    return tensor.cpu().numpy() if hasattr(tensor, "cpu") else tensor
+
+
+def _positive_class_scores(pred_score, pos_label: int):
+    """Return continuous scores for the minority (positive) class."""
+    if len(pred_score.shape) > 1 and pred_score.shape[1] > 1:
+        col = pred_score[:, pos_label]
+        return _to_numpy(col)
+    scores = _to_numpy(pred_score)
+    if pos_label == 1:
+        return scores
+    return 1.0 - scores
+
+
+def _hard_predictions(pred_score, pos_label: int, thresh: float):
+    if len(pred_score.shape) > 1 and pred_score.shape[1] > 1:
+        return pred_score.argmax(dim=1)
+    scores = _to_numpy(pred_score)
+    if pos_label == 1:
+        return torch.tensor((scores > thresh).astype(int))
+    return torch.tensor((scores <= (1.0 - thresh)).astype(int))
+
+
+def compute_binary_metrics(true, pred_score, round_digits=None):
+    """
+    Compute classification metrics with the minority class as positive.
+    Used by both LoggerCallback (stats.json) and ValMetricLogger (checkpointing).
+    """
+    pos_label = get_pos_label()
+    thresh = getattr(cfg.model, "thresh", 0.5)
+    rnd = round_digits if round_digits is not None else cfg.round
+
+    true_t = true if isinstance(true, torch.Tensor) else torch.tensor(true)
+    pred_t = pred_score if isinstance(pred_score, torch.Tensor) else torch.tensor(pred_score)
+    pred_int = _hard_predictions(pred_t, pos_label, thresh)
+    scores = _positive_class_scores(pred_t, pos_label)
+    y_true_np = _to_numpy(true_t)
+
     try:
-        r_a_score = roc_auc_score(true, pred_score)
+        r_a_score = roc_auc_score(y_true_np, scores)
     except ValueError:
         r_a_score = 0.0
-        
+
     try:
-        if len(pred_score.shape) > 1 and pred_score.shape[1] > 1:
-            scores = pred_score[:, 1].cpu().numpy() if hasattr(pred_score, 'cpu') else pred_score[:, 1]
-        else:
-            scores = pred_score.cpu().numpy() if hasattr(pred_score, 'cpu') else pred_score
-        y_true_np = true.cpu().numpy() if hasattr(true, 'cpu') else true
-        precision_pts, recall_pts, _ = precision_recall_curve(y_true_np, scores)
+        precision_pts, recall_pts, _ = precision_recall_curve(
+            y_true_np, scores, pos_label=pos_label
+        )
         pr_auc_score = auc(recall_pts, precision_pts)
     except Exception:
         pr_auc_score = 0.0
 
     return {
-        'accuracy': round(accuracy_score(true, pred_int), pyg_logger.cfg.round),
-        'precision': round(precision_score(true, pred_int, zero_division=0), pyg_logger.cfg.round),
-        'recall': round(recall_score(true, pred_int, zero_division=0), pyg_logger.cfg.round),
-        'f1': round(f1_score(true, pred_int, zero_division=0), pyg_logger.cfg.round),
-        'auc': round(r_a_score, pyg_logger.cfg.round),
-        'pr_auc': round(pr_auc_score, pyg_logger.cfg.round),
+        "accuracy": round(accuracy_score(y_true_np, _to_numpy(pred_int)), rnd),
+        "precision": round(
+            precision_score(
+                y_true_np, _to_numpy(pred_int), pos_label=pos_label, zero_division=0
+            ),
+            rnd,
+        ),
+        "recall": round(
+            recall_score(
+                y_true_np, _to_numpy(pred_int), pos_label=pos_label, zero_division=0
+            ),
+            rnd,
+        ),
+        "f1": round(
+            f1_score(
+                y_true_np, _to_numpy(pred_int), pos_label=pos_label, zero_division=0
+            ),
+            rnd,
+        ),
+        "auc": round(r_a_score, rnd),
+        "pr_auc": round(pr_auc_score, rnd),
     }
 
+
+def custom_classification_binary(self):
+    true, pred_score = torch.cat(self._true), torch.cat(self._pred)
+    return compute_binary_metrics(true, pred_score, round_digits=pyg_logger.cfg.round)
+
+
+_orig_logger_basic = pyg_logger.Logger.basic
+
+
+def custom_logger_basic(self):
+    stats = _orig_logger_basic(self)
+    stats["base_lr"] = round(float(getattr(cfg.optim, "base_lr", 0.0)), cfg.round)
+    return stats
+
+
 pyg_logger.Logger.classification_binary = custom_classification_binary
+pyg_logger.Logger.basic = custom_logger_basic
 
 
 # Patch LoggerCallback to support multiple validation loaders
@@ -153,8 +234,8 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.active_features = ""  # Comma-separated list or empty for all
     cfg.expression_graph.synthetic = False
     cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name
+    cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
     cfg.train.mode = "custom"
-    cfg.train.epoch_warmup = 0
     cfg.train.epochs = 100
     cfg.params = 0
 
@@ -289,6 +370,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         # Same formula as main.py / preprocessing.py: total / (num_classes * count_per_class)
         class_weights = total_train / (num_classes * class_counts.float().clamp(min=1))
         class_weights = class_weights.to(torch.float)
+
+        set_pos_label_from_train_labels(train_labels)
 
         print(f"[GraphGym] Computed class weights from {total_train} training samples:")
         print(f"  Class 0 (gMGF):   count={class_counts[0].item()}, weight={class_weights[0].item():.4f}")

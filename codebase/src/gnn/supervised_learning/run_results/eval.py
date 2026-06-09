@@ -15,14 +15,26 @@ from pathlib import Path
 
 class GNNResultEvaluator:
     """
-    Evaluates GNN training, test and validation runs, plotting pivot grid heatmaps
-    of performance metrics and comparing layer summaries.
-    
+    Evaluates GNN training runs, plotting pivot grid heatmaps and layer summaries.
+
     In synthetic mode:
       - train_*: Training on synthetic data
-      - test_*:  Test on unseen synthetic data (problem_id-based split)
-      - val_*:   Validation on curated real-world problems
+      - val_*:   Unseen synthetic holdout (model selection via pr_auc)
+      - test_*:  Curated real-world holdout (generalisation only, no training effect)
+
+    MAX heatmaps: per heatmap cell, pick the configuration with the highest pr_auc,
+    then plot auc / pr_auc / loss / precision / f1 / recall from that same epoch row.
+    MEAN heatmaps: average metrics across configurations in each cell.
     """
+    CONFIG_COLS = (
+        "layer_type", "layers_mp", "dim_inner", "dropout",
+        "graph_pooling", "act", "base_lr",
+    )
+    METRIC_COLS = {
+        "epoch", "loss", "accuracy", "precision", "recall", "f1",
+        "auc", "pr_auc", "lr", "base_lr", "params", "time_iter", "gpu_memory",
+    }
+    HEATMAP_METRICS = ["auc", "pr_auc", "loss", "recall", "f1", "precision"]
     def __init__(self, naming_var: str, base_dir: Path = None):
         """
         Args:
@@ -38,10 +50,6 @@ class GNNResultEvaluator:
         self.data_dir = self.base_dir / self.naming_var / "agg"
         self.output_dir = self.base_dir / self.naming_var / "eval_plots"
         
-        # Datasets to evaluate, grouped by purpose
-        # train: Training performance (synthetic data)
-        # test:  Test performance (unseen synthetic data, problem_id-based split)  
-        # val:   Validation performance (curated real-world problems)
         self.runs = [
             "train_best", "train_bestepoch", "train",
             "test_best", "test_bestepoch", "test",
@@ -196,6 +204,25 @@ class GNNResultEvaluator:
             raise FileNotFoundError(f"Data file not found: {file_path}")
         return pd.read_csv(file_path)
 
+    def _config_columns(self, df: pd.DataFrame) -> list:
+        skip = set(self.METRIC_COLS)
+        skip.update(c for c in df.columns if c.endswith("_std"))
+        known = [c for c in self.CONFIG_COLS if c in df.columns]
+        extra = [c for c in df.columns if c not in skip and c not in known]
+        return known + extra
+
+    def _heatmap_group_columns(self, df: pd.DataFrame) -> list:
+        if "dim_inner" in df.columns and "dropout" in df.columns:
+            return ["dim_inner", "dropout"]
+        return self._config_columns(df)
+
+    def _best_pr_auc_rows(self, df: pd.DataFrame, group_cols: list) -> pd.DataFrame:
+        """Keep one row per group: the configuration with the highest pr_auc."""
+        if "pr_auc" not in df.columns or not group_cols:
+            return df
+        idx = df.groupby(group_cols, dropna=False)["pr_auc"].idxmax().dropna()
+        return df.loc[idx]
+
     def generate_plots_for_df(self, df: pd.DataFrame, overall_df: pd.DataFrame, output_path: Path, title: str, group_col: str = None):
         """
         Generates a unified plot containing a 2x4 grid of pivot heatmaps
@@ -212,40 +239,26 @@ class GNNResultEvaluator:
         fig = plt.figure(figsize=(32, 11), dpi=150)
         gs = fig.add_gridspec(2, 7, width_ratios=[1, 1, 1, 1, 1, 1, 1.8], wspace=0.35, hspace=0.35)
         
-        metrics = ['auc', 'pr_auc', 'loss', 'recall', 'f1', 'precision']
+        metrics = self.HEATMAP_METRICS
         aggfuncs = ['mean', 'max']
-        
+        group_cols = self._heatmap_group_columns(df)
+        best_df = self._best_pr_auc_rows(df, group_cols) if "pr_auc" in df.columns else df
+
         # Plot heatmaps
         for row_idx, agg in enumerate(aggfuncs):
             for col_idx, metric in enumerate(metrics):
                 ax = fig.add_subplot(gs[row_idx, col_idx])
                 
                 try:
-                    if agg == 'max':
-                        # Find the row for each (dim_inner, dropout) combination with the highest pr_auc
-                        if 'pr_auc' in df.columns:
-                            idx = df.groupby(['dim_inner', 'dropout'])['pr_auc'].idxmax().dropna()
-                            best_df = df.loc[idx]
-                            pivot_grid = best_df.pivot_table(
-                                values=metric,
-                                index='dim_inner',
-                                columns='dropout',
-                                aggfunc='first'
-                            )
-                        else:
-                            pivot_grid = df.pivot_table(
-                                values=metric,
-                                index='dim_inner',
-                                columns='dropout',
-                                aggfunc=agg
-                            )
-                    else:
-                        pivot_grid = df.pivot_table(
-                            values=metric,
-                            index='dim_inner',
-                            columns='dropout',
-                            aggfunc=agg
-                        )
+                    plot_df = best_df if agg == 'max' else df
+                    if metric not in plot_df.columns:
+                        raise KeyError(f"metric '{metric}' not in data")
+                    pivot_grid = plot_df.pivot_table(
+                        values=metric,
+                        index='dim_inner',
+                        columns='dropout',
+                        aggfunc='first' if agg == 'max' else agg,
+                    )
                     
                     
                     # Sort index and columns to ensure ascending order of hyperparameters
