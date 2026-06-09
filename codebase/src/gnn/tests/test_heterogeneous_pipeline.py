@@ -76,7 +76,7 @@ def test_heterogeneous_converter_shapes_and_types():
     assert data["operator"].x.shape[1] == 45
     assert data["variable"].x.shape[1] == 45
     assert data["constant"].x.shape[1] == 9
-    assert data["virtual"].x.shape[1] == 8
+    assert data["virtual"].x.shape[1] == 7
     
     # Verify constant feature matches: signed log value + fourier frequency encoding
     c_val = signed_log_value(5.0)
@@ -165,11 +165,12 @@ def test_heterogeneous_state_injection():
     idx_d2_root = v_ids.index("d2_root")
     idx_yt = v_ids.index("virtual_y_target")
     
+    delta_val = yt - fx
     assert data["virtual"].x[idx_cx, 0].item() == pytest.approx(signed_log_value(cx))
-    assert data["virtual"].x[idx_f_root, 1].item() == pytest.approx(signed_log_value(fx))
+    assert data["virtual"].x[idx_f_root, 1].item() == pytest.approx(signed_log_value(delta_val))
     assert data["virtual"].x[idx_d1_root, 2].item() == pytest.approx(signed_log_value(d1x))
     assert data["virtual"].x[idx_d2_root, 3].item() == pytest.approx(signed_log_value(d2x))
-    assert data["virtual"].x[idx_yt, 4].item() == pytest.approx(signed_log_value(yt))
+    assert data["virtual"].x[idx_yt, 1].item() == pytest.approx(signed_log_value(delta_val))
     
     # Ensure static AST nodes are NOT mutated
     assert torch.allclose(data["operator"].x, op_x_orig)
@@ -193,5 +194,5 @@ def test_regression_homogeneous_mode():
     # Ensure legacy homogeneous structure is correct and contains 12 nodes
     assert data.num_nodes == 12
     assert not isinstance(data, HeteroData)
-    assert data.x.shape[1] == 25
+    assert data.x.shape[1] == 24
     assert hasattr(data, "node_ids")

@@ -290,7 +290,7 @@ class GraphPipeline:
     def input_dim(self) -> int:
         if self.active_features is not None:
             return len(self.active_features)
-        return 25 if self.enrich else 13
+        return 24 if self.enrich else 12
 
     @property
     def global_dim(self) -> int:

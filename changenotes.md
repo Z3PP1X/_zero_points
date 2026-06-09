@@ -213,13 +213,16 @@ Refactored the GNN mathematical expression graph pipeline from a single-node hom
   - `operator`: 32-dim one-hot Label ID + 5 topology metrics + 8 structural LPE/RWPE dimensions = 45 features.
   - `variable`: 32-dim one-hot token ID + 5 topology metrics + 8 structural LPE/RWPE dimensions = 45 features.
   - `constant`: 1-dim signed log value + 8-dim sinusoidal Fourier frequency encodings = 9 features.
-  - `virtual`: 8-dim dynamic value features.
+  - `virtual`: 7-dim dynamic value features (reduced from 8 by merging target and function values).
+- **Delta Target Simplification**: Merged separate `yTarget` and `f(x0)` features into a single relative `virtual_delta_target_val` feature ($y_{target} - f(x_0)$), simplifying GNN input and node learning. Feature size counts were updated accordingly from 25 to 24 (enriched) and 13 to 12 (basic).
 - **Relational Metapath Triplets**: Defined explicit metapaths for relations rather than relying on flat edge indexing, supporting type-local re-indexing. Also split non-commutative child relations into explicit `left_operand` and `right_operand` edges to capture mathematical non-commutativity.
 - **Dynamic State Injection**: Refactored `populate_task_virtual_values` to dynamically detect and mutate type-local virtual features directly in `HeteroData` node attributes.
 - **Testing & Verification**: Introduced a new validation suite under `test_heterogeneous_pipeline.py` verifying shape and indexing correctness, and regression-tested homogeneous path configurations.
 
 **Modified Files:**
 - `codebase/src/gnn/shared/utils/graph_utils.py`: Added node splitting, relation/metapath mapping, Fourier encoding, and updated conversion and state injection logic.
-- `codebase/src/gnn/tests/test_heterogeneous_pipeline.py`: Added complete heterogeneous pipeline tests.
+- `codebase/src/gnn/supervised_learning/preprocessing.py`: Updated input feature dimension metadata.
+- `codebase/src/gnn/reinforcement_learning/feature_layout.py`: Updated global node feature dimension sizes.
+- `codebase/src/gnn/tests/`: Updated test validation suites.
 
 

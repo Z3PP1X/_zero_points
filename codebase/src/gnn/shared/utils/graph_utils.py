@@ -220,10 +220,9 @@ ENRICHED_NODE_FEATURE_SCHEMA = [
     "rwpe_3",
     "rwpe_4",
     "virtual_current_x_val",
-    "virtual_f_x_val",
+    "virtual_delta_target_val",
     "virtual_d1_x_val",
     "virtual_d2_x_val",
-    "virtual_y_target_val",
     "belongs_to_f",
     "belongs_to_d1",
     "belongs_to_d2",
@@ -247,10 +246,9 @@ BASIC_NODE_FEATURE_SCHEMA = [
     "has_value",
     "degree_centrality",
     "virtual_current_x_val",
-    "virtual_f_x_val",
+    "virtual_delta_target_val",
     "virtual_d1_x_val",
     "virtual_d2_x_val",
-    "virtual_y_target_val",
     "belongs_to_f",
     "belongs_to_d1",
     "belongs_to_d2",
@@ -938,10 +936,9 @@ class ExpressionGraphConverter:
                 belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),
                 belongs_to_d2=float(belongs_to_d2_map.get(node["id"], 0.0)),
                 virtual_current_x_val=0.0,
-                virtual_f_x_val=0.0,
+                virtual_delta_target_val=0.0,
                 virtual_d1_x_val=0.0,
                 virtual_d2_x_val=0.0,
-                virtual_y_target_val=0.0,
                 type=node["type"],
                 label=node["label"],
             )
@@ -1123,24 +1120,23 @@ class ExpressionGraphConverter:
         for nid in virtuals:
             attrs = G.nodes[nid]
             v_cx = attrs["virtual_current_x_val"]
-            v_fx = attrs["virtual_f_x_val"]
+            v_dt = attrs["virtual_delta_target_val"]
             v_d1x = attrs["virtual_d1_x_val"]
             v_d2x = attrs["virtual_d2_x_val"]
-            v_yt = attrs["virtual_y_target_val"]
             
             belongs_f = attrs["belongs_to_f"]
             belongs_d1 = attrs["belongs_to_d1"]
             belongs_d2 = attrs["belongs_to_d2"]
             
             x_virts_list.append(torch.tensor([
-                v_cx, v_fx, v_d1x, v_d2x, v_yt,
+                v_cx, v_dt, v_d1x, v_d2x,
                 belongs_f, belongs_d1, belongs_d2
             ], dtype=torch.float))
             
         if x_virts_list:
             x_virt = torch.stack(x_virts_list, dim=0)
         else:
-            x_virt = torch.empty((0, 8), dtype=torch.float)
+            x_virt = torch.empty((0, 7), dtype=torch.float)
 
         # 7. Map edges to metapaths
         edge_buckets: dict[tuple[str, str, str], list[tuple[int, int]]] = {}
@@ -1274,20 +1270,17 @@ def populate_task_virtual_values(
                 data['virtual'].x[idx, col_idx] = float(signed_log_value(value))
                 
         try:
+            delta_val = yt_val - fx_val
             if mode == "graph":
                 write_hetero("virtual_current_x", 0, cx_val)
-                write_hetero("virtual_y_target", 4, yt_val)
-                for agg_id, col_idx, value in (
-                    ("f_root", 1, fx_val),
-                    ("d1_root", 2, d1x_val),
-                    ("d2_root", 3, d2x_val),
-                ):
-                    write_hetero(agg_id, col_idx, value)
+                write_hetero("virtual_y_target", 1, delta_val)
+                write_hetero("f_root", 1, delta_val)
+                write_hetero("d1_root", 2, d1x_val)
+                write_hetero("d2_root", 3, d2x_val)
             elif mode in ("tree", "tree_derivatives"):
                 task_target = "f_root" if "f_root" in virtual_node_ids else "global"
                 write_hetero(task_target, 0, cx_val)
-                write_hetero(task_target, 1, fx_val)
-                write_hetero(task_target, 4, yt_val)
+                write_hetero(task_target, 1, delta_val)
                 write_hetero("d1_root", 2, d1x_val)
                 write_hetero("d2_root", 3, d2x_val)
         except ValueError:
@@ -1305,10 +1298,9 @@ def populate_task_virtual_values(
         return
 
     cx_idx = schema.index("virtual_current_x_val")
-    fx_idx = schema.index("virtual_f_x_val")
+    dt_idx = schema.index("virtual_delta_target_val")
     d1_idx = schema.index("virtual_d1_x_val")
     d2_idx = schema.index("virtual_d2_x_val")
-    yt_idx = schema.index("virtual_y_target_val")
     has_idx = schema.index("has_value") if set_has_value else None
 
     def write(node_id: str, col_idx: int, value: float) -> None:
@@ -1318,21 +1310,20 @@ def populate_task_virtual_values(
             data.x[idx, has_idx] = 1.0
 
     try:
+        delta_val = yt_val - fx_val
         if mode == "graph":
             write("virtual_current_x", cx_idx, cx_val)
-            write("virtual_y_target", yt_idx, yt_val)
-            for agg_id, col_idx, value in (
-                ("f_root", fx_idx, fx_val),
-                ("d1_root", d1_idx, d1x_val),
-                ("d2_root", d2_idx, d2x_val),
-            ):
-                if agg_id in data.node_ids:
-                    write(agg_id, col_idx, value)
+            write("virtual_y_target", dt_idx, delta_val)
+            if "f_root" in data.node_ids:
+                write("f_root", dt_idx, delta_val)
+            if "d1_root" in data.node_ids:
+                write("d1_root", d1_idx, d1x_val)
+            if "d2_root" in data.node_ids:
+                write("d2_root", d2_idx, d2x_val)
         elif mode in ("tree", "tree_derivatives"):
             task_target = "f_root" if "f_root" in data.node_ids else "global"
             write(task_target, cx_idx, cx_val)
-            write(task_target, fx_idx, fx_val)
-            write(task_target, yt_idx, yt_val)
+            write(task_target, dt_idx, delta_val)
             if "d1_root" in data.node_ids:
                 write("d1_root", d1_idx, d1x_val)
             if "d2_root" in data.node_ids:
@@ -1500,10 +1491,9 @@ def create_virtual_global_node(
                 belongs_to_d1=0.0,
                 belongs_to_d2=0.0,
                 virtual_current_x_val=0.0,
-                virtual_f_x_val=0.0,
+                virtual_delta_target_val=0.0,
                 virtual_d1_x_val=0.0,
-                virtual_d2_x_val=0.0,
-                virtual_y_target_val=0.0
+                virtual_d2_x_val=0.0
             )
         for u, v, attrs in G.edges(data=True):
             G_norm.add_edge(u, v, **attrs)
@@ -1530,10 +1520,9 @@ def create_virtual_global_node(
         belongs_to_d1=0.0,
         belongs_to_d2=0.0,
         virtual_current_x_val=0.0,
-        virtual_f_x_val=0.0,
+        virtual_delta_target_val=0.0,
         virtual_d1_x_val=0.0,
-        virtual_d2_x_val=0.0,
-        virtual_y_target_val=0.0
+        virtual_d2_x_val=0.0
     )
 
     def add_component(g_comp, prefix: str):
@@ -1567,10 +1556,9 @@ def create_virtual_global_node(
             belongs_to_d1=1.0 if agg_type == "d1_root" else 0.0,
             belongs_to_d2=1.0 if agg_type == "d2_root" else 0.0,
             virtual_current_x_val=0.0,
-            virtual_f_x_val=0.0,
+            virtual_delta_target_val=0.0,
             virtual_d1_x_val=0.0,
             virtual_d2_x_val=0.0,
-            virtual_y_target_val=0.0,
         )
         G_combined.add_edge(
             "global", agg_id, edge_type=encode_edge_type(prov_edge_by_agg[agg_type])
