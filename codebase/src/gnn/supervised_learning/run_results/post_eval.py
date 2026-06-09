@@ -117,6 +117,18 @@ def run_post_evaluation(
         )
         diag_plotter.run_top_configs()
 
+    print("  Aggregating feature-importance plots across configurations...")
+    from gnn.supervised_learning.run_results.feature_importance import (
+        aggregate_feature_importance_plots,
+    )
+
+    for split_name in ("val_synthetic", "val_curated", "val"):
+        aggregate_feature_importance_plots(
+            results_dir,
+            eval_output_dir / "feature_importance",
+            split=split_name,
+        )
+
     print(f"\n[PostEval] Complete. Outputs in: {eval_output_dir}")
     return eval_output_dir
 

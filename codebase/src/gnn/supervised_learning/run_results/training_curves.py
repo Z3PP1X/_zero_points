@@ -18,7 +18,7 @@ SPLIT_LABELS = {
     "val": "Validation Synthetic",
     "test": "Validation Curated",
 }
-CURVE_METRICS = ["pr_auc", "auc", "loss", "f1"]
+CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "mean_margin", "brier_score"]
 SPLIT_COLORS = {
     "train": "#2A9D8F",
     "val": "#E76F51",

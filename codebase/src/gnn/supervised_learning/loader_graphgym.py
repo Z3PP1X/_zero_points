@@ -22,7 +22,8 @@ src_root = Path(__file__).resolve().parents[3]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
-from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa
+from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa: F401
+from gnn.supervised_learning.run_results.eval_metrics import compute_confidence_metrics
 
 
 # Monkey patch GraphGym Logger to compute PR-AUC dynamically on any system/environment (e.g. Cloud GPU)
@@ -106,7 +107,7 @@ def compute_binary_metrics(true, pred_score, round_digits=None):
     except Exception:
         pr_auc_score = 0.0
 
-    return {
+    metrics = {
         "accuracy": round(accuracy_score(y_true_np, _to_numpy(pred_int)), rnd),
         "precision": round(
             precision_score(
@@ -129,6 +130,15 @@ def compute_binary_metrics(true, pred_score, round_digits=None):
         "auc": round(r_a_score, rnd),
         "pr_auc": round(pr_auc_score, rnd),
     }
+    metrics.update(
+        compute_confidence_metrics(
+            true_t,
+            pred_t,
+            pos_label=pos_label,
+            round_digits=rnd,
+        )
+    )
+    return metrics
 
 
 def custom_classification_binary(self):

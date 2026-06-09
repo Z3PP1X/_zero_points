@@ -22,7 +22,9 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 import gnn.supervised_learning.loader_graphgym  # noqa
-from gnn.supervised_learning.loader_graphgym import compute_binary_metrics
+from gnn.supervised_learning.run_results.feature_importance import (
+    run_post_training_feature_importance,
+)
 from gnn.supervised_learning.preprocessing import GraphPipeline # noqa
 
 set_cfg(cfg)
@@ -69,6 +71,8 @@ class ValMetricLogger(pl.callbacks.Callback):
             avg_loss = data['loss_sum'] / data['count']
             true = torch.cat(data['true'])
             pred = torch.cat(data['pred'])
+            from gnn.supervised_learning.loader_graphgym import compute_binary_metrics
+
             metrics = compute_binary_metrics(true, pred)
 
             if idx == 0:
@@ -147,6 +151,19 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     else:
         print("\n[GraphGym] No best checkpoint found, testing with last model weights.")
         trainer.test(model, datamodule=datamodule)
+
+    try:
+        run_post_training_feature_importance(
+            model=model,
+            datamodule=datamodule,
+            ckpt_path=best_path,
+            out_dir=Path(cfg.out_dir),
+            device=next(model.parameters()).device,
+        )
+    except Exception as exc:
+        print(f"[GraphGym] Feature importance analysis failed: {exc}")
+
+    return best_path
 
 
 def main():

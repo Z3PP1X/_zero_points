@@ -14,7 +14,9 @@ import numpy as np
 import pandas as pd
 
 from gnn.supervised_learning.run_results.eval_metrics import (
+    CONFIDENCE_METRICS,
     EVAL_WARMUP_EPOCHS,
+    LOWER_IS_BETTER_METRICS,
     MIN_CLASSIFICATION_METRIC,
     filter_warmup_epochs_df,
     passes_quality_threshold,
@@ -53,14 +55,39 @@ class GNNResultEvaluator:
         "f1",
         "auc",
         "pr_auc",
+        "mean_confidence",
+        "mean_margin",
+        "mean_entropy",
+        "brier_score",
+        "ece",
         "lr",
         "base_lr",
         "params",
         "time_iter",
         "gpu_memory",
     }
-    HEATMAP_METRICS = ["auc", "pr_auc", "loss", "recall", "f1", "precision"]
-    BOUNDED_METRICS = ["auc", "pr_auc", "accuracy", "precision", "recall", "f1"]
+    HEATMAP_METRICS = [
+        "auc",
+        "pr_auc",
+        "loss",
+        "recall",
+        "f1",
+        "precision",
+        *CONFIDENCE_METRICS,
+    ]
+    BOUNDED_METRICS = [
+        "auc",
+        "pr_auc",
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "mean_confidence",
+        "mean_margin",
+        "mean_entropy",
+        "brier_score",
+        "ece",
+    ]
     DEFAULT_RUNS = ["train_bestepoch", "val_bestepoch", "test_bestepoch"]
     ALL_RUNS = [
         "train_best",
@@ -376,7 +403,7 @@ class GNNResultEvaluator:
             vmin_val = min_val
             vmax_val = max_val
 
-        cmap_to_use = self.cmap_loss if metric == "loss" else self.cmap
+        cmap_to_use = self.cmap_loss if metric in LOWER_IS_BETTER_METRICS else self.cmap
         im = ax.imshow(
             values,
             cmap=cmap_to_use,
@@ -888,7 +915,20 @@ class GNNResultEvaluator:
         config_cols = self._config_columns(val_df)
         metric_cols = [
             m
-            for m in ["pr_auc", "auc", "f1", "recall", "precision", "accuracy", "loss"]
+            for m in [
+                "pr_auc",
+                "auc",
+                "f1",
+                "recall",
+                "precision",
+                "accuracy",
+                "loss",
+                "mean_confidence",
+                "mean_margin",
+                "mean_entropy",
+                "brier_score",
+                "ece",
+            ]
             if m in val_df.columns
         ]
         display_cols = config_cols + metric_cols + (["epoch"] if "epoch" in val_df.columns else [])

@@ -149,13 +149,7 @@ def custom_agg_batch(dir, metric_best='auto'):
             continue
         results[key] = pd.DataFrame(results[key])
         if sort_keys is None and len(results[key].columns):
-            sort_keys = [c for c in results[key].columns if c not in (
-                'epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1',
-                'auc', 'pr_auc', 'lr', 'base_lr', 'params', 'time_iter',
-                'gpu_memory', 'loss_std', 'accuracy_std', 'precision_std',
-                'recall_std', 'f1_std', 'auc_std', 'pr_auc_std', 'lr_std',
-                'base_lr_std', 'params_std', 'time_iter_std',
-            )]
+            sort_keys = [c for c in results[key].columns if c not in AGG_METRIC_COLUMNS]
         if sort_keys:
             present = [k for k in sort_keys if k in results[key].columns]
             if present:
@@ -249,6 +243,17 @@ KNOWN_GRID_PARAMS = [
     "act",
     "base_lr",
 ]
+
+AGG_METRIC_COLUMNS = (
+    'epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1',
+    'auc', 'pr_auc', 'mean_confidence', 'mean_margin', 'mean_entropy',
+    'brier_score', 'ece', 'lr', 'base_lr', 'params', 'time_iter',
+    'gpu_memory', 'loss_std', 'accuracy_std', 'precision_std',
+    'recall_std', 'f1_std', 'auc_std', 'pr_auc_std',
+    'mean_confidence_std', 'mean_margin_std', 'mean_entropy_std',
+    'brier_score_std', 'ece_std', 'lr_std',
+    'base_lr_std', 'params_std', 'time_iter_std',
+)
 
 
 def _normalize_run_directories(results_dir: Path):
