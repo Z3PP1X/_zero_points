@@ -56,7 +56,7 @@ def run_post_evaluation(
     Steps:
       1. Aggregate seed/run stats into CSVs (agg/)
       2. Generate heatmaps, summary bars, leaderboard, split comparison
-      3. Plot training curves from stats.json
+      3. Plot training curves from stats.json (overview + per-config + top-K)
       4. Reload top-K checkpoints for confusion matrix / ROC / PR curves
     """
     results_dir = Path(results_dir).resolve()
@@ -102,6 +102,7 @@ def run_post_evaluation(
             experiment_name=experiment_name,
         )
         curve_plotter.plot_overview()
+        curve_plotter.plot_all_configs()
         curve_plotter.plot_top_configs(eval_output_dir / "leaderboard.csv", top_k=top_k)
 
     if not skip_diagnostics:

@@ -78,11 +78,15 @@ class TrainingCurvePlotter:
 
     def _load_run_series(self, run_dir: Path) -> dict:
         seed_dir = _find_seed_dir(run_dir)
-        if seed_dir is None:
-            return {}
         series = {}
         for split in SPLIT_LABELS:
-            stats = _load_stats_json(seed_dir / split / "stats.json")
+            agg_path = run_dir / "agg" / split / "stats.json"
+            if agg_path.exists():
+                stats = _load_stats_json(agg_path)
+            elif seed_dir is not None:
+                stats = _load_stats_json(seed_dir / split / "stats.json")
+            else:
+                stats = []
             if stats:
                 series[split] = pd.DataFrame(stats)
         return series
@@ -101,6 +105,8 @@ class TrainingCurvePlotter:
         title: str,
         output_path: Path,
         best_epoch: int | None = None,
+        *,
+        verbose: bool = True,
     ):
         available_metrics = [
             m
@@ -149,8 +155,37 @@ class TrainingCurvePlotter:
         plt.tight_layout()
         plt.savefig(output_path, bbox_inches="tight")
         plt.close(fig)
-        print(f"    Saved training curves: {output_path}")
+        if verbose:
+            print(f"    Saved training curves: {output_path}")
         return True
+
+    def plot_all_configs(self, output_root: Path | None = None) -> int:
+        """Plot training curves for every grid configuration (best val epoch marked)."""
+        out_root = output_root or (self.output_dir / "configs")
+        plotted = 0
+        for run_dir in self._iter_run_dirs():
+            series = self._load_run_series(run_dir)
+            if not series:
+                continue
+            slug = run_dir.name.removeprefix("grid-")
+            output_path = out_root / slug / "training_curves.png"
+            title = f"Training Curves — {slug} — {self.experiment_name}"
+            if self._plot_series(
+                series,
+                title,
+                output_path,
+                best_epoch=self._best_val_epoch(series),
+                verbose=False,
+            ):
+                plotted += 1
+        if plotted == 0:
+            print("    Skipping per-config training curves (no stats.json data found)")
+        else:
+            print(
+                f"    Saved per-config training curves for {plotted} "
+                f"configuration(s) under {out_root}"
+            )
+        return plotted
 
     def plot_overview(self, output_path: Path | None = None):
         """Average metrics across all grid configurations per epoch."""
