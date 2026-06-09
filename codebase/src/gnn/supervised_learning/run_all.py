@@ -11,7 +11,64 @@ import argparse
 import subprocess
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+
+def _run_training_job(python_exe: str, train_script: str, cfg_file: str, script_dir: str) -> tuple[str, int]:
+    """Run a single GraphGym training job in an isolated subprocess."""
+    cmd = [python_exe, train_script, "--cfg", cfg_file]
+    try:
+        subprocess.run(cmd, check=True, cwd=script_dir)
+        return Path(cfg_file).name, 0
+    except subprocess.CalledProcessError as exc:
+        return Path(cfg_file).name, exc.returncode
+
+
+def _train_configs(
+    config_files: list[Path],
+    python_exe: str,
+    train_script: Path,
+    script_dir: Path,
+    parallel: bool,
+    num_workers: int,
+):
+    total = len(config_files)
+    if parallel and num_workers > 1:
+        workers = min(num_workers, total)
+        print(f"[Orchestrator] Parallel training: {workers} workers, {total} configs")
+        jobs = [
+            (python_exe, str(train_script), str(cfg_file), str(script_dir))
+            for cfg_file in config_files
+        ]
+        completed = 0
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_run_training_job, *job) for job in jobs]
+            for future in as_completed(futures):
+                name, exit_code = future.result()
+                completed += 1
+                if exit_code != 0:
+                    print(
+                        f"[Orchestrator] [{completed}/{total}] "
+                        f"Warning: {name} failed (exit code {exit_code})"
+                    )
+                else:
+                    print(f"[Orchestrator] [{completed}/{total}] Finished {name}")
+        return
+
+    print(f"[Orchestrator] Sequential training: {total} configs")
+    for idx, cfg_file in enumerate(config_files, start=1):
+        print(f"\n[Orchestrator] [{idx}/{total}] Training {cfg_file.name}...")
+        name, exit_code = _run_training_job(
+            python_exe,
+            str(train_script),
+            str(cfg_file),
+            str(script_dir),
+        )
+        if exit_code != 0:
+            print(
+                f"[Orchestrator] Warning: {name} failed (exit code {exit_code})"
+            )
 
 
 def main():
@@ -38,9 +95,16 @@ def main():
     )
     parser.add_argument(
         "--parallel",
+        action="store_true",
+        help="Run training jobs in parallel (default: sequential)",
+    )
+    parser.add_argument(
+        "-n",
+        "--num",
         type=int,
-        default=1,
-        help="Number of training jobs to run in parallel (default: 1 = sequential)",
+        default=2,
+        metavar="N",
+        help="Number of parallel training jobs when --parallel is set (default: 2)",
     )
     parser.add_argument(
         "--skip-training",
@@ -69,6 +133,9 @@ def main():
         help="Top configs for diagnostics plots",
     )
     args = parser.parse_args()
+
+    if args.num < 1:
+        parser.error("--num must be at least 1")
 
     script_dir = Path(__file__).resolve().parent
     gnn_root = script_dir.parent
@@ -103,25 +170,14 @@ def main():
     print(f"[Orchestrator] Generated {len(config_files)} configs.")
 
     if not args.skip_training:
-        if args.parallel > 1:
-            print(
-                f"[Orchestrator] Parallel training ({args.parallel} workers) "
-                "is not implemented yet; running sequentially."
-            )
-
-        for idx, cfg_file in enumerate(config_files, start=1):
-            print(
-                f"\n[Orchestrator] [{idx}/{len(config_files)}] "
-                f"Training {cfg_file.name}..."
-            )
-            cmd = [python_exe, str(train_script), "--cfg", str(cfg_file)]
-            try:
-                subprocess.run(cmd, check=True, cwd=str(script_dir))
-            except subprocess.CalledProcessError as exc:
-                print(
-                    f"[Orchestrator] Warning: training failed for {cfg_file.name} "
-                    f"(exit code {exc.returncode})"
-                )
+        _train_configs(
+            config_files=config_files,
+            python_exe=python_exe,
+            train_script=train_script,
+            script_dir=script_dir,
+            parallel=args.parallel,
+            num_workers=args.num,
+        )
     else:
         print("[Orchestrator] Skipping training (--skip-training).")
 

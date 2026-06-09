@@ -95,6 +95,9 @@ cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/supervised_learni
 # 1) Grid trainieren, aggregieren und alle Plots automatisch erzeugen
 python run_all.py --experiment-name res_with_enrich
 
+# Parallel: 4 Grid-Configs gleichzeitig trainieren
+python run_all.py --experiment-name res_with_enrich --parallel -n 4
+
 # Optional: nur Auswertung, wenn Training bereits abgeschlossen ist
 python run_all.py --experiment-name res_with_enrich --skip-training
 ```
@@ -162,6 +165,8 @@ python run_results/eval.py res_with_enrich
 | Skript | Flag | Beschreibung |
 | :--- | :--- | :--- |
 | `run_all.py` | `--experiment-name` | Ordnername unter `run_results/` |
+| `run_all.py` | `--parallel` | Training parallel starten (Standard: sequenziell) |
+| `run_all.py` | `-n` / `--num` | Anzahl paralleler Jobs mit `--parallel` (Standard: 2) |
 | `run_all.py` | `--skip-training` | Nur Aggregation + Evaluation |
 | `run_all.py` | `--skip-eval` | Nur Training, keine Plots |
 | `run_all.py` | `--full-eval` | Alle 9 Run-CSV-Varianten plotten |
