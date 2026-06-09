@@ -11,7 +11,10 @@ Dieses Repository enthält eine vollständige Pipeline für maschinelles Lernen 
 * `codebase/src/gnn/supervised_learning/`: Dateien für Supervised Learning.
   * `main.py`: Benutzerdefiniertes GNN-Training und Evaluierung.
   * `main_graphgym.py` & `loader_graphgym.py`: Integration des PyTorch Geometric GraphGym Frameworks.
-  * `config_supervised.yaml`: Konfigurationsdatei für GraphGym.
+  * `run_all.py`: End-to-End-Orchestrator (Grid-Training + Aggregation + Evaluation).
+  * `aggregate_graphgym.py`: Aggregation der GraphGym-Läufe in CSVs.
+  * `run_results/`: Post-Training-Evaluation (`post_eval.py`, `eval.py`, `training_curves.py`, `diagnostics.py`).
+  * `config_supervised.yaml` & `grid.yaml`: Basis-Config und Hyperparameter-Grid für GraphGym.
 * `codebase/src/gnn/`: Dateien für Reinforcement Learning.
   * `main.py`: Einstiegspunkt für Phase 1 (Optuna Hyperparameter-Tuning).
   * `train_best.py`: Einstiegspunkt für Phase 2 (Bestes PPO-Modell trainieren).
@@ -82,18 +85,101 @@ python main.py --mode graph --enrich --active-features "node_type,depth,value,vi
 ---
 
 ### B. GraphGym-Workflow (`supervised_learning/main_graphgym.py`)
-GraphGym ist ein Framework von PyTorch Geometric zur standardisierten Modell-Evaluierung über YAML-Dateien.
+GraphGym ist ein Framework von PyTorch Geometric zur standardisierten Modell-Evaluierung über YAML-Dateien. Das beste Modell wird per **`val_pr_auc`** auf dem ungesehenen synthetischen Holdout gewählt; der finale Test auf kuratierten Realdaten nutzt diesen Checkpoint.
 
-#### 🏃 Ausführen mit GraphGym
+#### 🏃 Empfohlener End-to-End-Lauf (Grid + automatische Auswertung)
 
+```bash
+cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/supervised_learning
+
+# 1) Grid trainieren, aggregieren und alle Plots automatisch erzeugen
+python run_all.py --experiment-name res_with_enrich
+
+# Optional: nur Auswertung, wenn Training bereits abgeschlossen ist
+python run_all.py --experiment-name res_with_enrich --skip-training
+```
+
+`run_all.py` führt nacheinander aus:
+1. **Config-Generierung** aus `grid.yaml` → `configs/*.yaml`
+2. **Training** aller Grid-Konfigurationen via `main_graphgym.py`
+3. **Aggregation** der Ergebnisse nach `run_results/<experiment>/agg/`
+4. **Vollständige Evaluation** nach `run_results/<experiment>/eval_plots/`
+
+#### 📊 Erzeugte Auswertungs-Artefakte
+
+```
+run_results/<experiment>/
+├── agg/                              # Aggregierte CSVs (train/val/test × last/best/bestepoch)
+└── eval_plots/
+    ├── split_comparison.png          # Train vs. Val Synthetic vs. Val Curated
+    ├── generalization_gap.png        # PR-AUC Generalisierungslücke pro Architektur
+    ├── training_curves_overview.png  # Mittlere Trainingskurven über alle Configs
+    ├── leaderboard.csv / .png        # Top-K nach val_bestepoch pr_auc
+    ├── <run>/heatmaps_mean.png       # Hyperparameter-Heatmaps (MEAN)
+    ├── <run>/heatmaps_max.png        # Hyperparameter-Heatmaps (MAX, best pr_auc pro Zelle)
+    ├── <run>/summary_bars.png        # Architektur-/Pooling-Vergleich
+    └── top_configs/rank_N_.../       # Top-K Diagnostik (best checkpoint)
+        ├── training_curves.png
+        ├── confusion_validation_synthetic.png
+        ├── confusion_validation_curated.png
+        ├── roc_validation_synthetic.png
+        ├── roc_validation_curated.png
+        ├── pr_validation_synthetic.png
+        └── pr_validation_curated.png
+```
+
+**Split-Benennung in den Plots:**
+- `train_*` → Training (synthetisch)
+- `val_*` → Validation Synthetic (ungesehenes synthetisches Holdout, Modellauswahl)
+- `test_*` → Validation Curated (kuratierte Realdaten, nur Generalisierung)
+
+#### 🧩 Einzelne Schritte (manuell)
+
+```bash
+cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/supervised_learning
+
+# Nur ein einzelnes Modell trainieren
+python main_graphgym.py --cfg config_supervised.yaml
+
+# Grid-Configs erzeugen (schreibt out_dir unter run_results/<experiment>/)
 python configs_gen.py
+
+# Grid manuell trainieren
 for conf in configs/*.yaml; do
   python main_graphgym.py --cfg "$conf"
 done
 
-```bash
-cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/supervised_learning
-python main_graphgym.py --cfg config_supervised.yaml
+# Aggregation + vollständige Evaluation
+python aggregate_graphgym.py res_with_enrich --eval --top-k 5
+
+# Nur Plots (wenn agg/ bereits existiert)
+python run_results/post_eval.py res_with_enrich
+python run_results/eval.py res_with_enrich
+```
+
+#### 📋 Wichtige CLI-Flags
+
+| Skript | Flag | Beschreibung |
+| :--- | :--- | :--- |
+| `run_all.py` | `--experiment-name` | Ordnername unter `run_results/` |
+| `run_all.py` | `--skip-training` | Nur Aggregation + Evaluation |
+| `run_all.py` | `--skip-eval` | Nur Training, keine Plots |
+| `run_all.py` | `--full-eval` | Alle 9 Run-CSV-Varianten plotten |
+| `run_all.py` | `--top-k` | Anzahl Top-Configs für CM/ROC/PR (Standard: 5) |
+| `aggregate_graphgym.py` | `--eval` | Nach Aggregation direkt alle Plots erzeugen |
+| `run_results/post_eval.py` | `--skip-diagnostics` | Ohne Confusion Matrix / ROC / PR |
+| `run_results/eval.py` | `--skip-slices` | Nur Top-Level-Plots, keine Architektur-Slices |
+
+#### ⚙️ Grid und Basis-Config anpassen
+
+Hyperparameter-Sweep in `grid.yaml` (Beispiel):
+
+```yaml
+gnn.layer_type: [sageconv, gcnconv, ginconv, gatv2conv]
+gnn.layers_mp: [2, 3]
+gnn.dim_inner: [256]
+gnn.dropout: [0.2]
+model.graph_pooling: [add, mean]
 ```
 
 #### ⚙️ Anpassung der Einstellungen in `config_supervised.yaml`

@@ -1,17 +1,18 @@
-import os
+import argparse
+import logging
 import sys
 import warnings
-import logging
+from pathlib import Path
 
 # Suppress warnings and matplotlib's internal log messages (like missing fonts)
 warnings.filterwarnings("ignore")
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
 
 class GNNResultEvaluator:
     """
@@ -26,37 +27,79 @@ class GNNResultEvaluator:
     then plot auc / pr_auc / loss / precision / f1 / recall from that same epoch row.
     MEAN heatmaps: average metrics across configurations in each cell.
     """
+
     CONFIG_COLS = (
-        "layer_type", "layers_mp", "dim_inner", "dropout",
-        "graph_pooling", "act", "base_lr",
+        "layer_type",
+        "layers_mp",
+        "dim_inner",
+        "dropout",
+        "graph_pooling",
+        "act",
+        "base_lr",
     )
     METRIC_COLS = {
-        "epoch", "loss", "accuracy", "precision", "recall", "f1",
-        "auc", "pr_auc", "lr", "base_lr", "params", "time_iter", "gpu_memory",
+        "epoch",
+        "loss",
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "auc",
+        "pr_auc",
+        "lr",
+        "base_lr",
+        "params",
+        "time_iter",
+        "gpu_memory",
     }
     HEATMAP_METRICS = ["auc", "pr_auc", "loss", "recall", "f1", "precision"]
-    def __init__(self, naming_var: str, base_dir: Path = None):
+    BOUNDED_METRICS = ["auc", "pr_auc", "accuracy", "precision", "recall", "f1"]
+    DEFAULT_RUNS = ["train_bestepoch", "val_bestepoch", "test_bestepoch"]
+    ALL_RUNS = [
+        "train_best",
+        "train_bestepoch",
+        "train",
+        "test_best",
+        "test_bestepoch",
+        "test",
+        "val_best",
+        "val_bestepoch",
+        "val",
+    ]
+    PREMIUM_PALETTE = [
+        "#2A9D8F",
+        "#E76F51",
+        "#264653",
+        "#F4A261",
+        "#E9C46A",
+        "#457B9D",
+        "#1D3557",
+    ]
+
+    def __init__(
+        self,
+        naming_var: str,
+        base_dir: Path = None,
+        runs: list = None,
+        skip_slices: bool = False,
+        top_k: int = 10,
+    ):
         """
         Args:
-            naming_var: Folder name for the evaluation (e.g., 'res_with_enrich' or 'res_without_enrich')
+            naming_var: Folder name for the evaluation (e.g., 'res_with_enrich')
             base_dir: Base directory where run_results lies (defaults to parent of this script)
+            runs: Run CSV stems to evaluate (defaults to best-epoch splits only)
+            skip_slices: If True, only generate top-level run plots (no nested slices)
+            top_k: Number of configs to include in the leaderboard
         """
         self.naming_var = naming_var
-        if base_dir is None:
-            self.base_dir = Path(__file__).resolve().parent
-        else:
-            self.base_dir = Path(base_dir)
-            
+        self.base_dir = Path(base_dir) if base_dir else Path(__file__).resolve().parent
         self.data_dir = self.base_dir / self.naming_var / "agg"
         self.output_dir = self.base_dir / self.naming_var / "eval_plots"
-        
-        self.runs = [
-            "train_best", "train_bestepoch", "train",
-            "test_best", "test_bestepoch", "test",
-            "val_best", "val_bestepoch", "val",
-        ]
-        
-        # Human-readable labels for each run type
+        self.runs = runs if runs is not None else list(self.DEFAULT_RUNS)
+        self.skip_slices = skip_slices
+        self.top_k = top_k
+
         self.run_labels = {
             "train": "Training (Synthetic)",
             "train_best": "Training Best (Synthetic)",
@@ -68,25 +111,21 @@ class GNNResultEvaluator:
             "test_best": "Validation Curated Best (Curated Real)",
             "test_bestepoch": "Validation Curated Best Epoch (Curated Real)",
         }
-        
-        # Heatmap colormap (white to premium emerald green)
-        # Using a sleek color gradient
+
         self.cmap = mcolors.LinearSegmentedColormap.from_list(
             "premium_green", ["#FFFFFF", "#D1E7DD", "#0F5132"]
         )
-        # Heatmap colormap for loss (white to premium red)
-        # High loss = darker red
         self.cmap_loss = mcolors.LinearSegmentedColormap.from_list(
             "premium_red", ["#FFFFFF", "#F8D7DA", "#842029"]
         )
-        
-        # Load class balance information if available
+
         self.class_balance = None
         self.load_class_balance()
-        
+
     def load_class_balance(self):
         """Loads class_balance.json or dynamically computes it as a fallback."""
         import json
+
         cb_file = self.data_dir / "class_balance.json"
         if cb_file.exists():
             try:
@@ -96,30 +135,36 @@ class GNNResultEvaluator:
             except Exception as e:
                 print(f"Warning: Failed to load class balance from {cb_file}: {e}")
         else:
-            # Fallback: dynamically calculate it from datasets if possible
-            print(f"class_balance.json not found in {self.data_dir}. Attempting fallback calculation...")
+            print(
+                f"class_balance.json not found in {self.data_dir}. "
+                "Attempting fallback calculation..."
+            )
             try:
-                # Try loading dataset config to get names
                 config_file = self.base_dir.parent / "config_supervised.yaml"
                 dataset_name = "run_20260603_123013/parallel_benchmark_results"
                 synthetic_dataset_name = "run_20260604_154509/parallel_benchmark_results"
-                
+
                 if config_file.exists():
                     import yaml
+
                     with open(config_file, "r", encoding="utf-8") as f:
                         cfg_data = yaml.safe_load(f)
                     dataset_name = cfg_data.get("dataset", {}).get("name", dataset_name)
-                    synthetic_dataset_name = cfg_data.get("expression_graph", {}).get("synthetic_dataset", synthetic_dataset_name)
-                
-                # Import pipeline inside fallback
+                    synthetic_dataset_name = cfg_data.get("expression_graph", {}).get(
+                        "synthetic_dataset", synthetic_dataset_name
+                    )
+
                 src_path = str(self.base_dir.parents[2])
                 if src_path not in sys.path:
                     sys.path.insert(0, src_path)
-                    
-                from gnn.supervised_learning.preprocessing import GraphPipeline
+
                 from gnn.shared.utils.graph_loader import GraphDataLoader
-                
-                print(f"  Loading dataset for class balance: {dataset_name} / {synthetic_dataset_name}")
+                from gnn.supervised_learning.preprocessing import GraphPipeline
+
+                print(
+                    f"  Loading dataset for class balance: "
+                    f"{dataset_name} / {synthetic_dataset_name}"
+                )
                 loader = GraphDataLoader(name=dataset_name, mode="graph", enrich=True)
                 pipeline = GraphPipeline(
                     dataset_name=dataset_name,
@@ -131,51 +176,58 @@ class GNNResultEvaluator:
                     synthetic_dataset_name=synthetic_dataset_name,
                 )
                 pipeline.pipe(test_size=0.2, batch_size=256, stratify=True)
-                
+
                 val_syn_df = pipeline.test_dataset.df
                 val_syn_0 = int((val_syn_df["faster_algorithm"] == 0).sum())
                 val_syn_1 = int((val_syn_df["faster_algorithm"] == 1).sum())
                 val_syn_total = len(val_syn_df)
-                
+
                 val_cur_df = pipeline.curated_dataset.df
                 val_cur_0 = int((val_cur_df["faster_algorithm"] == 0).sum())
                 val_cur_1 = int((val_cur_df["faster_algorithm"] == 1).sum())
                 val_cur_total = len(val_cur_df)
-                
+
                 self.class_balance = {
                     "validation_synthetic": {
                         "0": val_syn_0,
                         "1": val_syn_1,
-                        "total": val_syn_total
+                        "total": val_syn_total,
                     },
                     "validation_curated": {
                         "0": val_cur_0,
                         "1": val_cur_1,
-                        "total": val_cur_total
-                    }
+                        "total": val_cur_total,
+                    },
                 }
-                
-                # Save to self.data_dir / class_balance.json for future use
+
                 self.data_dir.mkdir(parents=True, exist_ok=True)
                 with open(cb_file, "w", encoding="utf-8") as f:
                     json.dump(self.class_balance, f, indent=4)
                 print(f"Saved computed class balance to {cb_file}")
             except Exception as e:
-                if isinstance(e, ModuleNotFoundError) and any(m in str(e) for m in ["torch", "gnn"]):
-                    print("\n[Warning] Fallback dataset loading failed because PyTorch or codebase dependencies are missing in this environment.")
+                if isinstance(e, ModuleNotFoundError) and any(
+                    m in str(e) for m in ["torch", "gnn"]
+                ):
+                    print(
+                        "\n[Warning] Fallback dataset loading failed because PyTorch "
+                        "or codebase dependencies are missing in this environment."
+                    )
                     print("Please run the script using the correct Conda environment:")
-                    print("  /home/zapp1x/miniconda3/envs/pytorch/bin/python eval.py <naming_var>\n")
+                    print(
+                        "  /home/zapp1x/miniconda3/envs/pytorch/bin/python eval.py "
+                        "<naming_var>\n"
+                    )
                 else:
                     print(f"Warning: Fallback class balance calculation failed: {e}")
-                
+
     def get_class_balance_str(self) -> str:
         """Constructs a formatted string of the class balances."""
         if not self.class_balance:
             return ""
-        
+
         syn = self.class_balance.get("validation_synthetic", {})
         cur = self.class_balance.get("validation_curated", {})
-        
+
         parts = []
         if syn and syn.get("total", 0) > 0:
             s0 = syn.get("0", 0)
@@ -183,16 +235,22 @@ class GNNResultEvaluator:
             st = syn.get("total", 0)
             p0 = (s0 / st) * 100 if st > 0 else 0
             p1 = (s1 / st) * 100 if st > 0 else 0
-            parts.append(f"Validation Synthetic: 0 (gMGF): {s0} ({p0:.1f}%) / 1 (Newton): {s1} ({p1:.1f}%)")
-            
+            parts.append(
+                f"Validation Synthetic: 0 (gMGF): {s0} ({p0:.1f}%) / "
+                f"1 (Newton): {s1} ({p1:.1f}%)"
+            )
+
         if cur and cur.get("total", 0) > 0:
             c0 = cur.get("0", 0)
             c1 = cur.get("1", 0)
             ct = cur.get("total", 0)
             cp0 = (c0 / ct) * 100 if ct > 0 else 0
             cp1 = (c1 / ct) * 100 if ct > 0 else 0
-            parts.append(f"Validation Curated: 0 (gMGF): {c0} ({cp0:.1f}%) / 1 (Newton): {c1} ({cp1:.1f}%)")
-            
+            parts.append(
+                f"Validation Curated: 0 (gMGF): {c0} ({cp0:.1f}%) / "
+                f"1 (Newton): {c1} ({cp1:.1f}%)"
+            )
+
         if not parts:
             return ""
         return " | ".join(parts)
@@ -211,10 +269,30 @@ class GNNResultEvaluator:
         extra = [c for c in df.columns if c not in skip and c not in known]
         return known + extra
 
-    def _heatmap_group_columns(self, df: pd.DataFrame) -> list:
-        if "dim_inner" in df.columns and "dropout" in df.columns:
-            return ["dim_inner", "dropout"]
-        return self._config_columns(df)
+    def _varying_config_columns(self, df: pd.DataFrame) -> list:
+        return [
+            c
+            for c in self._config_columns(df)
+            if c in df.columns and df[c].nunique(dropna=False) > 1
+        ]
+
+    def _detect_heatmap_axes(self, df: pd.DataFrame):
+        """Pick index/column axes from hyperparameters that actually vary."""
+        varying = self._varying_config_columns(df)
+        if len(varying) < 2:
+            return None, None
+
+        preferred_pairs = [
+            ("dim_inner", "dropout"),
+            ("layer_type", "graph_pooling"),
+            ("layers_mp", "graph_pooling"),
+            ("layer_type", "layers_mp"),
+            ("act", "base_lr"),
+        ]
+        for a, b in preferred_pairs:
+            if a in varying and b in varying:
+                return a, b
+        return varying[0], varying[1]
 
     def _best_pr_auc_rows(self, df: pd.DataFrame, group_cols: list) -> pd.DataFrame:
         """Keep one row per group: the configuration with the highest pr_auc."""
@@ -223,261 +301,392 @@ class GNNResultEvaluator:
         idx = df.groupby(group_cols, dropna=False)["pr_auc"].idxmax().dropna()
         return df.loc[idx]
 
-    def generate_plots_for_df(self, df: pd.DataFrame, overall_df: pd.DataFrame, output_path: Path, title: str, group_col: str = None):
-        """
-        Generates a unified plot containing a 2x4 grid of pivot heatmaps
-        and a layer summary comparison bar chart.
-        
-        Args:
-            df: The subset of the dataframe to plot (e.g. filtered by a hyperparameter)
-            overall_df: The full dataframe for computing the layer summary
-            output_path: Path to save the PNG
-            title: Title of the visualization
-        """
-        # Create figure and gridspec
-        # 2 rows, 7 columns: cols 0-5 for heatmaps, col 6 for layer summary bar chart
-        fig = plt.figure(figsize=(32, 11), dpi=150)
-        gs = fig.add_gridspec(2, 7, width_ratios=[1, 1, 1, 1, 1, 1, 1.8], wspace=0.35, hspace=0.35)
-        
-        metrics = self.HEATMAP_METRICS
-        aggfuncs = ['mean', 'max']
-        group_cols = self._heatmap_group_columns(df)
-        best_df = self._best_pr_auc_rows(df, group_cols) if "pr_auc" in df.columns else df
+    def _format_axis_label(self, col: str) -> str:
+        labels = {
+            "dim_inner": "Dim Inner",
+            "dropout": "Dropout",
+            "layer_type": "Layer Type",
+            "layers_mp": "MP Layers",
+            "graph_pooling": "Graph Pooling",
+            "act": "Activation",
+            "base_lr": "Learning Rate",
+        }
+        return labels.get(col, col.replace("_", " ").title())
 
-        # Plot heatmaps
-        for row_idx, agg in enumerate(aggfuncs):
-            for col_idx, metric in enumerate(metrics):
-                ax = fig.add_subplot(gs[row_idx, col_idx])
-                
-                try:
-                    plot_df = best_df if agg == 'max' else df
-                    if metric not in plot_df.columns:
-                        raise KeyError(f"metric '{metric}' not in data")
-                    pivot_grid = plot_df.pivot_table(
-                        values=metric,
-                        index='dim_inner',
-                        columns='dropout',
-                        aggfunc='first' if agg == 'max' else agg,
+    def _save_figure(self, fig, output_path: Path, title: str, subtitle_y: float = 0.94):
+        plt.suptitle(title, fontsize=16, fontweight="bold", y=0.98)
+        balance_info = self.get_class_balance_str()
+        if balance_info:
+            plt.figtext(
+                0.5,
+                subtitle_y,
+                balance_info,
+                ha="center",
+                va="center",
+                fontsize=10,
+                style="italic",
+                color="#555555",
+            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, bbox_inches="tight")
+        plt.close(fig)
+
+    def _plot_single_heatmap(
+        self,
+        ax,
+        plot_df: pd.DataFrame,
+        metric: str,
+        index_col: str,
+        column_col: str,
+        agg: str,
+    ):
+        if metric not in plot_df.columns:
+            raise KeyError(f"metric '{metric}' not in data")
+
+        pivot_grid = plot_df.pivot_table(
+            values=metric,
+            index=index_col,
+            columns=column_col,
+            aggfunc="first" if agg == "max" else agg,
+        )
+        pivot_grid = pivot_grid.sort_index(ascending=True)
+        pivot_grid = pivot_grid.reindex(sorted(pivot_grid.columns), axis=1)
+
+        values = pivot_grid.values
+        if pivot_grid.empty or np.all(np.isnan(values)):
+            raise ValueError("no pivot data")
+
+        min_val = np.nanmin(values)
+        max_val = np.nanmax(values)
+        if min_val == max_val:
+            vmin_val = min_val - 0.05
+            vmax_val = max_val + 0.05
+        else:
+            vmin_val = min_val
+            vmax_val = max_val
+
+        cmap_to_use = self.cmap_loss if metric == "loss" else self.cmap
+        im = ax.imshow(
+            values,
+            cmap=cmap_to_use,
+            aspect="auto",
+            origin="lower",
+            vmin=vmin_val,
+            vmax=vmax_val,
+        )
+
+        ax.set_xticks(range(len(pivot_grid.columns)))
+        ax.set_xticklabels(pivot_grid.columns)
+        ax.set_yticks(range(len(pivot_grid.index)))
+        ax.set_yticklabels(pivot_grid.index)
+        ax.set_xlabel(self._format_axis_label(column_col), fontsize=9, fontweight="bold")
+        ax.set_ylabel(self._format_axis_label(index_col), fontsize=9, fontweight="bold")
+        ax.set_title(f"{metric.upper()} ({agg.upper()})", fontsize=11, fontweight="bold", pad=8)
+        ax.tick_params(left=False, bottom=False)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        ax.spines["left"].set_color("#cccccc")
+        ax.spines["bottom"].set_color("#cccccc")
+
+        range_val = max(max_val - min_val, 1e-5)
+        for i in range(len(pivot_grid.index)):
+            for j in range(len(pivot_grid.columns)):
+                val = pivot_grid.values[i, j]
+                if not pd.isna(val):
+                    normalized_val = (val - min_val) / range_val
+                    text_color = "white" if normalized_val > 0.6 else "#111111"
+                    ax.text(
+                        j,
+                        i,
+                        f"{val:.4f}",
+                        ha="center",
+                        va="center",
+                        color=text_color,
+                        fontsize=8,
+                        fontweight="semibold",
                     )
-                    
-                    
-                    # Sort index and columns to ensure ascending order of hyperparameters
-                    pivot_grid = pivot_grid.sort_index(ascending=True)
-                    pivot_grid = pivot_grid.reindex(sorted(pivot_grid.columns), axis=1)
-                    
-                    # Compute min/max values for exact scaling bounds (ignoring NaNs)
-                    min_val = pivot_grid.values[~np.isnan(pivot_grid.values)].min() if not pivot_grid.empty else 0
-                    max_val = pivot_grid.values[~np.isnan(pivot_grid.values)].max() if not pivot_grid.empty else 1
-                    
-                    # Handle flat values where min == max
-                    if min_val == max_val:
-                        vmin_val = min_val - 0.05
-                        vmax_val = max_val + 0.05
-                    else:
-                        vmin_val = min_val
-                        vmax_val = max_val
-                        
-                    # Draw heatmap using imshow with explicit data-driven bounds
-                    cmap_to_use = self.cmap_loss if metric == 'loss' else self.cmap
-                    im = ax.imshow(pivot_grid.values, cmap=cmap_to_use, aspect='auto', origin='lower', vmin=vmin_val, vmax=vmax_val)
-                    
-                    # Set ticks and labels
-                    ax.set_xticks(range(len(pivot_grid.columns)))
-                    ax.set_xticklabels(pivot_grid.columns)
-                    ax.set_yticks(range(len(pivot_grid.index)))
-                    ax.set_yticklabels(pivot_grid.index)
-                    
-                    ax.set_xlabel('Dropout', fontsize=9, fontweight='bold', labelpad=4)
-                    ax.set_ylabel('Dim Inner', fontsize=9, fontweight='bold', labelpad=4)
-                    ax.set_title(f"{metric.upper()} ({agg.upper()})", fontsize=11, fontweight='bold', pad=10)
-                    
-                    # Remove minor tick marks and adjust styling
-                    ax.tick_params(left=False, bottom=False)
-                    ax.spines['top'].set_visible(False)
-                    ax.spines['right'].set_visible(False)
-                    ax.spines['left'].set_color('#cccccc')
-                    ax.spines['bottom'].set_color('#cccccc')
-                    
-                    # Annotate cells with values
-                    range_val = max(max_val - min_val, 1e-5)
-                    for i in range(len(pivot_grid.index)):
-                        for j in range(len(pivot_grid.columns)):
-                            val = pivot_grid.values[i, j]
-                            if not pd.isna(val):
-                                # Determine text color for contrast (if it is close to green, text is white)
-                                normalized_val = (val - min_val) / range_val
-                                text_color = "white" if normalized_val > 0.6 else "#111111"
-                                ax.text(j, i, f"{val:.4f}", ha="center", va="center", color=text_color, fontsize=9, fontweight='semibold')
-                                
-                    # Add small colorbar next to plot
-                    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-                    cbar.ax.tick_params(labelsize=8)
-                    cbar.outline.set_visible(False)
-                except Exception as e:
-                    ax.text(0.5, 0.5, f"No Data\n{str(e)}", ha="center", va="center", fontsize=8)
-                    ax.set_title(f"{metric.upper()} ({agg.upper()}) - N/A", fontsize=10, fontweight='bold')
-        
-        # Plot Layer Summary Bar Chart on the right (spanning both rows)
-        ax_summary = fig.add_subplot(gs[:, 6])
-        
-        # Compute layer summary comparison
-        summary_metrics = ['auc', 'pr_auc', 'accuracy', 'precision', 'recall', 'f1', 'loss']
-        present_metrics = [m for m in summary_metrics if m in overall_df.columns]
-        
-        # Decide grouping column and title dynamically based on the current slice
+
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.tick_params(labelsize=7)
+        cbar.outline.set_visible(False)
+
+    def generate_heatmaps(
+        self,
+        df: pd.DataFrame,
+        output_path: Path,
+        title: str,
+        agg: str,
+    ) -> bool:
+        """Generate a 2x3 heatmap grid for one aggregation mode. Returns False if skipped."""
+        index_col, column_col = self._detect_heatmap_axes(df)
+        if index_col is None:
+            return False
+
+        group_cols = [index_col, column_col]
+        plot_df = (
+            self._best_pr_auc_rows(df, group_cols)
+            if agg == "max" and "pr_auc" in df.columns
+            else df
+        )
+
+        metrics = [m for m in self.HEATMAP_METRICS if m in plot_df.columns]
+        if not metrics:
+            return False
+
+        n_metrics = len(metrics)
+        n_cols = min(3, n_metrics)
+        n_rows = int(np.ceil(n_metrics / n_cols))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), dpi=150)
+        axes = np.atleast_1d(axes).flatten()
+
+        for idx, metric in enumerate(metrics):
+            ax = axes[idx]
+            try:
+                self._plot_single_heatmap(
+                    ax, plot_df, metric, index_col, column_col, agg
+                )
+            except Exception as e:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No Data\n{e}",
+                    ha="center",
+                    va="center",
+                    fontsize=8,
+                )
+                ax.set_title(f"{metric.upper()} ({agg.upper()}) - N/A", fontsize=10)
+
+        for ax in axes[n_metrics:]:
+            ax.axis("off")
+
+        axis_note = (
+            f"Axes: {self._format_axis_label(index_col)} × "
+            f"{self._format_axis_label(column_col)}"
+        )
+        full_title = f"{title}\n{axis_note} — {agg.upper()} aggregation"
+        self._save_figure(fig, output_path, full_title, subtitle_y=0.92)
+        print(f"    Saved heatmap: {output_path}")
+        return True
+
+    def _resolve_bar_grouping(self, df: pd.DataFrame, overall_df: pd.DataFrame, group_col: str = None):
         legend_title = ""
         chart_title = ""
-        
+
         if group_col is not None:
-            # Map explicit group_col to titles and legends
-            if group_col == 'layers_mp':
-                legend_title = "MP Layers"
-                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
-                    chart_title = f"MP Layers Comparison for {df['layer_type'].iloc[0]}"
+            titles = {
+                "layers_mp": ("MP Layers", "MP Layers Comparison"),
+                "act": ("Activation Function", "Activation Function Comparison"),
+                "graph_pooling": ("Graph Pooling", "Pooling Comparison"),
+                "layer_type": ("Model Architecture", "Architecture Comparison"),
+                "base_lr": ("Learning Rate", "Learning Rate Comparison"),
+            }
+            if group_col in titles:
+                legend_title, base_title = titles[group_col]
+                if "layer_type" in df.columns and df["layer_type"].nunique() == 1:
+                    chart_title = f"{base_title} for {df['layer_type'].iloc[0]}"
                 else:
-                    chart_title = "MP Layers Comparison"
-            elif group_col == 'act':
-                legend_title = "Activation Function"
-                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
-                    chart_title = f"Activation Function Comparison for {df['layer_type'].iloc[0]}"
-                else:
-                    chart_title = "Activation Function Comparison"
-            elif group_col == 'graph_pooling':
-                legend_title = "Graph Pooling"
-                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
-                    chart_title = f"Pooling Comparison for {df['layer_type'].iloc[0]}"
-                else:
-                    chart_title = "Pooling Comparison"
-            elif group_col == 'layer_type':
-                legend_title = "Model Architecture"
-                chart_title = "Architecture Comparison (Overall mean)"
-            elif group_col == 'base_lr':
-                legend_title = "Learning Rate"
-                if 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
-                    chart_title = f"Learning Rate Comparison for {df['layer_type'].iloc[0]}"
-                else:
-                    chart_title = "Learning Rate Comparison"
+                    chart_title = base_title
         else:
-            # Auto-detect grouping column
-            if 'layer_type' in overall_df.columns and overall_df['layer_type'].nunique() > 1:
-                group_col = 'layer_type'
+            if "layer_type" in overall_df.columns and overall_df["layer_type"].nunique() > 1:
+                group_col = "layer_type"
                 legend_title = "Model Architecture"
-                chart_title = "Architecture Comparison (Overall mean)"
-            elif 'layer_type' in df.columns and df['layer_type'].nunique() == 1:
-                lt = df['layer_type'].iloc[0]
-                if 'act' in overall_df.columns and overall_df['act'].nunique() > 1:
-                    group_col = 'act'
-                    legend_title = "Activation Function"
-                    chart_title = f"Activation Function Comparison for {lt}"
-                elif 'layers_mp' in overall_df.columns and overall_df['layers_mp'].nunique() > 1:
-                    group_col = 'layers_mp'
-                    legend_title = "MP Layers"
-                    chart_title = f"MP Layers Comparison for {lt}"
-                elif 'graph_pooling' in overall_df.columns and overall_df['graph_pooling'].nunique() > 1:
-                    group_col = 'graph_pooling'
-                    legend_title = "Graph Pooling"
-                    chart_title = f"Pooling Comparison for {lt}"
-                elif 'base_lr' in overall_df.columns and overall_df['base_lr'].nunique() > 1:
-                    group_col = 'base_lr'
-                    legend_title = "Learning Rate"
-                    chart_title = f"Learning Rate Comparison for {lt}"
+                chart_title = "Architecture Comparison (mean)"
+            elif "layer_type" in df.columns and df["layer_type"].nunique() == 1:
+                lt = df["layer_type"].iloc[0]
+                for candidate, legend, title_tpl in [
+                    ("act", "Activation Function", "Activation Function Comparison for {}"),
+                    ("layers_mp", "MP Layers", "MP Layers Comparison for {}"),
+                    ("graph_pooling", "Graph Pooling", "Pooling Comparison for {}"),
+                    ("base_lr", "Learning Rate", "Learning Rate Comparison for {}"),
+                ]:
+                    if (
+                        candidate in overall_df.columns
+                        and overall_df[candidate].nunique() > 1
+                    ):
+                        group_col = candidate
+                        legend_title = legend
+                        chart_title = title_tpl.format(lt)
+                        break
                 else:
-                    group_col = 'layer_type'
+                    group_col = "layer_type"
                     legend_title = "Model Architecture"
                     chart_title = f"Architecture Comparison for {lt}"
             else:
-                if 'layer_type' in overall_df.columns:
-                    group_col = 'layer_type'
-                    legend_title = "Model Architecture"
-                    chart_title = "Architecture Comparison"
-                elif 'act' in overall_df.columns:
-                    group_col = 'act'
-                    legend_title = "Activation Function"
-                    chart_title = "Activation Function Comparison"
-                elif 'layers_mp' in overall_df.columns:
-                    group_col = 'layers_mp'
-                    legend_title = "MP Layers"
-                    chart_title = "MP Layers Comparison"
-                elif 'base_lr' in overall_df.columns:
-                    group_col = 'base_lr'
-                    legend_title = "Learning Rate"
-                    chart_title = "Learning Rate Comparison"
-            
-        if group_col is not None and len(present_metrics) > 0:
-            # Group the current slice's data (or overall_df if it's overall plot) to show comparison
-            comparison_df = df if (df[group_col].nunique() > 1) else overall_df
-            layer_summary = comparison_df.groupby(group_col)[present_metrics].mean()
-            
-            # Premium color palette using qualitative maps
-            premium_palette = ['#2A9D8F', '#E76F51', '#264653', '#F4A261', '#E9C46A', '#457B9D', '#1D3557']
-            num_groups = len(layer_summary)
-            colors = [premium_palette[i % len(premium_palette)] for i in range(num_groups)]
-            
-            # Plot bar chart (transposed so metrics are on X-axis, layer types/activations are bars)
-            layer_summary.T.plot(kind='bar', ax=ax_summary, width=0.8, color=colors, edgecolor='none')
-            
-            ax_summary.set_title(chart_title, fontsize=13, fontweight='bold', pad=12)
-            ax_summary.set_xlabel("Performance Metrics", fontsize=10, fontweight='bold', labelpad=8)
-            ax_summary.set_ylabel("Metric Score", fontsize=10, fontweight='bold', labelpad=8)
-            ax_summary.set_ylim(0, 1.1)
-            ax_summary.grid(axis='y', linestyle='--', alpha=0.5)
-            
-            # Style legend
-            ax_summary.legend(
-                title=legend_title, 
-                frameon=True, 
-                facecolor='#f8f9fa', 
-                edgecolor='none', 
-                fontsize=9, 
-                title_fontsize=10
+                for candidate, legend, title in [
+                    ("layer_type", "Model Architecture", "Architecture Comparison"),
+                    ("act", "Activation Function", "Activation Function Comparison"),
+                    ("layers_mp", "MP Layers", "MP Layers Comparison"),
+                    ("base_lr", "Learning Rate", "Learning Rate Comparison"),
+                ]:
+                    if candidate in overall_df.columns:
+                        group_col = candidate
+                        legend_title = legend
+                        chart_title = title
+                        break
+
+        return group_col, legend_title, chart_title
+
+    def _grouped_metric_summary(
+        self, comparison_df: pd.DataFrame, group_col: str, metrics: list
+    ) -> pd.DataFrame:
+        """Mean metrics per group, attaching std columns when available."""
+        summary = comparison_df.groupby(group_col)[metrics].mean()
+        for metric in metrics:
+            std_col = f"{metric}_std"
+            if std_col in comparison_df.columns:
+                summary[f"{metric}_err"] = comparison_df.groupby(group_col)[std_col].mean()
+        return summary
+
+    def generate_summary_bars(
+        self,
+        df: pd.DataFrame,
+        overall_df: pd.DataFrame,
+        output_path: Path,
+        title: str,
+        group_col: str = None,
+    ) -> bool:
+        """Grouped bar chart for bounded metrics; loss shown in a separate panel below."""
+        present_bounded = [m for m in self.BOUNDED_METRICS if m in overall_df.columns]
+        has_loss = "loss" in overall_df.columns
+        if not present_bounded and not has_loss:
+            return False
+
+        group_col, legend_title, chart_title = self._resolve_bar_grouping(
+            df, overall_df, group_col
+        )
+        if group_col is None:
+            return False
+
+        comparison_df = df if df[group_col].nunique() > 1 else overall_df
+        if comparison_df[group_col].nunique() < 1:
+            return False
+
+        n_panels = int(bool(present_bounded)) + int(has_loss)
+        fig, axes = plt.subplots(
+            n_panels, 1, figsize=(12, 4.5 * n_panels), dpi=150, sharex=False
+        )
+        axes = np.atleast_1d(axes)
+        panel_idx = 0
+        n_groups = comparison_df[group_col].nunique()
+        colors = [
+            self.PREMIUM_PALETTE[i % len(self.PREMIUM_PALETTE)]
+            for i in range(n_groups)
+        ]
+
+        if present_bounded:
+            ax = axes[panel_idx]
+            layer_summary = self._grouped_metric_summary(
+                comparison_df, group_col, present_bounded
             )
-            
-            # Style spines
-            ax_summary.spines['top'].set_visible(False)
-            ax_summary.spines['right'].set_visible(False)
-            ax_summary.spines['left'].set_color('#cccccc')
-            ax_summary.spines['bottom'].set_color('#cccccc')
-            
-            # Rotate x labels for better readability
-            ax_summary.set_xticklabels([m.upper() for m in present_metrics], rotation=0, fontsize=10)
-            
-            # Add values above bars
-            for p in ax_summary.patches:
-                height = p.get_height()
-                if height > 0:
-                    ax_summary.annotate(f"{height:.3f}",
-                                        xy=(p.get_x() + p.get_width() / 2, height),
-                                        xytext=(0, 4),  # 4 points vertical offset
-                                        textcoords="offset points",
-                                        ha='center', va='bottom', fontsize=8, rotation=90, fontweight='semibold')
-        else:
-            ax_summary.text(0.5, 0.5, "No Architecture Data Available", ha="center", va="center", fontsize=10)
-                
-        # Main Figure Title
-        plt.suptitle(title, fontsize=18, fontweight='bold', y=0.98)
-        balance_info = self.get_class_balance_str()
-        if balance_info:
-            plt.figtext(0.5, 0.94, balance_info, ha='center', va='center', fontsize=11, style='italic', color='#555555')
-        
-        # Save and close
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, bbox_inches='tight')
-        plt.close(fig)
+            layer_summary[present_bounded].T.plot(
+                kind="bar", ax=ax, width=0.8, color=colors, edgecolor="none"
+            )
+            ax.set_ylim(0, 1.1)
+            ax.set_ylabel("Score", fontsize=10, fontweight="bold")
+            ax.set_title(chart_title, fontsize=13, fontweight="bold", pad=10)
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.legend(
+                title=legend_title,
+                frameon=True,
+                facecolor="#f8f9fa",
+                edgecolor="none",
+                fontsize=9,
+                title_fontsize=10,
+            )
+            ax.set_xticklabels(
+                [m.upper() for m in present_bounded], rotation=0, fontsize=10
+            )
+            for container in ax.containers:
+                for bar in container:
+                    height = bar.get_height()
+                    if height > 0:
+                        ax.annotate(
+                            f"{height:.3f}",
+                            xy=(bar.get_x() + bar.get_width() / 2, height),
+                            xytext=(0, 3),
+                            textcoords="offset points",
+                            ha="center",
+                            va="bottom",
+                            fontsize=7,
+                            rotation=90,
+                        )
+            panel_idx += 1
+
+        if has_loss:
+            ax = axes[panel_idx]
+            loss_summary = self._grouped_metric_summary(
+                comparison_df, group_col, ["loss"]
+            )
+            loss_summary[["loss"]].T.plot(
+                kind="bar",
+                ax=ax,
+                width=0.8,
+                color=["#842029"] * len(loss_summary),
+                edgecolor="none",
+            )
+            ax.set_ylabel("Loss", fontsize=10, fontweight="bold", color="#842029")
+            ax.set_title("Loss Comparison", fontsize=12, fontweight="bold", pad=8)
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.legend(
+                title=legend_title,
+                frameon=False,
+                fontsize=9,
+                title_fontsize=10,
+            )
+            ax.set_xticklabels(["LOSS"], rotation=0, fontsize=10)
+
+        for ax in axes:
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
+            ax.spines["left"].set_color("#cccccc")
+            ax.spines["bottom"].set_color("#cccccc")
+
+        self._save_figure(fig, output_path, title, subtitle_y=0.92)
+        print(f"    Saved summary bars: {output_path}")
+        return True
+
+    def generate_plots_for_df(
+        self,
+        df: pd.DataFrame,
+        overall_df: pd.DataFrame,
+        output_dir: Path,
+        title: str,
+        group_col: str = None,
+    ):
+        """Generate split outputs: heatmaps_mean, heatmaps_max, and summary_bars."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.generate_heatmaps(
+            df,
+            output_dir / "heatmaps_mean.png",
+            title,
+            agg="mean",
+        )
+        self.generate_heatmaps(
+            df,
+            output_dir / "heatmaps_max.png",
+            title,
+            agg="max",
+        )
+        self.generate_summary_bars(
+            df,
+            overall_df,
+            output_dir / "summary_bars.png",
+            title,
+            group_col=group_col,
+        )
 
     def generate_summary_comparison(self, output_path: Path):
-        """
-        Generates a comparison plot across train/test/val splits showing
-        best-epoch metrics side-by-side.
-        """
+        """Grouped bar chart across train / val synthetic / val curated (best epoch)."""
         split_files = {
             "Train (Synthetic)": "train_bestepoch",
             "Validation Synthetic": "val_bestepoch",
             "Validation Curated": "test_bestepoch",
         }
-        
-        summary_metrics = ['auc', 'pr_auc', 'accuracy', 'precision', 'recall', 'f1', 'loss']
+
+        summary_metrics = self.BOUNDED_METRICS + ["loss"]
         split_data = {}
-        
+
         for label, filename in split_files.items():
             try:
                 df = self.load_data(filename)
@@ -485,179 +694,382 @@ class GNNResultEvaluator:
                 split_data[label] = df[present].mean()
             except FileNotFoundError:
                 continue
-        
+
         if len(split_data) < 2:
-            return  # Not enough splits to compare
-        
+            return
+
         summary_df = pd.DataFrame(split_data)
-        present_metrics = list(summary_df.index)
-        
-        fig, ax = plt.subplots(figsize=(14, 7), dpi=150)
-        
-        premium_palette = ['#2A9D8F', '#E76F51', '#264653']
-        colors = [premium_palette[i % len(premium_palette)] for i in range(len(summary_df.columns))]
-        
-        summary_df.plot(kind='bar', ax=ax, width=0.75, color=colors, edgecolor='none')
-        
-        ax.set_title("Train / Test / Validation Comparison (Best Epoch Avg)", fontsize=15, fontweight='bold', pad=12)
-        ax.set_xlabel("Performance Metrics", fontsize=11, fontweight='bold', labelpad=8)
-        ax.set_ylabel("Metric Score", fontsize=11, fontweight='bold', labelpad=8)
-        ax.set_ylim(0, max(1.1, summary_df.max().max() * 1.1))
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        ax.legend(
-            title="Data Split",
-            frameon=True,
-            facecolor='#f8f9fa',
-            edgecolor='none',
-            fontsize=10,
-            title_fontsize=11
+        bounded = [m for m in self.BOUNDED_METRICS if m in summary_df.index]
+        has_loss = "loss" in summary_df.index
+        n_panels = int(bool(bounded)) + int(has_loss)
+        fig, axes = plt.subplots(n_panels, 1, figsize=(14, 5 * n_panels), dpi=150)
+        axes = np.atleast_1d(axes)
+        colors = [
+            self.PREMIUM_PALETTE[i % len(self.PREMIUM_PALETTE)]
+            for i in range(len(summary_df.columns))
+        ]
+        panel_idx = 0
+
+        if bounded:
+            ax = axes[panel_idx]
+            summary_df.loc[bounded].plot(
+                kind="bar", ax=ax, width=0.75, color=colors, edgecolor="none"
+            )
+            ax.set_ylim(0, 1.1)
+            ax.set_ylabel("Score", fontsize=11, fontweight="bold")
+            ax.set_title(
+                "Train / Val Synthetic / Val Curated Comparison (Best Epoch Avg)",
+                fontsize=15,
+                fontweight="bold",
+                pad=12,
+            )
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.legend(
+                title="Data Split",
+                frameon=True,
+                facecolor="#f8f9fa",
+                edgecolor="none",
+                fontsize=10,
+                title_fontsize=11,
+            )
+            ax.set_xticklabels([m.upper() for m in bounded], rotation=0, fontsize=10)
+            panel_idx += 1
+
+        if has_loss:
+            ax = axes[panel_idx]
+            summary_df.loc[["loss"]].plot(
+                kind="bar", ax=ax, width=0.75, color=colors, edgecolor="none"
+            )
+            ax.set_ylabel("Loss", fontsize=11, fontweight="bold")
+            ax.set_title("Loss Comparison (Best Epoch Avg)", fontsize=13, fontweight="bold")
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.legend(
+                title="Data Split",
+                frameon=False,
+                fontsize=10,
+                title_fontsize=11,
+            )
+            ax.set_xticklabels(["LOSS"], rotation=0, fontsize=10)
+
+        for ax in axes:
+            for spine in ("top", "right"):
+                ax.spines[spine].set_visible(False)
+            ax.spines["left"].set_color("#cccccc")
+            ax.spines["bottom"].set_color("#cccccc")
+
+        self._save_figure(
+            fig,
+            output_path,
+            f"Split Comparison — {self.naming_var}",
+            subtitle_y=0.96,
         )
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_color('#cccccc')
-        ax.spines['bottom'].set_color('#cccccc')
-        ax.set_xticklabels([m.upper() for m in present_metrics], rotation=0, fontsize=10)
-        
-        for p in ax.patches:
-            height = p.get_height()
-            if height > 0:
-                ax.annotate(f"{height:.3f}",
-                            xy=(p.get_x() + p.get_width() / 2, height),
-                            xytext=(0, 4),
-                            textcoords="offset points",
-                            ha='center', va='bottom', fontsize=8, rotation=90, fontweight='semibold')
-        
-        plt.suptitle(f"Split Comparison — {self.naming_var}", fontsize=17, fontweight='bold', y=1.01)
-        balance_info = self.get_class_balance_str()
-        if balance_info:
-            plt.figtext(0.5, 0.96, balance_info, ha='center', va='center', fontsize=10, style='italic', color='#555555')
-        
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, bbox_inches='tight')
-        plt.close(fig)
         print(f"    Saved split comparison plot: {output_path}")
 
+    def generate_generalization_gap(self, output_path: Path):
+        """Line chart of pr_auc across splits, grouped by architecture."""
+        split_files = {
+            "Train": "train_bestepoch",
+            "Val Synthetic": "val_bestepoch",
+            "Val Curated": "test_bestepoch",
+        }
+
+        frames = []
+        for split_label, filename in split_files.items():
+            try:
+                df = self.load_data(filename)
+            except FileNotFoundError:
+                continue
+            if "pr_auc" not in df.columns:
+                continue
+            chunk = df.copy()
+            chunk["split"] = split_label
+            frames.append(chunk)
+
+        if not frames:
+            return
+
+        combined = pd.concat(frames, ignore_index=True)
+        group_col = (
+            "layer_type"
+            if "layer_type" in combined.columns
+            and combined["layer_type"].nunique() > 1
+            else None
+        )
+
+        fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
+        split_order = ["Train", "Val Synthetic", "Val Curated"]
+        x = np.arange(len(split_order))
+
+        if group_col:
+            for i, (name, group) in enumerate(combined.groupby(group_col)):
+                means = []
+                for split in split_order:
+                    subset = group[group["split"] == split]["pr_auc"]
+                    means.append(subset.mean() if len(subset) else np.nan)
+                color = self.PREMIUM_PALETTE[i % len(self.PREMIUM_PALETTE)]
+                ax.plot(x, means, marker="o", linewidth=2, label=name, color=color)
+                for xi, val in zip(x, means):
+                    if not np.isnan(val):
+                        ax.annotate(f"{val:.3f}", (xi, val), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
+        else:
+            means = [
+                combined[combined["split"] == s]["pr_auc"].mean() for s in split_order
+            ]
+            ax.plot(x, means, marker="o", linewidth=2, color=self.PREMIUM_PALETTE[0])
+            for xi, val in zip(x, means):
+                if not np.isnan(val):
+                    ax.annotate(f"{val:.3f}", (xi, val), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(split_order)
+        ax.set_ylim(0, 1.05)
+        ax.set_ylabel("PR-AUC", fontsize=11, fontweight="bold")
+        ax.set_xlabel("Data Split", fontsize=11, fontweight="bold")
+        ax.set_title("Generalization Gap (Best Epoch)", fontsize=14, fontweight="bold")
+        ax.grid(axis="y", linestyle="--", alpha=0.5)
+        if group_col:
+            ax.legend(title="Architecture", frameon=False)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+
+        self._save_figure(
+            fig,
+            output_path,
+            f"Generalization Gap — {self.naming_var}",
+            subtitle_y=0.90,
+        )
+        print(f"    Saved generalization gap plot: {output_path}")
+
+    def generate_leaderboard(self, output_dir: Path):
+        """Rank top configs by val_bestepoch pr_auc; save CSV and table PNG."""
+        try:
+            val_df = self.load_data("val_bestepoch")
+        except FileNotFoundError:
+            print("    Skipping leaderboard (val_bestepoch.csv not found)")
+            return
+
+        if "pr_auc" not in val_df.columns:
+            print("    Skipping leaderboard (pr_auc column missing)")
+            return
+
+        config_cols = self._config_columns(val_df)
+        metric_cols = [
+            m
+            for m in ["pr_auc", "auc", "f1", "recall", "precision", "accuracy", "loss"]
+            if m in val_df.columns
+        ]
+        display_cols = config_cols + metric_cols + (["epoch"] if "epoch" in val_df.columns else [])
+
+        ranked = val_df.sort_values("pr_auc", ascending=False).head(self.top_k)
+        ranked = ranked[[c for c in display_cols if c in ranked.columns]]
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        csv_path = output_dir / "leaderboard.csv"
+        ranked.to_csv(csv_path, index=False)
+        print(f"    Saved leaderboard CSV: {csv_path}")
+
+        if ranked.empty:
+            return
+
+        fig_height = max(4, 0.45 * len(ranked) + 1.5)
+        fig, ax = plt.subplots(figsize=(16, fig_height), dpi=150)
+        ax.axis("off")
+
+        table_data = ranked.copy()
+        for col in metric_cols:
+            if col in table_data.columns:
+                table_data[col] = table_data[col].map(lambda v: f"{v:.4f}")
+        cell_text = table_data.values.tolist()
+        col_labels = [self._format_axis_label(c) if c in self.CONFIG_COLS else c.upper() for c in table_data.columns]
+
+        table = ax.table(
+            cellText=cell_text,
+            colLabels=col_labels,
+            loc="center",
+            cellLoc="center",
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1, 1.4)
+
+        self._save_figure(
+            fig,
+            output_dir / "leaderboard.png",
+            f"Top {len(ranked)} Configurations by Val Synthetic PR-AUC — {self.naming_var}",
+            subtitle_y=0.02,
+        )
+        print(f"    Saved leaderboard PNG: {output_dir / 'leaderboard.png'}")
+
+    def _evaluate_run_slices(self, run: str, df: pd.DataFrame):
+        label = self.run_labels.get(run, run)
+        run_out_dir = self.output_dir / run
+        run_out_dir.mkdir(parents=True, exist_ok=True)
+
+        self.generate_plots_for_df(
+            df=df,
+            overall_df=df,
+            output_dir=run_out_dir,
+            title=f"{label} - Overall ({self.naming_var})",
+        )
+
+        if self.skip_slices or "layer_type" not in df.columns:
+            return
+
+        for lt in df["layer_type"].dropna().unique():
+            arch_df = df[df["layer_type"] == lt]
+            if arch_df.empty:
+                continue
+
+            arch_dir = run_out_dir / "layer_type" / lt
+            self.generate_plots_for_df(
+                df=arch_df,
+                overall_df=arch_df,
+                output_dir=arch_dir,
+                title=f"{label} - Layer: {lt} ({self.naming_var})",
+            )
+
+            if "layers_mp" in arch_df.columns:
+                for mp in arch_df["layers_mp"].dropna().unique():
+                    sub_df = arch_df[arch_df["layers_mp"] == mp]
+                    if not sub_df.empty:
+                        self.generate_plots_for_df(
+                            df=sub_df,
+                            overall_df=arch_df,
+                            output_dir=arch_dir / "layers_mp" / f"{mp}_layers",
+                            title=f"{label} - {lt} - MP Layers: {mp} ({self.naming_var})",
+                            group_col="layers_mp",
+                        )
+
+            if "act" in arch_df.columns:
+                for act in arch_df["act"].dropna().unique():
+                    sub_df = arch_df[arch_df["act"] == act]
+                    if not sub_df.empty:
+                        self.generate_plots_for_df(
+                            df=sub_df,
+                            overall_df=arch_df,
+                            output_dir=arch_dir / "act" / str(act),
+                            title=f"{label} - {lt} - Activation: {act} ({self.naming_var})",
+                            group_col="act",
+                        )
+
+            if "graph_pooling" in arch_df.columns:
+                for pooling in arch_df["graph_pooling"].dropna().unique():
+                    sub_df = arch_df[arch_df["graph_pooling"] == pooling]
+                    if not sub_df.empty:
+                        self.generate_plots_for_df(
+                            df=sub_df,
+                            overall_df=arch_df,
+                            output_dir=arch_dir / "graph_pooling" / str(pooling),
+                            title=f"{label} - {lt} - Pooling: {pooling} ({self.naming_var})",
+                            group_col="graph_pooling",
+                        )
+
+            if "base_lr" in arch_df.columns:
+                lr_values = arch_df["base_lr"].dropna().unique()
+                if len(lr_values) > 1:
+                    for lr in lr_values:
+                        sub_df = arch_df[arch_df["base_lr"] == lr]
+                        if not sub_df.empty:
+                            self.generate_plots_for_df(
+                                df=sub_df,
+                                overall_df=arch_df,
+                                output_dir=arch_dir / "base_lr" / f"lr_{lr}",
+                                title=f"{label} - {lt} - LR: {lr} ({self.naming_var})",
+                                group_col="base_lr",
+                            )
+
     def run_all(self):
-        """Runs the entire evaluation pipeline for all runs and slices."""
+        """Runs evaluation for configured runs and global summary plots."""
         print(f"Starting GNN Evaluation on '{self.naming_var}'...")
         print(f"Data directory: {self.data_dir}")
         print(f"Output directory: {self.output_dir}")
-        
+        print(f"Runs: {', '.join(self.runs)}")
+        if self.skip_slices:
+            print("Slice generation: disabled")
+
         for run in self.runs:
             label = self.run_labels.get(run, run)
             print(f"  Evaluating run: {run} ({label})...")
             try:
                 df = self.load_data(run)
-            except FileNotFoundError as e:
-                print(f"    Skipping {run} (File not found)")
+            except FileNotFoundError:
+                print(f"    Skipping {run} (file not found)")
                 continue
-                
-            run_out_dir = self.output_dir / run
-            run_out_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 1. Overall Diagram
-            self.generate_plots_for_df(
-                df=df,
-                overall_df=df,
-                output_path=run_out_dir / "overall.png",
-                title=f"{label} - Overall Hyperparameter Grid ({self.naming_var})"
-            )
-            
-            # 2. Diagrams by observed layer_type (nested architecture folders)
-            if 'layer_type' in df.columns:
-                layer_types = df['layer_type'].dropna().unique()
-                for lt in layer_types:
-                    arch_df = df[df['layer_type'] == lt]
-                    if arch_df.empty:
-                        continue
-                        
-                    # Create architecture subdirectory
-                    arch_dir = run_out_dir / "layer_type" / lt
-                    arch_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # 2a. Architecture Overall Diagram
-                    self.generate_plots_for_df(
-                        df=arch_df,
-                        overall_df=arch_df,
-                        output_path=arch_dir / "overall.png",
-                        title=f"{label} - Layer: {lt} - Overall ({self.naming_var})"
-                    )
-                    
-                    # 2b. Slices by observed layers_mp (within this architecture)
-                    if 'layers_mp' in arch_df.columns:
-                        mp_values = arch_df['layers_mp'].dropna().unique()
-                        mp_dir = arch_dir / "layers_mp"
-                        for mp in mp_values:
-                            sub_df = arch_df[arch_df['layers_mp'] == mp]
-                            if not sub_df.empty:
-                                self.generate_plots_for_df(
-                                    df=sub_df,
-                                    overall_df=arch_df,
-                                    output_path=mp_dir / f"{mp}_layers.png",
-                                    title=f"{label} - Layer: {lt} - MP Layers: {mp} ({self.naming_var})",
-                                    group_col="layers_mp"
-                                )
-        
-                    # 2c. Slices by observed act (activation function, within this architecture)
-                    if 'act' in arch_df.columns:
-                        act_values = arch_df['act'].dropna().unique()
-                        act_dir = arch_dir / "act"
-                        for act in act_values:
-                            sub_df = arch_df[arch_df['act'] == act]
-                            if not sub_df.empty:
-                                self.generate_plots_for_df(
-                                    df=sub_df,
-                                    overall_df=arch_df,
-                                    output_path=act_dir / f"{act}.png",
-                                    title=f"{label} - Layer: {lt} - Activation: {act} ({self.naming_var})",
-                                    group_col="act"
-                                )
-        
-                    # 2d. Slices by observed graph_pooling (pooling function, within this architecture)
-                    if 'graph_pooling' in arch_df.columns:
-                        pooling_values = arch_df['graph_pooling'].dropna().unique()
-                        pooling_dir = arch_dir / "graph_pooling"
-                        for pooling in pooling_values:
-                            sub_df = arch_df[arch_df['graph_pooling'] == pooling]
-                            if not sub_df.empty:
-                                    self.generate_plots_for_df(
-                                        df=sub_df,
-                                        overall_df=arch_df,
-                                        output_path=pooling_dir / f"{pooling}.png",
-                                        title=f"{label} - Layer: {lt} - Pooling: {pooling} ({self.naming_var})",
-                                        group_col="graph_pooling"
-                                    )
-                        
-                    # 2e. Slices by observed base_lr (learning rate, within this architecture)
-                    if 'base_lr' in arch_df.columns:
-                        lr_values = arch_df['base_lr'].dropna().unique()
-                        if len(lr_values) > 1:
-                            lr_dir = arch_dir / "base_lr"
-                            for lr in lr_values:
-                                sub_df = arch_df[arch_df['base_lr'] == lr]
-                                if not sub_df.empty:
-                                    self.generate_plots_for_df(
-                                        df=sub_df,
-                                        overall_df=arch_df,
-                                        output_path=lr_dir / f"lr_{lr}.png",
-                                        title=f"{label} - Layer: {lt} - Learning Rate: {lr} ({self.naming_var})",
-                                        group_col="base_lr"
-                                    )                      
-        # 6. Generate cross-split comparison plot
-        print("  Generating split comparison plot...")
-        self.generate_summary_comparison(
-            output_path=self.output_dir / "split_comparison.png"
-        )
+            self._evaluate_run_slices(run, df)
+
+        print("  Generating global summary plots...")
+        self.generate_summary_comparison(self.output_dir / "split_comparison.png")
+        self.generate_generalization_gap(self.output_dir / "generalization_gap.png")
+        self.generate_leaderboard(self.output_dir)
 
         print(f"Evaluation complete! Plots saved to {self.output_dir}")
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        naming_var = sys.argv[1]
-    else:
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Generate evaluation plots for GNN grid-search results."
+    )
+    parser.add_argument(
+        "naming_var",
+        nargs="?",
+        help="Experiment folder under run_results/ (e.g. res_with_enrich)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Evaluate all 9 run CSV variants (default: best-epoch splits only)",
+    )
+    parser.add_argument(
+        "--runs",
+        nargs="+",
+        metavar="RUN",
+        help="Explicit list of run CSV stems to evaluate",
+    )
+    parser.add_argument(
+        "--skip-slices",
+        action="store_true",
+        help="Only generate top-level run plots (no nested architecture slices)",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Number of configs in the leaderboard (default: 10)",
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=None,
+        help="Base directory containing experiment folders (default: run_results/)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    naming_var = args.naming_var
+    if not naming_var:
         naming_var = input("Enter naming var (e.g. res_with_enrich): ").strip()
         if not naming_var:
             naming_var = "res_with_enrich"
-            
-    evaluator = GNNResultEvaluator(naming_var)
+
+    if args.runs:
+        runs = args.runs
+    elif args.full:
+        runs = GNNResultEvaluator.ALL_RUNS
+    else:
+        runs = GNNResultEvaluator.DEFAULT_RUNS
+
+    evaluator = GNNResultEvaluator(
+        naming_var=naming_var,
+        base_dir=args.base_dir,
+        runs=runs,
+        skip_slices=args.skip_slices,
+        top_k=args.top_k,
+    )
     evaluator.run_all()
+
+
+if __name__ == "__main__":
+    main()

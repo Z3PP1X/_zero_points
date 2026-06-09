@@ -1,7 +1,15 @@
 import os
 import re
+import sys
 from pathlib import Path
 import os.path as osp
+
+_script_dir = Path(__file__).resolve().parent
+_gnn_root = _script_dir.parent
+_src_root = _gnn_root.parent
+for _path in (str(_gnn_root), str(_src_root)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 # Patch agg_runs to support 'test' as an epoch-by-epoch split
 import torch_geometric.graphgym.utils.agg_runs as agg_runs_mod
@@ -234,13 +242,124 @@ from torch_geometric.graphgym.utils.agg_runs import agg_runs, agg_batch
 agg_runs = custom_agg_runs
 agg_batch = custom_agg_batch
 
+KNOWN_GRID_PARAMS = [
+    "layer_type",
+    "layers_mp",
+    "dim_inner",
+    "dropout",
+    "graph_pooling",
+    "act",
+    "base_lr",
+]
+
+
+def _normalize_run_directories(results_dir: Path):
+    """Rename grid_* folders to GraphGym's grid-key=value convention."""
+    print("Checking and renaming directories to PyG GraphGym convention...")
+    for run in os.listdir(results_dir):
+        if run == "agg":
+            continue
+
+        match = re.match(r"grid_(.+)", run)
+        if not match:
+            continue
+
+        parts = match.group(1)
+        extracted = {}
+        for param in KNOWN_GRID_PARAMS:
+            pattern = rf"{param}_([a-zA-Z0-9\.-]+)"
+            m = re.search(pattern, parts)
+            if m:
+                extracted[param] = m.group(1)
+
+        if extracted:
+            new_name = "grid-" + "-".join(f"{k}={v}" for k, v in extracted.items())
+            old_path = results_dir / run
+            new_path = results_dir / new_name
+            if old_path != new_path and not new_path.exists():
+                os.rename(old_path, new_path)
+                print(f"  Renamed: {run} -> {new_name}")
+
+
+def aggregate_results(results_dir: str | Path) -> Path:
+    """
+    Aggregate GraphGym run outputs into CSVs under {results_dir}/agg/.
+
+    Returns:
+        Path to the agg directory.
+    """
+    results_dir = Path(results_dir)
+    if not results_dir.exists():
+        raise FileNotFoundError(f"Results directory not found at {results_dir}")
+
+    _normalize_run_directories(results_dir)
+
+    print("Directories normalized. Running PyG internal aggregation...")
+    for run in os.listdir(results_dir):
+        run_dir = results_dir / run
+        if run_dir.is_dir() and run != "agg":
+            try:
+                agg_runs(str(run_dir), metric_best=BEST_METRIC)
+            except Exception as e:
+                print(f"Warning: Failed to aggregate runs for {run}: {e}")
+
+    try:
+        agg_batch(str(results_dir), metric_best=BEST_METRIC)
+        print(f"Successfully aggregated batch results inside: {results_dir / 'agg'}")
+    except Exception as e:
+        print(f"Error running batch aggregation: {e}")
+
+    agg_dir = results_dir / "agg"
+    if agg_dir.exists():
+        csvs = sorted(agg_dir.glob("*.csv"))
+        print(f"\nGenerated {len(csvs)} aggregated CSV files:")
+        for csv in csvs:
+            print(f"  - {csv.name}")
+
+    return agg_dir
+
+
 def main():
+    import argparse
     import sys
+
     script_dir = Path(__file__).resolve().parent
-    
-    if len(sys.argv) > 1:
-        target = sys.argv[1]
-        # Check run_results first, then relative/absolute paths
+    parser = argparse.ArgumentParser(
+        description="Aggregate GraphGym grid-search results into CSV files."
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        default=None,
+        help="Experiment folder name or path (default: results/)",
+    )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="After aggregation, run the full post-evaluation plot pipeline",
+    )
+    parser.add_argument(
+        "--configs-dir",
+        type=Path,
+        default=None,
+        help="Config YAML directory for top-config diagnostics",
+    )
+    parser.add_argument("--full", action="store_true", help="Evaluate all 9 run CSVs")
+    parser.add_argument(
+        "--skip-slices",
+        action="store_true",
+        help="Skip nested architecture slice plots during evaluation",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="Number of top configs for diagnostics plots",
+    )
+    args = parser.parse_args(sys.argv[1:] or None)
+
+    if args.target:
+        target = args.target
         if (script_dir / "run_results" / target).exists():
             results_dir = script_dir / "run_results" / target
         elif Path(target).exists():
@@ -250,70 +369,28 @@ def main():
     else:
         results_dir = script_dir / "results"
 
-    if not results_dir.exists():
-        print(f"Error: results directory not found at {results_dir}")
+    try:
+        aggregate_results(results_dir)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}")
         return
 
-    # 1. Rename directories to the PyG/GraphGym expected format if necessary
-    print("Checking and renaming directories to PyG GraphGym convention...")
-    for run in os.listdir(results_dir):
-        if run == "agg":
-            continue
-        
-        # Match current underscore-based format (flexible: captures all key=value pairs)
-        match = re.match(
-            r"grid_(.+)",
-            run
+    if args.eval:
+        configs_dir = args.configs_dir
+        if configs_dir is None and (script_dir / "configs").exists():
+            configs_dir = script_dir / "configs"
+
+        from gnn.supervised_learning.run_results.post_eval import run_post_evaluation
+
+        run_post_evaluation(
+            results_dir,
+            configs_dir=configs_dir,
+            full_runs=args.full,
+            skip_slices=args.skip_slices,
+            top_k=args.top_k,
+            skip_aggregation=True,
         )
-        if match:
-            # Convert underscore-separated key_value pairs to hyphen-separated key=value pairs
-            parts = match.group(1)
-            # Split into key-value pairs: key1_val1_key2_val2_...
-            # The pattern is: word_word_word_value where value can be numeric
-            # Use a more robust approach: find known parameter names
-            known_params = ['layer_type', 'layers_mp', 'dim_inner', 'dropout', 'graph_pooling', 'act', 'base_lr']
-            
-            remaining = parts
-            extracted = {}
-            for param in known_params:
-                pattern = rf"{param}_([a-zA-Z0-9\.-]+)"
-                m = re.search(pattern, remaining)
-                if m:
-                    extracted[param] = m.group(1)
-            
-            if extracted:
-                new_name = "grid-" + "-".join(f"{k}={v}" for k, v in extracted.items())
-                old_path = results_dir / run
-                new_path = results_dir / new_name
-                if old_path != new_path and not new_path.exists():
-                    os.rename(old_path, new_path)
-                    print(f"  Renamed: {run} -> {new_name}")
 
-    print("Directories normalized. Running PyG internal aggregation...")
-    
-    # 2. Run seed-level aggregation on all run directories
-    for run in os.listdir(results_dir):
-        run_dir = results_dir / run
-        if run_dir.is_dir() and run != "agg":
-            try:
-                agg_runs(str(run_dir), metric_best=BEST_METRIC)
-            except Exception as e:
-                print(f"Warning: Failed to aggregate runs for {run}: {e}")
-
-    # 3. Run batch-level aggregation across all configurations
-    try:
-        agg_batch(str(results_dir), metric_best=BEST_METRIC)
-        print(f"Successfully aggregated batch results inside: {results_dir / 'agg'}")
-    except Exception as e:
-        print(f"Error running batch aggregation: {e}")
-    
-    # 4. Report which CSV files were generated
-    agg_dir = results_dir / "agg"
-    if agg_dir.exists():
-        csvs = sorted(agg_dir.glob("*.csv"))
-        print(f"\nGenerated {len(csvs)} aggregated CSV files:")
-        for csv in csvs:
-            print(f"  - {csv.name}")
 
 if __name__ == "__main__":
     main()
