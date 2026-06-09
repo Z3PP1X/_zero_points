@@ -237,6 +237,7 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
+    cfg.train.epoch_warmup = 5
     cfg.params = 0
 
 
