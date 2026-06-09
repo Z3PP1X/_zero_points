@@ -54,6 +54,7 @@ class GraphPipeline:
         unified_loader: UnifiedDataLoader | None = None,
         synthetic: bool = False,
         synthetic_dataset_name: str | None = None,
+        architecture: str = "gatv2_stack",
     ):
         self.seed = seed
         self.mode = mode
@@ -61,6 +62,7 @@ class GraphPipeline:
         self.active_features = active_features
         self.synthetic = synthetic
         self.synthetic_dataset_name = synthetic_dataset_name if synthetic_dataset_name else None
+        self.architecture = architecture
 
         # Use unified_loader or get/create singleton instance
         if unified_loader is not None:
@@ -283,6 +285,13 @@ class GraphPipeline:
     @property
     def global_dim(self) -> int:
         return 2
+
+    @property
+    def edge_dim(self) -> int:
+        from gnn.shared.utils.graph_utils import ENRICHED_EDGE_FEATURE_SCHEMA, BASIC_EDGE_FEATURE_SCHEMA
+        if self.active_features is not None:
+            return len(ENRICHED_EDGE_FEATURE_SCHEMA if self.enrich else BASIC_EDGE_FEATURE_SCHEMA)
+        return 4 if self.enrich else 1
 
 
 def parse_float(val) -> float:

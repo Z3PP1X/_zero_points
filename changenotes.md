@@ -1,19 +1,51 @@
-# Change Notes - GNN Backbone Enhancements and Edge Feature Projection
+# Change Notes - GNN Backbone Enhancements and Native Edge Features
 
-This document outlines the modifications made to project edge features to the node base and to implement structural virtual node enhancements to prevent oversmoothing in Graph Neural Network (GNN) architectures.
+This document outlines modifications to GNN graph construction, edge-aware backbones, virtual node mechanisms, and supervised training integration.
 
 ---
 
-## 1. Node-Projected Edge Features
+## 1. Native Edge Features (replacing node-projected edge features)
 
-To enable GNN backbones that do not support edge features to leverage topological and connection properties, we projected key edge characteristics into the node base:
-- **`node_child_index`**: The sequential index of a node as a child of its parent (defaults to `0.0` for root nodes).
-- **`parent_edge_betweenness`**: The edge betweenness centrality of the edge connecting a node to its parent (taking the maximum betweenness in case of multiple parent edges in a DAG, defaults to `0.0` for root nodes).
-- **`parent_relation_type`**: The float-encoded edge relation type of the connection to the parent node (defaults to `0.0` for root nodes).
+Edge semantics are now consumed directly by edge-aware conv layers instead of being flattened onto node features.
 
-**Integration & Dimension Updates:**
-- `NATIVE_NODE_FEATURE_COUNT` in `feature_layout.py` has been increased from **19** to **22**.
-- `Preprocessor` in `preprocessor.py` has been updated to expect **22** features in `enrich=True` mode, keeping virtual node state slots at their correct positions.
+### Edge feature schema (`enrich=True`)
+- **`child_index`**: Operand order among siblings (0, 1, 2, …).
+- **`direction`**: `0.0` = parent→child, `1.0` = child→parent (bidirectional AST edges).
+- **`relation_type`**: Encoded edge type (`child_of`, `belongs_to_f`, `virtual`, …).
+- **`edge_betweenness_centrality`**: Structural importance of the connection.
+
+Basic mode (`enrich=False`) uses a single **`edge_type`** feature.
+
+Schema constants live in `graph_utils.py` as `ENRICHED_EDGE_FEATURE_SCHEMA` and `BASIC_EDGE_FEATURE_SCHEMA`. Node schema (`ENRICHED_NODE_FEATURE_SCHEMA`) was reduced from **27 → 19** by removing all projected edge features (`node_child_index`, `parent_*`, `child_slot_*`, etc.).
+
+### Edge-aware backbones
+Two architectures are supported for supervised and RL training:
+
+| Architecture | Layer | How edges are used |
+|---|---|---|
+| **`gatv2_stack`** | `GATv2Conv(edge_dim=…)` | Edge features modulate attention coefficients |
+| **`gine_stack`** | `GINEConv(edge_dim=…)` | Edge features injected into the neighbor aggregation MLP |
+
+Legacy stacks (`gcn_stack`, `sage_stack`, `gin_stack`) remain available but ignore `edge_attr`.
+
+Shared helpers in `gnn_backbones.py`:
+- `coalesce_edge_attr()` — zero-fills when `edge_attr` is missing (RL path without padded obs).
+- `apply_edge_conv()` — dispatches to GINE vs GATv2 calling conventions.
+
+`GraphPolicyBackbone` adds an `edge_encoder` linear layer and passes encoded edge features through all conv layers.
+
+### Supervised learning integration
+- `TestGraphNetwork` accepts `--architecture gatv2_stack|gine_stack` and reads `pipeline.edge_dim`.
+- `train()` / `evaluate()` in `main.py` pass `batch.edge_attr` to the model.
+- `GraphPipeline` exposes `architecture` and `edge_dim` properties.
+- GraphGym custom layers (`gatv2conv`, `gineconv` in `loader_graphgym.py`) forward `batch.edge_attr`.
+
+### Feature layout
+- `NATIVE_NODE_FEATURE_COUNT = 19`
+- `NATIVE_EDGE_FEATURE_COUNT = 4`
+- `FeatureLayout` adds `edge_input_dim` (choices: 4, 8) for projected edge embeddings in RL backbones.
+
+**Retraining required:** node input dim changed (27→19) and models now expect native `edge_attr`.
 
 ---
 
@@ -46,7 +78,7 @@ To prevent node representations from converging to indistinguishable vectors ove
 
 ## 3. Test Coverage & Verification
 
-- **Edge-to-Node verification**: Updated `test_graph_utils.py`, `test_virtual_nodes.py`, and `test_trial_switch.py` to verify the correct computation and projection of edge features and features dimension (22).
+- **Edge features**: Updated `test_graph_utils.py` to assert native `edge_attr` shape and removed node-projection assertions. Updated `test_virtual_nodes.py` and `test_trial_switch.py` for **19** node features. Added `edge_attr` to `test_gnn_policy_backbone.py`.
 - **Node Count Adjustments**: Updated expected node count assertions in `test_graphml_import.py` and `test_virtual_nodes.py` (from 9 to 10 and 7 to 8 respectively) to account for the new global supernode (type 8).
 - **Full Verification**: Ran the complete test suite (52 tests) and verified that all tests pass successfully.
 

@@ -73,7 +73,13 @@ def train(model, loader, optimizer, criterion):
         batch = batch.to(DEVICE)
 
         optimizer.zero_grad()
-        outputs = model(batch.x, batch.edge_index, batch.batch, batch.global_features)
+        outputs = model(
+            batch.x,
+            batch.edge_index,
+            batch.batch,
+            batch.global_features,
+            edge_attr=getattr(batch, "edge_attr", None),
+        )
         loss = criterion(outputs, batch.y.squeeze())
         loss.backward()
         optimizer.step()
@@ -150,7 +156,11 @@ def evaluate(model, loader, criterion):
         for batch in loader:
             batch = batch.to(DEVICE)
             outputs = model(
-                batch.x, batch.edge_index, batch.batch, batch.global_features
+                batch.x,
+                batch.edge_index,
+                batch.batch,
+                batch.global_features,
+                edge_attr=getattr(batch, "edge_attr", None),
             )
             labels = batch.y.squeeze()
             if labels.dim() == 0:
@@ -195,6 +205,7 @@ def main(
     active_features: list[str] | None = None,
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
+    architecture: str = "gatv2_stack",
 ):
     repo_root = Path(__file__).resolve().parents[4]
     dataset_path = dataset_name
@@ -218,6 +229,7 @@ def main(
         unified_loader=unified_loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
+        architecture=architecture,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(
@@ -245,9 +257,11 @@ def main(
                 "test_size": TEST_SIZE,
                 "device": DEVICE,
                 "num_threads": NUM_CORES,
-                "model": "TestGraphNetwork (GATv2)",
+                "model": f"TestGraphNetwork ({architecture})",
                 "input_dim": pipeline.input_dim,
+                "edge_dim": pipeline.edge_dim,
                 "global_dim": pipeline.global_dim,
+                "architecture": architecture,
                 "mode": mode,
                 "enrich": enrich,
                 "active_features": active_features,
@@ -425,6 +439,13 @@ if __name__ == "__main__":
         help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions).",
     )
     parser.add_argument(
+        "--architecture",
+        type=str,
+        default="gatv2_stack",
+        choices=["gatv2_stack", "gine_stack"],
+        help="Edge-aware GNN architecture: gatv2_stack (attention) or gine_stack (edge MLP).",
+    )
+    parser.add_argument(
         "--synthetic",
         action="store_true",
         help="Enables synthetic mode: train on synthetic dataset, validate on curated dataset.",
@@ -478,6 +499,7 @@ if __name__ == "__main__":
                 active_features=active_feats,
                 synthetic=args.synthetic,
                 synthetic_dataset=args.synthetic_dataset,
+                architecture=args.architecture,
             )
         except Exception as e:
             print(

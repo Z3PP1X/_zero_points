@@ -116,7 +116,7 @@ def benchmark_single_graph(model, data, device, warmup, runs):
     # Warmup runs to compile JIT graph and load kernels
     with torch.no_grad():
         for _ in range(warmup):
-            _ = model(data.x, data.edge_index, data.batch, data.global_features)
+            _ = model(data.x, data.edge_index, data.batch, data.global_features, getattr(data, "edge_attr", None))
 
     # Run actual measurements
     times_ms = []
@@ -126,14 +126,14 @@ def benchmark_single_graph(model, data, device, warmup, runs):
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
                 start_event.record()
-                _ = model(data.x, data.edge_index, data.batch, data.global_features)
+                _ = model(data.x, data.edge_index, data.batch, data.global_features, getattr(data, "edge_attr", None))
                 end_event.record()
                 torch.cuda.synchronize()
                 times_ms.append(start_event.elapsed_time(end_event))
         else:
             for _ in range(runs):
                 t_start = time.perf_counter()
-                _ = model(data.x, data.edge_index, data.batch, data.global_features)
+                _ = model(data.x, data.edge_index, data.batch, data.global_features, getattr(data, "edge_attr", None))
                 t_end = time.perf_counter()
                 times_ms.append((t_end - t_start) * 1000.0)
 

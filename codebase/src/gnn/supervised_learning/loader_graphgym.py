@@ -187,21 +187,52 @@ register_act("tanh", nn.Tanh)
 class GATv2Conv(torch.nn.Module):
     def __init__(self, layer_config, **kwargs):
         super().__init__()
+        edge_dim = getattr(layer_config, "edge_dim", 4)
         self.model = pyg.nn.GATv2Conv(
             layer_config.dim_in,
             layer_config.dim_out,
             bias=layer_config.has_bias,
+            edge_dim=edge_dim,
         )
 
     def forward(self, batch):
-        batch.x = self.model(batch.x, batch.edge_index)
+        edge_attr = getattr(batch, "edge_attr", None)
+        edge_dim = getattr(self.model, "edge_dim", None)
+        if edge_attr is None and edge_dim is not None:
+            edge_attr = torch.zeros(
+                batch.edge_index.size(1),
+                edge_dim,
+                device=batch.x.device,
+                dtype=batch.x.dtype,
+            )
+        batch.x = self.model(batch.x, batch.edge_index, edge_attr=edge_attr)
         return batch
 
 
 @register_layer("gineconv")
-def GINEConv_layer(layer_config, *args, **kwargs):
-    nn = torch.nn.Linear(layer_config.dim_in, layer_config.dim_out)
-    return GINEConv(nn=nn)
+class GINEConvLayer(torch.nn.Module):
+    def __init__(self, layer_config, **kwargs):
+        super().__init__()
+        edge_dim = getattr(layer_config, "edge_dim", 4)
+        nn_layer = torch.nn.Sequential(
+            torch.nn.Linear(layer_config.dim_in, layer_config.dim_out),
+            torch.nn.ReLU(),
+            torch.nn.Linear(layer_config.dim_out, layer_config.dim_out),
+        )
+        self.edge_dim = edge_dim
+        self.model = GINEConv(nn=nn_layer, edge_dim=edge_dim)
+
+    def forward(self, batch):
+        edge_attr = getattr(batch, "edge_attr", None)
+        if edge_attr is None:
+            edge_attr = torch.zeros(
+                batch.edge_index.size(1),
+                self.edge_dim,
+                device=batch.x.device,
+                dtype=batch.x.dtype,
+            )
+        batch.x = self.model(batch.x, batch.edge_index, edge_attr)
+        return batch
 
 
 def cosine_with_warmup_scheduler(optimizer, max_epoch):

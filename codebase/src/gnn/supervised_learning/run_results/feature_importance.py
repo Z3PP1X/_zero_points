@@ -44,9 +44,6 @@ ENRICHED_FEATURE_SCHEMA = [
     "virtual_current_x_val",
     "virtual_f_x_val",
     "virtual_y_target_val",
-    "node_child_index",
-    "parent_edge_betweenness",
-    "parent_relation_type",
 ]
 
 

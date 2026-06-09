@@ -25,7 +25,10 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
             edge_index = observations["edge_index"][0, :, :num_edges].long().to(device)
             global_features = observations["global_features"][0, :].unsqueeze(0).to(device)
             batch_index = torch.zeros(x.size(0), dtype=torch.long, device=device)
-            features = self.gnn(x, edge_index, batch_index, global_features)
+            edge_attr = None
+            if "edge_attr" in observations:
+                edge_attr = observations["edge_attr"][0, :num_edges, :].to(device)
+            features = self.gnn(x, edge_index, batch_index, global_features, edge_attr=edge_attr)
             return self._sanitize_features(features)
 
         data_list = []
@@ -35,9 +38,10 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
             x = observations["x"][index, :num_nodes, :]
             edge_index = observations["edge_index"][index, :, :num_edges].long()
             global_features = observations["global_features"][index, :].unsqueeze(0)
-            data_list.append(
-                Data(x=x, edge_index=edge_index, global_features=global_features)
-            )
+            data_kwargs = {"x": x, "edge_index": edge_index, "global_features": global_features}
+            if "edge_attr" in observations:
+                data_kwargs["edge_attr"] = observations["edge_attr"][index, :num_edges, :]
+            data_list.append(Data(**data_kwargs))
 
         pyg_batch = Batch.from_data_list(data_list).to(device)
         features = self.gnn(
@@ -45,6 +49,7 @@ class CustomGNNFeaturesExtractor(BaseFeaturesExtractor):
             pyg_batch.edge_index,
             pyg_batch.batch,
             pyg_batch.global_features,
+            edge_attr=getattr(pyg_batch, "edge_attr", None),
         )
         return self._sanitize_features(features)
 

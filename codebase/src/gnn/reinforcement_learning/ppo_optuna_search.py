@@ -3,6 +3,7 @@ from __future__ import annotations
 import optuna
 
 from gnn.reinforcement_learning.feature_layout import (
+    EDGE_INPUT_DIM_CHOICES,
     GAT_HEAD_COUNT_CHOICES,
     GLOBAL_INPUT_DIM_CHOICES,
     GNN_ACTIVATION_CHOICES,
@@ -60,6 +61,9 @@ def sample_trial_configuration(
             ),
             global_input_dim=trial.suggest_categorical(
                 "global_input_dim", GLOBAL_INPUT_DIM_CHOICES
+            ),
+            edge_input_dim=trial.suggest_categorical(
+                "edge_input_dim", EDGE_INPUT_DIM_CHOICES
             ),
             padded_node_feature_count=padded_node_feature_count,
         ),

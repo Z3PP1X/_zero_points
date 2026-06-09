@@ -8,6 +8,51 @@ from torch_geometric.utils import from_networkx
 import numpy as np
 
 
+ENRICHED_NODE_FEATURE_SCHEMA = [
+    "node_type",
+    "depth",
+    "height",
+    "subtree_size",
+    "out_degree",
+    "betweenness_centrality",
+    "label_id",
+    "value",
+    "lpe_1",
+    "lpe_2",
+    "lpe_3",
+    "lpe_4",
+    "rwpe_1",
+    "rwpe_2",
+    "rwpe_3",
+    "rwpe_4",
+    "virtual_current_x_val",
+    "virtual_f_x_val",
+    "virtual_y_target_val",
+]
+
+ENRICHED_EDGE_FEATURE_SCHEMA = [
+    "child_index",
+    "direction",
+    "relation_type",
+    "edge_betweenness_centrality",
+]
+
+BASIC_EDGE_FEATURE_SCHEMA = [
+    "edge_type",
+]
+
+BASIC_NODE_FEATURE_SCHEMA = [
+    "node_type",
+    "label_id",
+    "value",
+    "has_value",
+    "degree_centrality",
+    "virtual_current_x_val",
+    "virtual_f_x_val",
+    "virtual_y_target_val",
+]
+
+
 class ExpressionGraphData(Data):
     def __cat_dim__(self, key, value, *args, **kwargs):
         if key == 'laplacian':
@@ -320,27 +365,6 @@ class ExpressionGraphConverter:
         node_ids = list(G_directed.nodes)
         
         if enrich:
-            # Full 16-feature set (RL mode)
-            node_child_indices = {nid: 0.0 for nid in node_ids}
-            parent_edge_betweenness = {nid: 0.0 for nid in node_ids}
-            parent_relation_types = {nid: 0.0 for nid in node_ids}
-            child_counters = {}
-            for edge in raw.get("edges", []):
-                parent = edge["source"]
-                child = edge["target"]
-                etype = edge["type"]
-
-                child_idx = child_counters.get(parent, 0)
-                child_counters[parent] = child_idx + 1
-                node_child_indices[child] = float(child_idx)
-
-                # Fetch edge betweenness centrality
-                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
-                # For DAGs/multiple parents, take the maximum
-                parent_edge_betweenness[child] = max(parent_edge_betweenness[child], eb_val)
-                
-                parent_relation_types[child] = float(self._encode_edge_type(etype))
-
             for i, node in enumerate(node_ids):
                 attrs = G_directed.nodes[node]
                 enriched_attrs = attrs.copy()
@@ -361,11 +385,6 @@ class ExpressionGraphConverter:
                 enriched_attrs["rwpe_2"] = float(topo["rwpe"][i, 1])
                 enriched_attrs["rwpe_3"] = float(topo["rwpe"][i, 2])
                 enriched_attrs["rwpe_4"] = float(topo["rwpe"][i, 3])
-                
-                # New Node-projected Edge features
-                enriched_attrs["node_child_index"] = node_child_indices[node]
-                enriched_attrs["parent_edge_betweenness"] = parent_edge_betweenness[node]
-                enriched_attrs["parent_relation_type"] = parent_relation_types[node]
                 
                 G_enriched.add_node(node, **enriched_attrs)
 
@@ -533,27 +552,11 @@ class ExpressionGraphConverter:
 
     def _to_homogeneous(self, G: nx.DiGraph, raw: dict, enrich: bool) -> Data:
         if enrich:
+            group_node_attrs = list(ENRICHED_NODE_FEATURE_SCHEMA)
             if G.number_of_edges() == 0:
                 data = from_networkx(
                     G,
-                    group_node_attrs=[
-                        "node_type",
-                        "depth",
-                        "height",
-                        "subtree_size",
-                        "out_degree",
-                        "betweenness_centrality",
-                        "label_id",
-                        "value",
-                        "lpe_1", "lpe_2", "lpe_3", "lpe_4",
-                        "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
-                        "virtual_current_x_val",
-                        "virtual_f_x_val",
-                        "virtual_y_target_val",
-                        "node_child_index",
-                        "parent_edge_betweenness",
-                        "parent_relation_type",
-                    ],
+                    group_node_attrs=group_node_attrs,
                 )
                 data.edge_index = torch.empty((2, 0), dtype=torch.long)
                 data.edge_attr = torch.empty((0, 4), dtype=torch.float)
@@ -561,40 +564,15 @@ class ExpressionGraphConverter:
 
             return from_networkx(
                 G,
-                group_node_attrs=[
-                    "node_type",
-                    "depth",
-                    "height",
-                    "subtree_size",
-                    "out_degree",
-                    "betweenness_centrality",
-                    "label_id",
-                    "value",
-                    "lpe_1", "lpe_2", "lpe_3", "lpe_4",
-                    "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
-                    "virtual_current_x_val",
-                    "virtual_f_x_val",
-                    "virtual_y_target_val",
-                    "node_child_index",
-                    "parent_edge_betweenness",
-                    "parent_relation_type",
-                ],
+                group_node_attrs=group_node_attrs,
                 group_edge_attrs=["child_index", "direction", "relation_type", "edge_betweenness_centrality"],
             )
         else:
+            group_node_attrs = list(BASIC_NODE_FEATURE_SCHEMA)
             if G.number_of_edges() == 0:
                 data = from_networkx(
                     G,
-                    group_node_attrs=[
-                        "node_type",
-                        "label_id",
-                        "value",
-                        "has_value",
-                        "degree_centrality",
-                        "virtual_current_x_val",
-                        "virtual_f_x_val",
-                        "virtual_y_target_val",
-                    ],
+                    group_node_attrs=group_node_attrs,
                 )
                 data.edge_index = torch.empty((2, 0), dtype=torch.long)
                 data.edge_attr = torch.empty((0, 1), dtype=torch.float)
@@ -602,16 +580,7 @@ class ExpressionGraphConverter:
 
             return from_networkx(
                 G,
-                group_node_attrs=[
-                    "node_type",
-                    "label_id",
-                    "value",
-                    "has_value",
-                    "degree_centrality",
-                    "virtual_current_x_val",
-                    "virtual_f_x_val",
-                    "virtual_y_target_val",
-                ],
+                group_node_attrs=group_node_attrs,
                 group_edge_attrs=["edge_type"],
             )
 
@@ -635,10 +604,6 @@ class ExpressionGraphConverter:
             betweenness = torch.tensor([G.nodes[n]["betweenness_centrality"] for n in node_ids], dtype=torch.float)
             lpe = torch.tensor(topo["lpe"], dtype=torch.float)
             rwpe = torch.tensor(topo["rwpe"], dtype=torch.float)
-            
-            n_child_idx = torch.tensor([G.nodes[n]["node_child_index"] for n in node_ids], dtype=torch.float)
-            p_edge_eb = torch.tensor([G.nodes[n]["parent_edge_betweenness"] for n in node_ids], dtype=torch.float)
-            p_rel_type = torch.tensor([G.nodes[n]["parent_relation_type"] for n in node_ids], dtype=torch.float)
 
             x = torch.stack(
                 [
@@ -646,7 +611,6 @@ class ExpressionGraphConverter:
                     lpe[:, 0], lpe[:, 1], lpe[:, 2], lpe[:, 3],
                     rwpe[:, 0], rwpe[:, 1], rwpe[:, 2], rwpe[:, 3],
                     v_cx, v_fx, v_yt,
-                    n_child_idx, p_edge_eb, p_rel_type
                 ],
                 dim=1
             )
@@ -740,31 +704,19 @@ class GraphConversionPipeline:
 
     def get_feature_schema(self) -> list[str]:
         if self.enrich:
-            return [
-                "node_type", "depth", "height", "subtree_size", "out_degree", "betweenness_centrality", "label_id", "value",
-                "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
-                "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val",
-                "node_child_index", "parent_edge_betweenness", "parent_relation_type"
-            ]
-        else:
-            return [
-                "node_type", "label_id", "value", "has_value", "degree_centrality",
-                "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
-            ]
+            return list(ENRICHED_NODE_FEATURE_SCHEMA)
+        return list(BASIC_NODE_FEATURE_SCHEMA)
+
+    def get_edge_feature_schema(self) -> list[str]:
+        if self.enrich:
+            return list(ENRICHED_EDGE_FEATURE_SCHEMA)
+        return list(BASIC_EDGE_FEATURE_SCHEMA)
 
 
 def slice_active_features(x: torch.Tensor, active_features: list[str] | None, enrich: bool) -> torch.Tensor:
     if active_features is None:
         return x
-    full_schema = [
-        "node_type", "depth", "height", "subtree_size", "out_degree", "betweenness_centrality", "label_id", "value",
-        "lpe_1", "lpe_2", "lpe_3", "lpe_4", "rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4",
-        "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val",
-        "node_child_index", "parent_edge_betweenness", "parent_relation_type"
-    ] if enrich else [
-        "node_type", "label_id", "value", "has_value", "degree_centrality",
-        "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"
-    ]
+    full_schema = ENRICHED_NODE_FEATURE_SCHEMA if enrich else BASIC_NODE_FEATURE_SCHEMA
     indices = []
     for f in active_features:
         if f in full_schema:

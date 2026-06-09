@@ -41,7 +41,7 @@ from gnn.reinforcement_learning.reward import RewardCalculator
 from gnn.reinforcement_learning.mathematica_vec_env import build_mathematica_training_env, MathematicaVecEnv
 from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
 from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
-from gnn.reinforcement_learning.feature_layout import FeatureLayout
+from gnn.reinforcement_learning.feature_layout import FeatureLayout, EDGE_INPUT_DIM_CHOICES
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
 
 # ZMQ Port configuration
@@ -215,6 +215,7 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
     layout = FeatureLayout(
         node_input_dim=int(params["node_input_dim"]),
         global_input_dim=int(params["global_input_dim"]),
+        edge_input_dim=int(params.get("edge_input_dim", EDGE_INPUT_DIM_CHOICES[0])),
         padded_node_feature_count=padded_node_feature_count,
     )
     
