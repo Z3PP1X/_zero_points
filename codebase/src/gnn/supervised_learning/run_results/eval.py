@@ -13,6 +13,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from gnn.supervised_learning.run_results.eval_metrics import (
+    EVAL_WARMUP_EPOCHS,
+    MIN_CLASSIFICATION_METRIC,
+    filter_warmup_epochs_df,
+    passes_quality_threshold,
+)
+
 
 class GNNResultEvaluator:
     """
@@ -260,7 +267,11 @@ class GNNResultEvaluator:
         file_path = self.data_dir / f"{run_name}.csv"
         if not file_path.exists():
             raise FileNotFoundError(f"Data file not found: {file_path}")
-        return pd.read_csv(file_path)
+        return self._prepare_eval_df(pd.read_csv(file_path))
+
+    def _prepare_eval_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Exclude warmup epochs from best/mean evaluation inputs."""
+        return filter_warmup_epochs_df(df, warmup_epochs=EVAL_WARMUP_EPOCHS)
 
     def _config_columns(self, df: pd.DataFrame) -> list:
         skip = set(self.METRIC_COLS)
@@ -376,7 +387,12 @@ class GNNResultEvaluator:
         )
 
         ax.set_xticks(range(len(pivot_grid.columns)))
-        ax.set_xticklabels(pivot_grid.columns)
+        ax.set_xticklabels(
+            pivot_grid.columns,
+            rotation=35,
+            ha="right",
+            rotation_mode="anchor",
+        )
         ax.set_yticks(range(len(pivot_grid.index)))
         ax.set_yticklabels(pivot_grid.index)
         ax.set_xlabel(self._format_axis_label(column_col), fontsize=9, fontweight="bold")
@@ -436,8 +452,11 @@ class GNNResultEvaluator:
         n_metrics = len(metrics)
         n_cols = min(3, n_metrics)
         n_rows = int(np.ceil(n_metrics / n_cols))
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), dpi=150)
+        fig, axes = plt.subplots(
+            n_rows, n_cols, figsize=(6.2 * n_cols, 4.8 * n_rows), dpi=150
+        )
         axes = np.atleast_1d(axes).flatten()
+        fig.subplots_adjust(hspace=0.45, wspace=0.35)
 
         for idx, metric in enumerate(metrics):
             ax = axes[idx]
@@ -851,6 +870,20 @@ class GNNResultEvaluator:
         if "pr_auc" not in val_df.columns:
             print("    Skipping leaderboard (pr_auc column missing)")
             return
+
+        before_quality = len(val_df)
+        val_df = passes_quality_threshold(val_df)
+        if val_df.empty:
+            print(
+                "    Skipping leaderboard (no configs meet recall/f1/precision "
+                f"threshold >= {MIN_CLASSIFICATION_METRIC})"
+            )
+            return
+        if len(val_df) < before_quality:
+            print(
+                f"    Leaderboard: discarded {before_quality - len(val_df)} "
+                "trivial configs below quality threshold"
+            )
 
         config_cols = self._config_columns(val_df)
         metric_cols = [

@@ -6,6 +6,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from gnn.supervised_learning.run_results.eval_metrics import (
+    EVAL_WARMUP_EPOCHS,
+    filter_warmup_epochs_df,
+)
+
 logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 SPLIT_LABELS = {
@@ -86,6 +91,7 @@ class TrainingCurvePlotter:
         val_df = series.get("val")
         if val_df is None or val_df.empty or "pr_auc" not in val_df.columns:
             return None
+        val_df = filter_warmup_epochs_df(val_df, warmup_epochs=EVAL_WARMUP_EPOCHS)
         idx = val_df["pr_auc"].idxmax()
         return int(val_df.loc[idx, "epoch"])
 

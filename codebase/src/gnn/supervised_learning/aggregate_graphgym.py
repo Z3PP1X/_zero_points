@@ -20,6 +20,8 @@ def custom_is_split(s):
 BEST_METRIC = 'pr_auc'
 KEYS_TO_STRIP = ['eta', 'eta_std', 'params_std']
 
+from gnn.supervised_learning.run_results.eval_metrics import select_best_epoch
+
 
 def _resolve_best_metric(metric_best, stats_list):
     if metric_best == 'auto':
@@ -48,12 +50,9 @@ def custom_agg_runs(dir, metric_best='auto'):
                 fname_stats = osp.join(dir_split, 'stats.json')
                 stats_list = json_to_dict_list(fname_stats)
                 metric = _resolve_best_metric(metric_best, stats_list)
-                performance_np = np.array(
-                    [stats[metric] for stats in stats_list])
-                best_epoch = \
-                    stats_list[
-                        eval(f"performance_np.{cfg.metric_agg}()")][
-                        'epoch']
+                best_epoch = select_best_epoch(
+                    stats_list, metric, cfg.metric_agg
+                )
 
             for split in os.listdir(dir_seed):
                 if custom_is_split(split):
@@ -207,8 +206,7 @@ def custom_agg_batch(dir, metric_best='auto'):
             continue
         val_stats = json_to_dict_list(val_stats_path)
         metric = _resolve_best_metric(metric_best, val_stats)
-        performance_np = np.array([stats[metric] for stats in val_stats])
-        best_epoch = val_stats[eval(f"performance_np.{cfg.metric_agg}()")]['epoch']
+        best_epoch = select_best_epoch(val_stats, metric, cfg.metric_agg)
 
         for split in os.listdir(dir_run):
             fname_stats = osp.join(dir_run, split, 'stats.json')
