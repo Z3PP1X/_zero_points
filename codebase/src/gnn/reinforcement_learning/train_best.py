@@ -188,7 +188,7 @@ def load_best_trial_params(db_path: str, study_name: str | None = None) -> dict:
     return best_trial.params
 
 
-def build_trial_configuration(params: dict, override_seed: int | None = None, padded_node_feature_count: int = 19) -> TrialConfiguration:
+def build_trial_configuration(params: dict, override_seed: int | None = None, padded_node_feature_count: int = 25) -> TrialConfiguration:
     """Constructs a structured TrialConfiguration from flat Optuna params."""
     random_seed = override_seed if override_seed is not None else int(params.get("random_seed", 42))
     
@@ -344,7 +344,7 @@ def main() -> None:
         active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
         print(f"[Pipeline] Aktivierte Features ({len(active_features)}): {active_features}")
     
-    padded_node_feature_count = len(active_features) if active_features is not None else 19
+    padded_node_feature_count = len(active_features) if active_features is not None else 25
 
     # 1. Load and parse hyperparameter configuration
     try:

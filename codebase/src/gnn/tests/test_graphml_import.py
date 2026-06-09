@@ -7,7 +7,8 @@ from graph_utils import (
     _parse_constant_value,
     find_roots,
     create_virtual_global_node,
-    ExpressionGraphConverter
+    ExpressionGraphConverter,
+    signed_log_value,
 )
 
 GRAPHML_F = """<?xml version='1.0' encoding='UTF-8'?>
@@ -93,12 +94,17 @@ def test_create_virtual_global_node():
     assert G_comb.nodes["f_1"]["type"] == "operator"
     assert G_comb.nodes["f_2"]["type"] == "variable"
     assert G_comb.nodes["f_3"]["type"] == "constant"
-    assert G_comb.nodes["f_3"]["value"] == 5.0
+    assert G_comb.nodes["f_3"]["value"] == pytest.approx(signed_log_value(5.0))
 
-    # Roots check: roots of f should be f_1, of d1 should be d1_1, of d2 should be d2_1
-    assert G_comb.has_edge("global", "f_1")
-    assert G_comb.has_edge("global", "d1_1")
-    assert G_comb.has_edge("global", "d2_1")
+    assert "f_root" in G_comb.nodes
+    assert "d1_root" in G_comb.nodes
+    assert "d2_root" in G_comb.nodes
+    assert G_comb.has_edge("global", "f_root")
+    assert G_comb.has_edge("f_root", "f_1")
+    assert G_comb.has_edge("global", "d1_root")
+    assert G_comb.has_edge("d1_root", "d1_1")
+    assert G_comb.has_edge("global", "d2_root")
+    assert G_comb.has_edge("d2_root", "d2_1")
 
 
 def test_expression_graph_converter_with_container_format():
@@ -113,10 +119,10 @@ def test_expression_graph_converter_with_container_format():
 
     converter = ExpressionGraphConverter()
     
-    # 1. Test "graph" mode (compiles f, d1, d2 + virtual nodes + virtual supernode)
-    # Nodes: f_1, f_2, f_3 (3) + d1_1 (1) + d2_1 (1) + global (1) + virtual nodes (3) + virtual supernode (1) = 10
+    # 1. Test "graph" mode (compiles f, d1, d2 + aggregators + virtual nodes + supernode)
+    # Nodes: 3 + 1 + 1 + 1 + 3 aggregators + 2 task virtual + 1 supernode = 12
     data_graph = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="graph")
-    assert data_graph.num_nodes == 10
+    assert data_graph.num_nodes == 12
     assert "virtual_supernode" in data_graph.node_ids
     assert "global" in data_graph.node_ids
     assert "f_1" in data_graph.node_ids
@@ -124,20 +130,18 @@ def test_expression_graph_converter_with_container_format():
     assert "d1_1" in data_graph.node_ids
     assert "d2_1" in data_graph.node_ids
 
-    # 2. Test "tree_derivatives" mode (compiles f, d1, d2 without virtual nodes)
-    # Nodes: f_1, f_2, f_3 (3) + d1_1 (1) + d2_1 (1) + global (1) = 6
+    # 2. Test "tree_derivatives" mode (compiles f, d1, d2 + aggregators, no task virtual nodes)
     data_tree_deriv = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="tree_derivatives")
-    assert data_tree_deriv.num_nodes == 6
+    assert data_tree_deriv.num_nodes == 9
     assert "global" in data_tree_deriv.node_ids
     assert "f_1" in data_tree_deriv.node_ids
     assert "d1_1" in data_tree_deriv.node_ids
     assert "d2_1" in data_tree_deriv.node_ids
     assert "virtual_current_x" not in data_tree_deriv.node_ids
 
-    # 3. Test "tree" mode (compiles only f, without virtual nodes)
-    # Nodes: f_1, f_2, f_3 (3) + global (1) = 4
+    # 3. Test "tree" mode (compiles only f + f_root aggregator, without task virtual nodes)
     data_tree = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="tree")
-    assert data_tree.num_nodes == 4
+    assert data_tree.num_nodes == 5
     assert "global" in data_tree.node_ids
     assert "f_1" in data_tree.node_ids
     assert "d1_1" not in data_tree.node_ids

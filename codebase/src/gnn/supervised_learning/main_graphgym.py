@@ -26,6 +26,10 @@ from gnn.supervised_learning.run_results.feature_importance import (
     run_post_training_feature_importance,
 )
 from gnn.supervised_learning.preprocessing import GraphPipeline # noqa
+from gnn.supervised_learning.supervised_config import (
+    edge_dim_for_enrich,
+    validate_layer_type,
+)
 
 set_cfg(cfg)
 
@@ -177,9 +181,16 @@ def main():
 
     cfg.optim.max_epoch = cfg.train.epochs
     cfg.train.eval_period = 1
+
+    layer_type = validate_layer_type(cfg.gnn.layer_type)
+    enrich = bool(getattr(cfg.expression_graph, "enrich", False))
+    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
+
     set_run_dir(cfg.out_dir)
 
     print("\n[GraphGym Command Center] Launching training run...")
+    print(f"[GraphGym] Architecture layer_type={layer_type} (from config YAML)")
+    print(f"[GraphGym] Edge dim={cfg.dataset.edge_dim} (enrich={enrich})")
     print(f"[GraphGym] Best-model selection: monitor=val_pr_auc, mode=max")
     print(f"[GraphGym] Final test (curated real data) will use the BEST saved checkpoint.\n")
     datamodule = GraphGymDataModule()

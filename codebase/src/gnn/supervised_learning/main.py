@@ -35,6 +35,11 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from gnn.shared.models.classifiers import TestGraphNetwork # noqa
+from gnn.supervised_learning.supervised_config import (
+    get_batch_edge_attr,
+    load_yaml_config,
+    read_supervised_settings,
+)
 
 
 NUM_CORES = 6
@@ -65,7 +70,7 @@ def create_experiment_name(dataset_name: str, mode: str = "graph"):
     return dataset_name + "_" + str(SEED) + "_" + str(EPOCHS) + "_" + mode
 
 
-def train(model, loader, optimizer, criterion):
+def train(model, loader, optimizer, criterion, enrich: bool = False):
     model.train()
     running_loss = 0.0
 
@@ -78,7 +83,7 @@ def train(model, loader, optimizer, criterion):
             batch.edge_index,
             batch.batch,
             batch.global_features,
-            edge_attr=getattr(batch, "edge_attr", None),
+            edge_attr=get_batch_edge_attr(batch, enrich),
         )
         loss = criterion(outputs, batch.y.squeeze())
         loss.backward()
@@ -139,7 +144,7 @@ def log_confusion_matrix(y_true, y_pred, epoch: int):
             pass
 
 
-def evaluate(model, loader, criterion):
+def evaluate(model, loader, criterion, enrich: bool = False):
     model.eval()
     f1_metric.reset()
     precision_metric.reset()
@@ -160,7 +165,7 @@ def evaluate(model, loader, criterion):
                 batch.edge_index,
                 batch.batch,
                 batch.global_features,
-                edge_attr=getattr(batch, "edge_attr", None),
+                edge_attr=get_batch_edge_attr(batch, enrich),
             )
             labels = batch.y.squeeze()
             if labels.dim() == 0:
@@ -205,7 +210,7 @@ def main(
     active_features: list[str] | None = None,
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
-    architecture: str = "gatv2_stack",
+    layer_type: str = "gatv2conv",
 ):
     repo_root = Path(__file__).resolve().parents[4]
     dataset_path = dataset_name
@@ -229,7 +234,7 @@ def main(
         unified_loader=unified_loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
-        architecture=architecture,
+        layer_type=layer_type,
     )
 
     train_loader, test_loader, class_weights = pipeline.pipe(
@@ -237,6 +242,8 @@ def main(
         batch_size=BATCH_SIZE,
         num_workers=3,
     )
+
+    architecture = pipeline.architecture
 
     print("Initializing GNN model...")
     model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
@@ -262,6 +269,7 @@ def main(
                 "edge_dim": pipeline.edge_dim,
                 "global_dim": pipeline.global_dim,
                 "architecture": architecture,
+                "layer_type": layer_type,
                 "mode": mode,
                 "enrich": enrich,
                 "active_features": active_features,
@@ -275,10 +283,10 @@ def main(
         for epoch in range(EPOCHS):
             print(f"\n--- Epoch {epoch + 1}/{EPOCHS} ---")
             print("  Training...")
-            train_loss = train(model, train_loader, optimizer, criterion)
+            train_loss = train(model, train_loader, optimizer, criterion, enrich=enrich)
             print("  Evaluating...")
             val_loss, val_acc, f1_val, prec_val, rec_val, y_true, y_pred, y_prob = (
-                evaluate(model, test_loader, criterion)
+                evaluate(model, test_loader, criterion, enrich=enrich)
             )
 
             # Compute advanced metrics
@@ -350,7 +358,7 @@ def main(
             best_model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
             best_model.load_state_dict(torch.load(str(save_path)))
             cur_loss, cur_acc, f1_cur, prec_cur, rec_cur, cur_true, cur_pred, cur_prob = (
-                evaluate(best_model, pipeline.curated_loader, criterion)
+                evaluate(best_model, pipeline.curated_loader, criterion, enrich=enrich)
             )
             cur_true_np = np.array(cur_true)
             cur_prob_np = np.array(cur_prob)
@@ -412,8 +420,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="run_20260408_160456/dataset_4",
-        help="Dataset name, optionally including run key (e.g. run_key/dataset_name)",
+        default=None,
+        help="Override dataset.name from config (e.g. run_key/dataset_name).",
     )
     parser.add_argument(
         "--dry-run",
@@ -421,29 +429,23 @@ if __name__ == "__main__":
         help="Loads data and prints structure without starting full training.",
     )
     parser.add_argument(
-        "--mode",
+        "--config",
         type=str,
-        default="graph",
-        choices=["graph", "tree", "tree_derivatives"],
-        help="Select GNN experiment mode: graph (with virtual nodes), tree (features on global node, f only) or tree_derivatives (f, f', f'' connected via global node)",
+        default="config_supervised.yaml",
+        help="GraphGym YAML config (architecture via gnn.layer_type, enrich via expression_graph.enrich).",
     )
     parser.add_argument(
-        "--enrich",
-        action="store_true",
-        help="Toggles enriched features in supervised learning pipeline (uses 19 features instead of 8).",
+        "--mode",
+        type=str,
+        default=None,
+        choices=["graph", "tree", "tree_derivatives"],
+        help="Override GNN experiment mode from config.",
     )
     parser.add_argument(
         "--active-features",
         type=str,
         default=None,
-        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions).",
-    )
-    parser.add_argument(
-        "--architecture",
-        type=str,
-        default="gatv2_stack",
-        choices=["gatv2_stack", "gine_stack"],
-        help="Edge-aware GNN architecture: gatv2_stack (attention) or gine_stack (edge MLP).",
+        help="Comma-separated list of active GNN node features to use (overrides config).",
     )
     parser.add_argument(
         "--synthetic",
@@ -458,6 +460,20 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    script_dir = Path(__file__).resolve().parent
+    config_path = script_dir / args.config
+    settings = read_supervised_settings(load_yaml_config(config_path))
+
+    dataset_name = args.dataset or settings["dataset_name"]
+    if not dataset_name:
+        parser.error("Dataset name must be set in config (dataset.name) or via --dataset")
+
+    mode = args.mode or settings["mode"]
+    enrich = settings["enrich"]
+    layer_type = settings["layer_type"]
+    synthetic = args.synthetic or settings["synthetic"]
+    synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
+
     # Resolve paths
     repo_root = Path(__file__).resolve().parents[4]
 
@@ -465,41 +481,45 @@ if __name__ == "__main__":
 
     try:
         loader = UnifiedDataLoader.get_instance(
-            dataset_name=args.dataset, mode=args.mode, enrich=args.enrich
+            dataset_name=dataset_name, mode=mode, enrich=enrich
         )
         print("Curated dataset loaded successfully!")
         print(loader.data.tail())
-        print_dataset_distribution(args.dataset, loader.data)
+        print_dataset_distribution(dataset_name, loader.data)
     except Exception as e:
         print(f"Note: Curated dataset files not found in local sandbox: {e}")
 
-    if args.synthetic and args.synthetic_dataset:
+    if synthetic and synthetic_dataset:
         try:
             synth_loader = UnifiedDataLoader.get_instance(
-                dataset_name=args.synthetic_dataset, mode=args.mode, enrich=args.enrich
+                dataset_name=synthetic_dataset, mode=mode, enrich=enrich
             )
             print("Synthetic dataset loaded successfully!")
             print(synth_loader.data.tail())
-            print_dataset_distribution(args.synthetic_dataset, synth_loader.data)
+            print_dataset_distribution(synthetic_dataset, synth_loader.data)
         except Exception as e:
             print(f"Note: Synthetic dataset files not found in local sandbox: {e}")
 
     if not args.dry_run:
         try:
-            active_feats = None
+            active_feats = settings["active_features"]
             if args.active_features is not None:
                 active_feats = [
                     f.strip() for f in args.active_features.split(",") if f.strip()
                 ]
+            if active_feats:
                 print(f"Aktivierte Features: {active_feats}")
+            print(
+                f"Config: {config_path.name} | layer_type={layer_type} | enrich={enrich}"
+            )
             main(
-                dataset_name=args.dataset,
-                mode=args.mode,
-                enrich=args.enrich,
+                dataset_name=dataset_name,
+                mode=mode,
+                enrich=enrich,
                 active_features=active_feats,
-                synthetic=args.synthetic,
-                synthetic_dataset=args.synthetic_dataset,
-                architecture=args.architecture,
+                synthetic=synthetic,
+                synthetic_dataset=synthetic_dataset,
+                layer_type=layer_type,
             )
         except Exception as e:
             print(

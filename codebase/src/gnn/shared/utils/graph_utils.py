@@ -1,4 +1,5 @@
 import json
+import math
 import torch
 import networkx as nx
 from pathlib import Path
@@ -8,15 +9,166 @@ from torch_geometric.utils import from_networkx
 import numpy as np
 
 
+# Fixed canonical vocabularies (stable across datasets and load order).
+CANONICAL_LABELS: tuple[str, ...] = (
+    "<UNK>",
+    "<CONSTANT>",
+    "GLOBAL",
+    "Plus",
+    "Times",
+    "Power",
+    "x",
+    "E",
+    "Pi",
+    "I",
+    "Sin",
+    "Cos",
+    "Tan",
+    "Cot",
+    "Sec",
+    "Csc",
+    "Exp",
+    "Log",
+    "Sqrt",
+    "Abs",
+    "ArcSin",
+    "ArcCos",
+    "ArcTan",
+    "Sinh",
+    "Cosh",
+    "Tanh",
+    "virtual_current_x",
+    "f_root",
+    "d1_root",
+    "d2_root",
+    "virtual_y_target",
+    "virtual_supernode",
+)
+CANONICAL_LABEL_VOCAB: dict[str, int] = {label: idx for idx, label in enumerate(CANONICAL_LABELS)}
+
+FUNCTION_AGGREGATOR_CONFIG: tuple[tuple[str, str], ...] = (
+    ("belongs_to_f", "f_root"),
+    ("belongs_to_d1", "d1_root"),
+    ("belongs_to_d2", "d2_root"),
+)
+FUNCTION_AGGREGATOR_IDS: frozenset[str] = frozenset(agg for _, agg in FUNCTION_AGGREGATOR_CONFIG)
+
+CANONICAL_EDGE_TYPES: tuple[str, ...] = (
+    "<UNK>",
+    "child_of",
+    "child_of_reverse",
+    "belongs_to_f",
+    "belongs_to_f_reverse",
+    "belongs_to_d1",
+    "belongs_to_d1_reverse",
+    "belongs_to_d2",
+    "belongs_to_d2_reverse",
+    "virtual",
+    "virtual_reverse",
+    "supernode_connection",
+    "supernode_connection_reverse",
+)
+CANONICAL_EDGE_TYPE_VOCAB: dict[str, int] = {etype: idx for idx, etype in enumerate(CANONICAL_EDGE_TYPES)}
+
+VIRTUAL_NODE_TYPES = frozenset(
+    {"virtual_current_x", "virtual_y_target", "virtual_supernode"} | FUNCTION_AGGREGATOR_IDS
+)
+
+
+def signed_log_value(value: float) -> float:
+    """sign(v) * log1p(|v|) — same transform as RL global features."""
+    if value == 0.0:
+        return 0.0
+    return math.copysign(math.log1p(abs(value)), value)
+
+
+def _is_numeric_label(label: str) -> bool:
+    try:
+        float(label)
+        return True
+    except ValueError:
+        pass
+    if "/" in label:
+        parts = label.split("/")
+        if len(parts) == 2:
+            try:
+                float(parts[0])
+                float(parts[1])
+                return True
+            except ValueError:
+                pass
+    return False
+
+
+def encode_label(label: str) -> int:
+    if _is_numeric_label(label):
+        return CANONICAL_LABEL_VOCAB["<CONSTANT>"]
+    return CANONICAL_LABEL_VOCAB.get(label, CANONICAL_LABEL_VOCAB["<UNK>"])
+
+
+def encode_edge_type(etype: str) -> int:
+    return CANONICAL_EDGE_TYPE_VOCAB.get(etype, CANONICAL_EDGE_TYPE_VOCAB["<UNK>"])
+
+
+def _compute_belongs_to_subtree(
+    raw: dict,
+    prov_edge_type: str,
+    id_prefix: str,
+) -> dict[str, float]:
+    """Mark nodes in a provenance subtree (aggregator edge + id prefix + child_of BFS)."""
+    child_edges = [
+        (edge["source"], edge["target"])
+        for edge in raw.get("edges", [])
+        if edge.get("type") == "child_of"
+    ]
+    subtree_roots = {
+        edge["target"]
+        for edge in raw.get("edges", [])
+        if edge.get("type") == prov_edge_type
+    }
+
+    subtree_nodes: set[str] = set(subtree_roots)
+    for node in raw.get("nodes", []):
+        node_id = node["id"]
+        if str(node_id).startswith(id_prefix):
+            subtree_nodes.add(node_id)
+
+    queue = list(subtree_roots)
+    while queue:
+        parent = queue.pop(0)
+        for src, tgt in child_edges:
+            if src == parent and tgt not in subtree_nodes:
+                subtree_nodes.add(tgt)
+                queue.append(tgt)
+
+    return {
+        node["id"]: 1.0 if node["id"] in subtree_nodes else 0.0
+        for node in raw.get("nodes", [])
+    }
+
+
+def compute_belongs_to_f(raw: dict) -> dict[str, float]:
+    return _compute_belongs_to_subtree(raw, "belongs_to_f", "f_")
+
+
+def compute_belongs_to_d1(raw: dict) -> dict[str, float]:
+    return _compute_belongs_to_subtree(raw, "belongs_to_d1", "d1_")
+
+
+def compute_belongs_to_d2(raw: dict) -> dict[str, float]:
+    return _compute_belongs_to_subtree(raw, "belongs_to_d2", "d2_")
+
+
 ENRICHED_NODE_FEATURE_SCHEMA = [
     "node_type",
+    "label_id",
     "depth",
     "height",
     "subtree_size",
     "out_degree",
     "betweenness_centrality",
-    "label_id",
     "value",
+    "has_value",
     "lpe_1",
     "lpe_2",
     "lpe_3",
@@ -27,7 +179,12 @@ ENRICHED_NODE_FEATURE_SCHEMA = [
     "rwpe_4",
     "virtual_current_x_val",
     "virtual_f_x_val",
+    "virtual_d1_x_val",
+    "virtual_d2_x_val",
     "virtual_y_target_val",
+    "belongs_to_f",
+    "belongs_to_d1",
+    "belongs_to_d2",
 ]
 
 ENRICHED_EDGE_FEATURE_SCHEMA = [
@@ -49,8 +206,100 @@ BASIC_NODE_FEATURE_SCHEMA = [
     "degree_centrality",
     "virtual_current_x_val",
     "virtual_f_x_val",
+    "virtual_d1_x_val",
+    "virtual_d2_x_val",
     "virtual_y_target_val",
+    "belongs_to_f",
+    "belongs_to_d1",
+    "belongs_to_d2",
 ]
+
+
+def _find_global_node_id(raw: dict) -> str | None:
+    for node in raw.get("nodes", []):
+        if node.get("type") == "global":
+            return node["id"]
+    return None
+
+
+def _insert_function_aggregators(raw: dict) -> None:
+    """Insert provenance-scoped aggregator nodes between global and AST roots."""
+    global_id = _find_global_node_id(raw)
+    if global_id is None:
+        return
+
+    node_ids = {node["id"] for node in raw["nodes"]}
+    edges = list(raw.get("edges", []))
+
+    for prov_type, agg_id in FUNCTION_AGGREGATOR_CONFIG:
+        roots = [
+            edge["target"]
+            for edge in edges
+            if edge.get("source") == global_id and edge.get("type") == prov_type
+        ]
+        if not roots:
+            continue
+
+        if agg_id not in node_ids:
+            raw["nodes"].append({
+                "id": agg_id,
+                "label": agg_id,
+                "type": agg_id,
+                "value": None,
+            })
+            node_ids.add(agg_id)
+
+        edges = [
+            edge
+            for edge in edges
+            if not (edge.get("source") == global_id and edge.get("type") == prov_type)
+        ]
+        edges.append({"source": global_id, "target": agg_id, "type": prov_type})
+        for root in roots:
+            edges.append({"source": agg_id, "target": root, "type": "child_of"})
+
+    implicit_specs = (
+        ("f_root", "belongs_to_f", lambda node_id: not node_id.startswith(("d1_", "d2_"))),
+        ("d1_root", "belongs_to_d1", lambda node_id: node_id.startswith("d1_")),
+        ("d2_root", "belongs_to_d2", lambda node_id: node_id.startswith("d2_")),
+    )
+    for agg_id, prov_type, id_predicate in implicit_specs:
+        if agg_id in node_ids:
+            continue
+
+        ast_nodes = [
+            node["id"]
+            for node in raw["nodes"]
+            if node["id"] != global_id
+            and node.get("type") not in VIRTUAL_NODE_TYPES
+            and node.get("type") != "global"
+            and id_predicate(str(node["id"]))
+        ]
+        if not ast_nodes:
+            continue
+
+        ast_set = set(ast_nodes)
+        internal_child_targets = {
+            edge["target"]
+            for edge in edges
+            if edge.get("type") == "child_of" and edge["source"] in ast_set
+        }
+        roots = [node_id for node_id in ast_nodes if node_id not in internal_child_targets]
+        if not roots:
+            roots = ast_nodes
+
+        raw["nodes"].append({
+            "id": agg_id,
+            "label": agg_id,
+            "type": agg_id,
+            "value": None,
+        })
+        node_ids.add(agg_id)
+        edges.append({"source": global_id, "target": agg_id, "type": prov_type})
+        for root in roots:
+            edges.append({"source": agg_id, "target": root, "type": "child_of"})
+
+    raw["edges"] = edges
 
 
 class ExpressionGraphData(Data):
@@ -177,7 +426,8 @@ class TopologicalFeatureExtractor:
                 lpe_list = []
                 for i in range(1, 5):
                     if i < num_nodes:
-                        lpe_list.append(evecs[:, i])
+                        # abs() removes arbitrary sign ambiguity from eigh eigenvectors
+                        lpe_list.append(np.abs(evecs[:, i]))
                     else:
                         lpe_list.append(np.zeros(num_nodes))
                 lpe_features = np.stack(lpe_list, axis=1)
@@ -223,14 +473,15 @@ class ExpressionGraphConverter:
         "variable": 3,
         "function": 4,
         "virtual_current_x": 5,
-        "virtual_f_x": 6,
+        "f_root": 6,
         "virtual_y_target": 7,
         "virtual_supernode": 8,
+        "d1_root": 9,
+        "d2_root": 10,
     }
 
     def __init__(self):
-        self.label_vocab: dict[str, int] = {}
-        self.edge_type_vocab: dict[str, int] = {}
+        pass
 
     def convert(
         self, source: Union[str, Path, dict], heterogeneous: bool = False, enrich: bool = True, mode: str = "graph"
@@ -264,20 +515,42 @@ class ExpressionGraphConverter:
             roots_f = find_roots(nodes_f, edges_f)
             roots_d1 = find_roots(nodes_d1, edges_d1)
             roots_d2 = find_roots(nodes_d2, edges_d2)
-            
+
             combined_edges = edges_f + edges_d1 + edges_d2
-            for root in roots_f:
-                combined_edges.append({"source": "global", "target": root, "type": "belongs_to_f"})
-            for root in roots_d1:
-                combined_edges.append({"source": "global", "target": root, "type": "belongs_to_d1"})
-            for root in roots_d2:
-                combined_edges.append({"source": "global", "target": root, "type": "belongs_to_d2"})
-                
+            if roots_f:
+                combined_nodes.append({
+                    "id": "f_root", "label": "f_root", "type": "f_root", "value": None
+                })
+                combined_edges.append({"source": "global", "target": "f_root", "type": "belongs_to_f"})
+                for root in roots_f:
+                    combined_edges.append({"source": "f_root", "target": root, "type": "child_of"})
+            if roots_d1:
+                combined_nodes.append({
+                    "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
+                })
+                combined_edges.append({"source": "global", "target": "d1_root", "type": "belongs_to_d1"})
+                for root in roots_d1:
+                    combined_edges.append({"source": "d1_root", "target": root, "type": "child_of"})
+            if roots_d2:
+                combined_nodes.append({
+                    "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
+                })
+                combined_edges.append({"source": "global", "target": "d2_root", "type": "belongs_to_d2"})
+                for root in roots_d2:
+                    combined_edges.append({"source": "d2_root", "target": root, "type": "child_of"})
+
             raw["nodes"] = combined_nodes
             raw["edges"] = combined_edges
         else:
             raw["nodes"] = list(raw.get("nodes", []))
             raw["edges"] = list(raw.get("edges", []))
+            _insert_function_aggregators(raw)
+
+        # Topology is computed on the pure AST (before virtual nodes are injected).
+        raw_ast = {"nodes": list(raw["nodes"]), "edges": list(raw["edges"])}
+        belongs_to_f_map = compute_belongs_to_f(raw_ast)
+        belongs_to_d1_map = compute_belongs_to_d1(raw_ast)
+        belongs_to_d2_map = compute_belongs_to_d2(raw_ast)
         
         if mode == "graph":
             # Find variable nodes and global node
@@ -289,17 +562,11 @@ class ExpressionGraphConverter:
                 elif node.get("type") == "global":
                     global_node_id = node["id"]
             
-            # Add the three virtual nodes
+            # Add task virtual nodes (function values live on f_root/d1_root/d2_root aggregators)
             raw["nodes"].append({
                 "id": "virtual_current_x",
                 "label": "virtual_current_x",
                 "type": "virtual_current_x",
-                "value": None
-            })
-            raw["nodes"].append({
-                "id": "virtual_f_x",
-                "label": "virtual_f_x",
-                "type": "virtual_f_x",
                 "value": None
             })
             raw["nodes"].append({
@@ -308,15 +575,18 @@ class ExpressionGraphConverter:
                 "type": "virtual_y_target",
                 "value": None
             })
-            # Add virtual_supernode
             raw["nodes"].append({
                 "id": "virtual_supernode",
                 "label": "virtual_supernode",
                 "type": "virtual_supernode",
                 "value": None
             })
-            
-            # Add virtual edges:
+
+            existing_aggregators = [
+                agg_id for agg_id in FUNCTION_AGGREGATOR_IDS
+                if any(node["id"] == agg_id for node in raw["nodes"])
+            ]
+
             # virtual_current_x -> all variables
             for var_id in variable_node_ids:
                 raw["edges"].append({
@@ -324,30 +594,35 @@ class ExpressionGraphConverter:
                     "target": var_id,
                     "type": "virtual"
                 })
-            # virtual_current_x -> virtual_f_x
-            raw["edges"].append({
-                "source": "virtual_current_x",
-                "target": "virtual_f_x",
-                "type": "virtual"
-            })
-            # virtual_f_x -> virtual_current_x
-            raw["edges"].append({
-                "source": "virtual_f_x",
-                "target": "virtual_current_x",
-                "type": "virtual"
-            })
-            # virtual_f_x -> virtual_y_target
-            raw["edges"].append({
-                "source": "virtual_f_x",
-                "target": "virtual_y_target",
-                "type": "virtual"
-            })
-            # virtual_y_target -> virtual_f_x
-            raw["edges"].append({
-                "source": "virtual_y_target",
-                "target": "virtual_f_x",
-                "type": "virtual"
-            })
+            # virtual_current_x <-> per-function aggregators (couple x to f, f', f'')
+            for agg_id in existing_aggregators:
+                raw["edges"].append({
+                    "source": "virtual_current_x",
+                    "target": agg_id,
+                    "type": "virtual"
+                })
+                raw["edges"].append({
+                    "source": agg_id,
+                    "target": "virtual_current_x",
+                    "type": "virtual"
+                })
+            # f_root <-> virtual_y_target (root-finding target applies to f only)
+            if "f_root" in existing_aggregators:
+                raw["edges"].append({
+                    "source": "f_root",
+                    "target": "virtual_y_target",
+                    "type": "virtual"
+                })
+                raw["edges"].append({
+                    "source": "virtual_y_target",
+                    "target": "f_root",
+                    "type": "virtual"
+                })
+            # Newton/Halley coupling between derivative aggregators
+            for src, tgt in (("f_root", "d1_root"), ("d1_root", "d2_root"), ("f_root", "d2_root")):
+                if src in existing_aggregators and tgt in existing_aggregators:
+                    raw["edges"].append({"source": src, "target": tgt, "type": "virtual"})
+                    raw["edges"].append({"source": tgt, "target": src, "type": "virtual"})
             # virtual_y_target -> global node
             if global_node_id is not None:
                 raw["edges"].append({
@@ -356,36 +631,64 @@ class ExpressionGraphConverter:
                     "type": "virtual"
                 })
         
-        # 1. Build directed graph first (forward edges only)
-        G_directed = self._build_networkx(raw)
-        topo = TopologicalFeatureExtractor.extract_and_annotate(G_directed, enrich=enrich)
+        # 1. Build AST graph for structural features (excludes virtual nodes)
+        G_ast = self._build_networkx(
+            raw_ast,
+            belongs_to_f_map=belongs_to_f_map,
+            belongs_to_d1_map=belongs_to_d1_map,
+            belongs_to_d2_map=belongs_to_d2_map,
+        )
+        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast, enrich=enrich)
+        ast_node_ids = list(G_ast.nodes)
+        ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
 
-        # 2. Enrich attributes based on mode
+        # 2. Build full directed graph (includes virtual nodes when mode=graph)
+        G_directed = self._build_networkx(
+            raw,
+            belongs_to_f_map=belongs_to_f_map,
+            belongs_to_d1_map=belongs_to_d1_map,
+            belongs_to_d2_map=belongs_to_d2_map,
+        )
+
+        # 3. Enrich attributes based on mode
         G_enriched = nx.DiGraph()
         node_ids = list(G_directed.nodes)
         
         if enrich:
-            for i, node in enumerate(node_ids):
+            for node in node_ids:
                 attrs = G_directed.nodes[node]
                 enriched_attrs = attrs.copy()
-                enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
-                enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
-                enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
-                enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
-                enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                
-                # Laplacian Positional Encodings
-                enriched_attrs["lpe_1"] = float(topo["lpe"][i, 0])
-                enriched_attrs["lpe_2"] = float(topo["lpe"][i, 1])
-                enriched_attrs["lpe_3"] = float(topo["lpe"][i, 2])
-                enriched_attrs["lpe_4"] = float(topo["lpe"][i, 3])
-                
-                # Random Walk Positional Encodings
-                enriched_attrs["rwpe_1"] = float(topo["rwpe"][i, 0])
-                enriched_attrs["rwpe_2"] = float(topo["rwpe"][i, 1])
-                enriched_attrs["rwpe_3"] = float(topo["rwpe"][i, 2])
-                enriched_attrs["rwpe_4"] = float(topo["rwpe"][i, 3])
-                
+                ast_idx = ast_id_to_idx.get(node)
+
+                if ast_idx is not None:
+                    enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
+                    enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
+                    enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
+                    enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
+                    enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
+                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
+                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
+                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
+                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
+                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
+                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
+                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
+                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                else:
+                    enriched_attrs["depth"] = 0.0
+                    enriched_attrs["height"] = 0.0
+                    enriched_attrs["subtree_size"] = 1.0
+                    enriched_attrs["out_degree"] = 0.0
+                    enriched_attrs["betweenness_centrality"] = 0.0
+                    enriched_attrs["lpe_1"] = 0.0
+                    enriched_attrs["lpe_2"] = 0.0
+                    enriched_attrs["lpe_3"] = 0.0
+                    enriched_attrs["lpe_4"] = 0.0
+                    enriched_attrs["rwpe_1"] = 0.0
+                    enriched_attrs["rwpe_2"] = 0.0
+                    enriched_attrs["rwpe_3"] = 0.0
+                    enriched_attrs["rwpe_4"] = 0.0
+
                 G_enriched.add_node(node, **enriched_attrs)
 
             # Build bidirectional edges for rich representation
@@ -445,12 +748,11 @@ class ExpressionGraphConverter:
                             edge_betweenness_centrality=0.0,
                         )
         else:
-            # Basic 5-feature set (Supervised learning mode)
+            ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
             for node in node_ids:
                 attrs = G_directed.nodes[node]
                 enriched_attrs = attrs.copy()
-                enriched_attrs["degree_centrality"] = float(topo["depths"].get(node, 0.0))  # wait, using degree centrality as required
-                # Wait, degree centrality was already set on G_directed inside TopologicalFeatureExtractor
+                enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
                 G_enriched.add_node(node, **enriched_attrs)
 
             for edge in raw.get("edges", []):
@@ -485,6 +787,34 @@ class ExpressionGraphConverter:
             data.__class__ = ExpressionGraphData
             data.node_ids = node_ids
 
+        node_type_tensor = torch.tensor(
+            [G_directed.nodes[n]["node_type"] for n in node_ids], dtype=torch.long
+        )
+        label_id_tensor = torch.tensor(
+            [G_directed.nodes[n]["label_id"] for n in node_ids], dtype=torch.long
+        )
+        belongs_to_f_tensor = torch.tensor(
+            [G_directed.nodes[n]["belongs_to_f"] for n in node_ids], dtype=torch.float
+        )
+        belongs_to_d1_tensor = torch.tensor(
+            [G_directed.nodes[n]["belongs_to_d1"] for n in node_ids], dtype=torch.float
+        )
+        belongs_to_d2_tensor = torch.tensor(
+            [G_directed.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float
+        )
+        if heterogeneous:
+            data["node"].node_type = node_type_tensor
+            data["node"].label_id = label_id_tensor
+            data["node"].belongs_to_f = belongs_to_f_tensor
+            data["node"].belongs_to_d1 = belongs_to_d1_tensor
+            data["node"].belongs_to_d2 = belongs_to_d2_tensor
+        else:
+            data.node_type = node_type_tensor
+            data.label_id = label_id_tensor
+            data.belongs_to_f = belongs_to_f_tensor
+            data.belongs_to_d1 = belongs_to_d1_tensor
+            data.belongs_to_d2 = belongs_to_d2_tensor
+
         # Add global graph features
         data.tree_depth = topo["tree_depth"]
         data.tree_width = topo["tree_width"]
@@ -506,16 +836,24 @@ class ExpressionGraphConverter:
             return json.load(f)
 
     def _encode_label(self, label: str) -> int:
-        if label not in self.label_vocab:
-            self.label_vocab[label] = len(self.label_vocab)
-        return self.label_vocab[label]
+        return encode_label(label)
 
     def _encode_edge_type(self, etype: str) -> int:
-        if etype not in self.edge_type_vocab:
-            self.edge_type_vocab[etype] = len(self.edge_type_vocab)
-        return self.edge_type_vocab[etype]
+        return encode_edge_type(etype)
 
-    def _build_networkx(self, raw: dict) -> nx.DiGraph:
+    def _build_networkx(
+        self,
+        raw: dict,
+        belongs_to_f_map: dict[str, float] | None = None,
+        belongs_to_d1_map: dict[str, float] | None = None,
+        belongs_to_d2_map: dict[str, float] | None = None,
+    ) -> nx.DiGraph:
+        if belongs_to_f_map is None:
+            belongs_to_f_map = compute_belongs_to_f(raw)
+        if belongs_to_d1_map is None:
+            belongs_to_d1_map = compute_belongs_to_d1(raw)
+        if belongs_to_d2_map is None:
+            belongs_to_d2_map = compute_belongs_to_d2(raw)
         G = nx.DiGraph()
         for node in raw["nodes"]:
             val_dict = node.get("value")
@@ -531,15 +869,20 @@ class ExpressionGraphConverter:
                 else:
                     actual_value = 0.0
                     has_val = 0.0
-                    
+
             G.add_node(
                 node["id"],
                 node_type=self.NODE_TYPES[node["type"]],
                 label_id=self._encode_label(node["label"]),
-                value=actual_value,
+                value=signed_log_value(actual_value),
                 has_value=has_val,
+                belongs_to_f=float(belongs_to_f_map.get(node["id"], 0.0)),
+                belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),
+                belongs_to_d2=float(belongs_to_d2_map.get(node["id"], 0.0)),
                 virtual_current_x_val=0.0,
                 virtual_f_x_val=0.0,
+                virtual_d1_x_val=0.0,
+                virtual_d2_x_val=0.0,
                 virtual_y_target_val=0.0,
             )
         for edge in raw["edges"]:
@@ -594,6 +937,8 @@ class ExpressionGraphConverter:
         
         v_cx = torch.tensor([G.nodes[n]["virtual_current_x_val"] for n in node_ids], dtype=torch.float)
         v_fx = torch.tensor([G.nodes[n]["virtual_f_x_val"] for n in node_ids], dtype=torch.float)
+        v_d1x = torch.tensor([G.nodes[n]["virtual_d1_x_val"] for n in node_ids], dtype=torch.float)
+        v_d2x = torch.tensor([G.nodes[n]["virtual_d2_x_val"] for n in node_ids], dtype=torch.float)
         v_yt = torch.tensor([G.nodes[n]["virtual_y_target_val"] for n in node_ids], dtype=torch.float)
 
         if enrich:
@@ -602,23 +947,40 @@ class ExpressionGraphConverter:
             subtree_size = torch.tensor([G.nodes[n]["subtree_size"] for n in node_ids], dtype=torch.float)
             out_degree = torch.tensor([G.nodes[n]["out_degree"] for n in node_ids], dtype=torch.float)
             betweenness = torch.tensor([G.nodes[n]["betweenness_centrality"] for n in node_ids], dtype=torch.float)
-            lpe = torch.tensor(topo["lpe"], dtype=torch.float)
-            rwpe = torch.tensor(topo["rwpe"], dtype=torch.float)
+            has_value = torch.tensor([G.nodes[n]["has_value"] for n in node_ids], dtype=torch.float)
+            belongs_to_f = torch.tensor([G.nodes[n]["belongs_to_f"] for n in node_ids], dtype=torch.float)
+            belongs_to_d1 = torch.tensor([G.nodes[n]["belongs_to_d1"] for n in node_ids], dtype=torch.float)
+            belongs_to_d2 = torch.tensor([G.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float)
+            lpe_cols = [
+                torch.tensor([G.nodes[n][f"lpe_{i}"] for n in node_ids], dtype=torch.float)
+                for i in range(1, 5)
+            ]
+            rwpe_cols = [
+                torch.tensor([G.nodes[n][f"rwpe_{i}"] for n in node_ids], dtype=torch.float)
+                for i in range(1, 5)
+            ]
 
             x = torch.stack(
                 [
-                    node_type.float(), depth, height, subtree_size, out_degree, betweenness, label_id.float(), value,
-                    lpe[:, 0], lpe[:, 1], lpe[:, 2], lpe[:, 3],
-                    rwpe[:, 0], rwpe[:, 1], rwpe[:, 2], rwpe[:, 3],
-                    v_cx, v_fx, v_yt,
+                    node_type.float(), label_id.float(), depth, height, subtree_size, out_degree,
+                    betweenness, value, has_value,
+                    *lpe_cols, *rwpe_cols,
+                    v_cx, v_fx, v_d1x, v_d2x, v_yt, belongs_to_f, belongs_to_d1, belongs_to_d2,
                 ],
                 dim=1
             )
         else:
             has_value = torch.tensor([G.nodes[n]["has_value"] for n in node_ids], dtype=torch.float)
+            belongs_to_f = torch.tensor([G.nodes[n]["belongs_to_f"] for n in node_ids], dtype=torch.float)
+            belongs_to_d1 = torch.tensor([G.nodes[n]["belongs_to_d1"] for n in node_ids], dtype=torch.float)
+            belongs_to_d2 = torch.tensor([G.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float)
             deg_cent = torch.tensor([G.nodes[n]["degree_centrality"] for n in node_ids], dtype=torch.float)
             x = torch.stack(
-                [node_type.float(), label_id.float(), value, has_value, deg_cent, v_cx, v_fx, v_yt], dim=1
+                [
+                    node_type.float(), label_id.float(), value, has_value, deg_cent,
+                    v_cx, v_fx, v_d1x, v_d2x, v_yt, belongs_to_f, belongs_to_d1, belongs_to_d2,
+                ],
+                dim=1
             )
 
         edge_buckets: dict[str, list[tuple[int, int]]] = {}
@@ -684,11 +1046,11 @@ class GraphConversionPipeline:
 
     @property
     def label_vocab(self) -> dict[str, int]:
-        return self.converter.label_vocab
+        return dict(CANONICAL_LABEL_VOCAB)
 
     @property
     def edge_type_vocab(self) -> dict[str, int]:
-        return self.converter.edge_type_vocab
+        return dict(CANONICAL_EDGE_TYPE_VOCAB)
 
     @property
     def input_dim(self) -> int:
@@ -711,6 +1073,66 @@ class GraphConversionPipeline:
         if self.enrich:
             return list(ENRICHED_EDGE_FEATURE_SCHEMA)
         return list(BASIC_EDGE_FEATURE_SCHEMA)
+
+
+def populate_task_virtual_values(
+    data,
+    *,
+    cx_val: float,
+    fx_val: float,
+    yt_val: float,
+    d1x_val: float = 0.0,
+    d2x_val: float = 0.0,
+    mode: str = "graph",
+    enrich: bool = True,
+    set_has_value: bool = False,
+) -> None:
+    """Write current iterate / function values onto task virtual and aggregator nodes."""
+    if not hasattr(data, "node_ids") or data.node_ids is None or data.x is None:
+        return
+    if len(data.x.shape) != 2:
+        return
+
+    schema = ENRICHED_NODE_FEATURE_SCHEMA if enrich else BASIC_NODE_FEATURE_SCHEMA
+    expected_count = len(schema)
+    if data.x.shape[1] != expected_count:
+        return
+
+    cx_idx = schema.index("virtual_current_x_val")
+    fx_idx = schema.index("virtual_f_x_val")
+    d1_idx = schema.index("virtual_d1_x_val")
+    d2_idx = schema.index("virtual_d2_x_val")
+    yt_idx = schema.index("virtual_y_target_val")
+    has_idx = schema.index("has_value") if set_has_value else None
+
+    def write(node_id: str, col_idx: int, value: float) -> None:
+        idx = data.node_ids.index(node_id)
+        data.x[idx, col_idx] = float(signed_log_value(value))
+        if has_idx is not None:
+            data.x[idx, has_idx] = 1.0
+
+    try:
+        if mode == "graph":
+            write("virtual_current_x", cx_idx, cx_val)
+            write("virtual_y_target", yt_idx, yt_val)
+            for agg_id, col_idx, value in (
+                ("f_root", fx_idx, fx_val),
+                ("d1_root", d1_idx, d1x_val),
+                ("d2_root", d2_idx, d2x_val),
+            ):
+                if agg_id in data.node_ids:
+                    write(agg_id, col_idx, value)
+        elif mode in ("tree", "tree_derivatives"):
+            task_target = "f_root" if "f_root" in data.node_ids else "global"
+            write(task_target, cx_idx, cx_val)
+            write(task_target, fx_idx, fx_val)
+            write(task_target, yt_idx, yt_val)
+            if "d1_root" in data.node_ids:
+                write("d1_root", d1_idx, d1x_val)
+            if "d2_root" in data.node_ids:
+                write("d2_root", d2_idx, d2x_val)
+    except ValueError:
+        pass
 
 
 def slice_active_features(x: torch.Tensor, active_features: list[str] | None, enrich: bool) -> torch.Tensor:
@@ -863,13 +1285,18 @@ def create_virtual_global_node(
             G_norm.add_node(
                 nid,
                 node_type=ExpressionGraphConverter.NODE_TYPES[type_str],
-                label_id=0,
+                label_id=encode_label(label),
                 label=label,
                 type=type_str,
-                value=val,
+                value=signed_log_value(val),
                 has_value=has_val,
+                belongs_to_f=0.0,
+                belongs_to_d1=0.0,
+                belongs_to_d2=0.0,
                 virtual_current_x_val=0.0,
                 virtual_f_x_val=0.0,
+                virtual_d1_x_val=0.0,
+                virtual_d2_x_val=0.0,
                 virtual_y_target_val=0.0
             )
         for u, v, attrs in G.edges(data=True):
@@ -888,13 +1315,18 @@ def create_virtual_global_node(
     G_combined.add_node(
         "global",
         node_type=ExpressionGraphConverter.NODE_TYPES["global"],
-        label_id=0,
+        label_id=encode_label("GLOBAL"),
         label="GLOBAL",
         type="global",
         value=0.0,
         has_value=0.0,
+        belongs_to_f=0.0,
+        belongs_to_d1=0.0,
+        belongs_to_d2=0.0,
         virtual_current_x_val=0.0,
         virtual_f_x_val=0.0,
+        virtual_d1_x_val=0.0,
+        virtual_d2_x_val=0.0,
         virtual_y_target_val=0.0
     )
 
@@ -908,11 +1340,40 @@ def create_virtual_global_node(
     add_component(g_d1, "d1")
     add_component(g_d2, "d2")
 
-    for r in roots_f:
-        G_combined.add_edge("global", f"f_{r}", edge_type=0)
-    for r in roots_d1:
-        G_combined.add_edge("global", f"d1_{r}", edge_type=0)
-    for r in roots_d2:
-        G_combined.add_edge("global", f"d2_{r}", edge_type=0)
+    prov_edge_by_agg = {
+        "f_root": "belongs_to_f",
+        "d1_root": "belongs_to_d1",
+        "d2_root": "belongs_to_d2",
+    }
+
+    def add_aggregator(agg_id: str, agg_type: str, roots: list, prefix: str):
+        if not roots:
+            return
+        G_combined.add_node(
+            agg_id,
+            node_type=ExpressionGraphConverter.NODE_TYPES[agg_type],
+            label_id=encode_label(agg_id),
+            label=agg_id,
+            type=agg_type,
+            value=0.0,
+            has_value=0.0,
+            belongs_to_f=1.0 if agg_type == "f_root" else 0.0,
+            belongs_to_d1=1.0 if agg_type == "d1_root" else 0.0,
+            belongs_to_d2=1.0 if agg_type == "d2_root" else 0.0,
+            virtual_current_x_val=0.0,
+            virtual_f_x_val=0.0,
+            virtual_d1_x_val=0.0,
+            virtual_d2_x_val=0.0,
+            virtual_y_target_val=0.0,
+        )
+        G_combined.add_edge(
+            "global", agg_id, edge_type=encode_edge_type(prov_edge_by_agg[agg_type])
+        )
+        for r in roots:
+            G_combined.add_edge(agg_id, f"{prefix}_{r}", edge_type=encode_edge_type("child_of"))
+
+    add_aggregator("f_root", "f_root", roots_f, "f")
+    add_aggregator("d1_root", "d1_root", roots_d1, "d1")
+    add_aggregator("d2_root", "d2_root", roots_d2, "d2")
 
     return G_combined

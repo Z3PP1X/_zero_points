@@ -22,17 +22,23 @@ BASIC_FEATURE_SCHEMA = [
     "degree_centrality",
     "virtual_current_x_val",
     "virtual_f_x_val",
+    "virtual_d1_x_val",
+    "virtual_d2_x_val",
     "virtual_y_target_val",
+    "belongs_to_f",
+    "belongs_to_d1",
+    "belongs_to_d2",
 ]
 ENRICHED_FEATURE_SCHEMA = [
     "node_type",
+    "label_id",
     "depth",
     "height",
     "subtree_size",
     "out_degree",
     "betweenness_centrality",
-    "label_id",
     "value",
+    "has_value",
     "lpe_1",
     "lpe_2",
     "lpe_3",
@@ -43,7 +49,12 @@ ENRICHED_FEATURE_SCHEMA = [
     "rwpe_4",
     "virtual_current_x_val",
     "virtual_f_x_val",
+    "virtual_d1_x_val",
+    "virtual_d2_x_val",
     "virtual_y_target_val",
+    "belongs_to_f",
+    "belongs_to_d1",
+    "belongs_to_d2",
 ]
 
 

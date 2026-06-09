@@ -1,4 +1,5 @@
 import json
+import pytest
 import torch
 import numpy as np
 from pathlib import Path
@@ -8,6 +9,8 @@ from graph_utils import (
     TopologicalFeatureExtractor,
     ENRICHED_NODE_FEATURE_SCHEMA,
     ENRICHED_EDGE_FEATURE_SCHEMA,
+    CANONICAL_LABEL_VOCAB,
+    signed_log_value,
 )
 from feature_layout import NATIVE_NODE_FEATURE_COUNT, NATIVE_EDGE_FEATURE_COUNT
 
@@ -95,26 +98,30 @@ def test_enriched_graph_features(tmp_path):
 
     root_features = data.x[root_idx].tolist()
     assert root_features[0] == 1.0
-    assert root_features[1] == 0.0
-    assert root_features[2] == 1.0
-    assert root_features[3] == 3.0
-    assert root_features[4] == 2.0
-    assert root_features[5] > 0.0
+    assert root_features[1] == float(CANONICAL_LABEL_VOCAB["Plus"])
+    assert root_features[2] == 0.0
+    assert root_features[3] == 1.0
+    assert root_features[4] == 3.0
+    assert root_features[5] == 2.0
+    assert root_features[6] > 0.0
     assert root_features[7] == 0.0
+    assert root_features[8] == 0.0
 
     child2_features = data.x[child2_idx].tolist()
     assert child2_features[0] == 2.0
-    assert child2_features[1] == 1.0
-    assert child2_features[2] == 0.0
-    assert child2_features[3] == 1.0
-    assert child2_features[4] == 0.0
+    assert child2_features[1] == float(CANONICAL_LABEL_VOCAB["<CONSTANT>"])
+    assert child2_features[2] == 1.0
+    assert child2_features[3] == 0.0
+    assert child2_features[4] == 1.0
     assert child2_features[5] == 0.0
-    assert child2_features[7] == 2.0
+    assert child2_features[6] == 0.0
+    assert child2_features[7] == pytest.approx(signed_log_value(2.0))
+    assert child2_features[8] == 1.0
 
     for idx in range(3):
         node_features = data.x[idx].tolist()
-        lpe = node_features[8:12]
-        rwpe = node_features[12:16]
+        lpe = node_features[9:13]
+        rwpe = node_features[13:17]
         assert len(lpe) == 4
         assert len(rwpe) == 4
         assert rwpe[0] == 0.0

@@ -17,6 +17,11 @@ from gnn.supervised_learning.dataset import DatasetLoader
 from gnn.shared.utils.graph_utils import GraphConversionPipeline
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.shared.utils.unified_loader import UnifiedDataLoader
+from gnn.supervised_learning.supervised_config import (
+    architecture_from_layer_type,
+    edge_dim_for_enrich,
+    validate_layer_type,
+)
 
 
 class FeatureEngineering:
@@ -54,7 +59,7 @@ class GraphPipeline:
         unified_loader: UnifiedDataLoader | None = None,
         synthetic: bool = False,
         synthetic_dataset_name: str | None = None,
-        architecture: str = "gatv2_stack",
+        layer_type: str = "gatv2conv",
     ):
         self.seed = seed
         self.mode = mode
@@ -62,7 +67,7 @@ class GraphPipeline:
         self.active_features = active_features
         self.synthetic = synthetic
         self.synthetic_dataset_name = synthetic_dataset_name if synthetic_dataset_name else None
-        self.architecture = architecture
+        self.layer_type = validate_layer_type(layer_type)
 
         # Use unified_loader or get/create singleton instance
         if unified_loader is not None:
@@ -119,6 +124,7 @@ class GraphPipeline:
     def pipe(
         self, test_size=0.2, batch_size=32, stratify: bool = False, num_workers: int = 0
     ):
+        self._validate_edge_features()
         if self.synthetic:
             # --- Synthetic Mode ---
             if self.synthetic_unified_loader is None:
@@ -277,10 +283,14 @@ class GraphPipeline:
             return self.train_loader, self.test_loader, self.class_weights
 
     @property
+    def architecture(self) -> str:
+        return architecture_from_layer_type(self.layer_type)
+
+    @property
     def input_dim(self) -> int:
         if self.active_features is not None:
             return len(self.active_features)
-        return 19 if self.enrich else 8
+        return 25 if self.enrich else 13
 
     @property
     def global_dim(self) -> int:
@@ -291,7 +301,23 @@ class GraphPipeline:
         from gnn.shared.utils.graph_utils import ENRICHED_EDGE_FEATURE_SCHEMA, BASIC_EDGE_FEATURE_SCHEMA
         if self.active_features is not None:
             return len(ENRICHED_EDGE_FEATURE_SCHEMA if self.enrich else BASIC_EDGE_FEATURE_SCHEMA)
-        return 4 if self.enrich else 1
+        return edge_dim_for_enrich(self.enrich)
+
+    def _validate_edge_features(self):
+        if not self.enrich or not self.graphs:
+            return
+        sample = next(iter(self.graphs.values()))
+        edge_attr = getattr(sample, "edge_attr", None)
+        expected_dim = self.edge_dim
+        if edge_attr is None:
+            raise ValueError(
+                "enrich=True requires edge_attr on loaded graphs, but edge_attr is missing"
+            )
+        if edge_attr.ndim != 2 or edge_attr.shape[1] != expected_dim:
+            raise ValueError(
+                f"enrich=True expects edge_attr with {expected_dim} features, "
+                f"got shape {tuple(edge_attr.shape)}"
+            )
 
 
 def parse_float(val) -> float:
@@ -341,43 +367,17 @@ class ProblemRunDataset(Dataset):
         )
         data.pid = pid
 
-        # Initialize virtual nodes once from the dataset (without any Taylor series fallback)
-        if hasattr(data, "node_ids") and data.node_ids is not None:
-            try:
-                if self.mode == "graph":
-                    idx_cx = data.node_ids.index("virtual_current_x")
-                    idx_fx = data.node_ids.index("virtual_f_x")
-                    idx_yt = data.node_ids.index("virtual_y_target")
-                    
-                    if data.x is not None and len(data.x.shape) == 2:
-                        num_features = data.x.shape[1]
-                        if num_features == 19:  # enrich=True
-                            data.x[idx_cx, 7] = float(cx_val)
-                            data.x[idx_fx, 7] = float(fx_val)
-                            data.x[idx_yt, 7] = float(yt_val)
-                        elif num_features == 8:  # enrich=False
-                            data.x[idx_cx, 2] = float(cx_val)
-                            data.x[idx_fx, 2] = float(fx_val)
-                            data.x[idx_yt, 2] = float(yt_val)
-                            
-                            data.x[idx_cx, 3] = 1.0
-                            data.x[idx_fx, 3] = 1.0
-                            data.x[idx_yt, 3] = 1.0
-                elif self.mode in ["tree", "tree_derivatives"]:
-                    # Populate slots on the global node directly
-                    idx_global = data.node_ids.index("global")
-                    if data.x is not None and len(data.x.shape) == 2:
-                        num_features = data.x.shape[1]
-                        if num_features == 19:  # enrich=True
-                            data.x[idx_global, 16] = float(cx_val)
-                            data.x[idx_global, 17] = float(fx_val)
-                            data.x[idx_global, 18] = float(yt_val)
-                        elif num_features == 8:  # enrich=False
-                            data.x[idx_global, 5] = float(cx_val)
-                            data.x[idx_global, 6] = float(fx_val)
-                            data.x[idx_global, 7] = float(yt_val)
-            except ValueError:
-                pass
+        from gnn.shared.utils.graph_utils import populate_task_virtual_values
+
+        populate_task_virtual_values(
+            data,
+            cx_val=cx_val,
+            fx_val=fx_val,
+            yt_val=yt_val,
+            mode=self.mode,
+            enrich=self.enrich,
+            set_has_value=not self.enrich,
+        )
 
         # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:

@@ -24,6 +24,10 @@ if str(src_root) not in sys.path:
 
 from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa: F401
 from gnn.supervised_learning.run_results.eval_metrics import compute_confidence_metrics
+from gnn.supervised_learning.supervised_config import (
+    edge_dim_for_enrich,
+    validate_layer_type,
+)
 
 
 # Monkey patch GraphGym Logger to compute PR-AUC dynamically on any system/environment (e.g. Cloud GPU)
@@ -183,6 +187,24 @@ register_act("leaky_relu", nn.LeakyReLU)
 register_act("tanh", nn.Tanh)
 
 
+def _resolve_edge_attr(batch, edge_dim: int, enrich: bool):
+    edge_attr = getattr(batch, "edge_attr", None)
+    if enrich:
+        if edge_attr is None:
+            raise ValueError(
+                "enrich=True requires edge_attr on every graph batch, but edge_attr is missing"
+            )
+        return edge_attr
+    if edge_attr is None:
+        edge_attr = torch.zeros(
+            batch.edge_index.size(1),
+            edge_dim,
+            device=batch.x.device,
+            dtype=batch.x.dtype,
+        )
+    return edge_attr
+
+
 @register_layer("gatv2conv")
 class GATv2Conv(torch.nn.Module):
     def __init__(self, layer_config, **kwargs):
@@ -196,15 +218,12 @@ class GATv2Conv(torch.nn.Module):
         )
 
     def forward(self, batch):
-        edge_attr = getattr(batch, "edge_attr", None)
-        edge_dim = getattr(self.model, "edge_dim", None)
-        if edge_attr is None and edge_dim is not None:
-            edge_attr = torch.zeros(
-                batch.edge_index.size(1),
-                edge_dim,
-                device=batch.x.device,
-                dtype=batch.x.dtype,
-            )
+        enrich = bool(getattr(cfg.expression_graph, "enrich", False))
+        edge_attr = _resolve_edge_attr(
+            batch,
+            getattr(self.model, "edge_dim", 4),
+            enrich=enrich,
+        )
         batch.x = self.model(batch.x, batch.edge_index, edge_attr=edge_attr)
         return batch
 
@@ -223,14 +242,8 @@ class GINEConvLayer(torch.nn.Module):
         self.model = GINEConv(nn=nn_layer, edge_dim=edge_dim)
 
     def forward(self, batch):
-        edge_attr = getattr(batch, "edge_attr", None)
-        if edge_attr is None:
-            edge_attr = torch.zeros(
-                batch.edge_index.size(1),
-                self.edge_dim,
-                device=batch.x.device,
-                dtype=batch.x.dtype,
-            )
+        enrich = bool(getattr(cfg.expression_graph, "enrich", False))
+        edge_attr = _resolve_edge_attr(batch, self.edge_dim, enrich=enrich)
         batch.x = self.model(batch.x, batch.edge_index, edge_attr)
         return batch
 
@@ -307,6 +320,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
 
     mode = getattr(cfg.expression_graph, "mode", "graph")
     enrich = getattr(cfg.expression_graph, "enrich", False)
+    layer_type = validate_layer_type(cfg.gnn.layer_type)
+    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
     active_features_str = getattr(cfg.expression_graph, "active_features", "")
 
     synthetic = getattr(cfg.expression_graph, "synthetic", False)
@@ -333,6 +348,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Random Seed:    {seed}")
     print(f"  Injected Mode:           {mode}")
     print(f"  Injected Enrich:         {enrich}")
+    print(f"  Injected Layer Type:     {layer_type}")
+    print(f"  Injected Edge Dim:       {cfg.dataset.edge_dim}")
     print(f"  Injected Synthetic:      {synthetic}")
     if synthetic:
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
@@ -360,6 +377,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         graph_loader=loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
+        layer_type=layer_type,
     )
 
     pipeline.pipe(

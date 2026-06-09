@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from graph_utils import ExpressionGraphConverter
-from feature_layout import NATIVE_NODE_FEATURE_COUNT
+from graph_utils import ExpressionGraphConverter, signed_log_value, ENRICHED_NODE_FEATURE_SCHEMA, BASIC_NODE_FEATURE_SCHEMA
+from feature_layout import NATIVE_NODE_FEATURE_COUNT, BASIC_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
 
@@ -66,29 +66,29 @@ def test_virtual_nodes_injection_and_connections():
     converter = ExpressionGraphConverter()
     data_basic_graph = converter.convert(raw, heterogeneous=False, enrich=False, mode="graph")
 
-    # We expect 4 original nodes + 3 virtual nodes + 1 virtual supernode = 8 nodes, with 8 feature dimensions
+    # 4 AST nodes + f_root aggregator + 2 task virtual nodes + supernode = 8 nodes
     assert data_basic_graph.num_nodes == 8
-    assert data_basic_graph.x.shape[1] == 8
+    assert data_basic_graph.x.shape[1] == BASIC_NODE_FEATURE_COUNT
     assert len(data_basic_graph.node_ids) == 8
     assert "virtual_supernode" in data_basic_graph.node_ids
     assert "virtual_current_x" in data_basic_graph.node_ids
-    assert "virtual_f_x" in data_basic_graph.node_ids
+    assert "f_root" in data_basic_graph.node_ids
     assert "virtual_y_target" in data_basic_graph.node_ids
+    assert "virtual_f_x" not in data_basic_graph.node_ids
 
     idx_cx = data_basic_graph.node_ids.index("virtual_current_x")
-    idx_fx = data_basic_graph.node_ids.index("virtual_f_x")
+    idx_f_root = data_basic_graph.node_ids.index("f_root")
     idx_yt = data_basic_graph.node_ids.index("virtual_y_target")
 
-    # In basic mode (8 features): [node_type, label_id, value, has_value, degree_centrality, cx, fx, yt]
     assert data_basic_graph.x[idx_cx, 0].item() == 5.0
-    assert data_basic_graph.x[idx_fx, 0].item() == 6.0
+    assert data_basic_graph.x[idx_f_root, 0].item() == 6.0
     assert data_basic_graph.x[idx_yt, 0].item() == 7.0
 
     # Test basic conversion in Tree Mode
     data_basic_tree = converter.convert(raw, heterogeneous=False, enrich=False, mode="tree")
-    assert data_basic_tree.num_nodes == 4
-    assert data_basic_tree.x.shape[1] == 8
-    assert len(data_basic_tree.node_ids) == 4
+    assert data_basic_tree.num_nodes == 5
+    assert data_basic_tree.x.shape[1] == BASIC_NODE_FEATURE_COUNT
+    assert len(data_basic_tree.node_ids) == 5
     assert "virtual_current_x" not in data_basic_tree.node_ids
 
     # Test rich (RL, enrich=True) conversion in Graph Mode
@@ -100,7 +100,7 @@ def test_virtual_nodes_injection_and_connections():
 
     # Test rich conversion in Tree Mode
     data_rich_tree = converter.convert(raw, heterogeneous=False, enrich=True, mode="tree")
-    assert data_rich_tree.num_nodes == 4
+    assert data_rich_tree.num_nodes == 5
     assert data_rich_tree.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
 
 
@@ -142,25 +142,24 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     data_graph, extracted = preprocessor_graph.process(message)
     
     idx_cx = data_graph.node_ids.index("virtual_current_x")
-    idx_fx = data_graph.node_ids.index("virtual_f_x")
+    idx_f_root = data_graph.node_ids.index("f_root")
     idx_yt = data_graph.node_ids.index("virtual_y_target")
-    
-    # In preprocessor, enrich=True is used by default (node features = 19)
-    # Value column is index 7
-    assert data_graph.x[idx_cx, 7].item() == pytest.approx(1.5)
-    assert data_graph.x[idx_fx, 7].item() == pytest.approx(-2.7)
-    assert data_graph.x[idx_yt, 7].item() == pytest.approx(0.0)
+
+    cx_idx = ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
+    assert data_graph.x[idx_cx, cx_idx].item() == pytest.approx(signed_log_value(1.5))
+    assert data_graph.x[idx_f_root, ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_f_x_val")].item() == pytest.approx(signed_log_value(-2.7))
+    assert data_graph.x[idx_yt, ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_y_target_val")].item() == pytest.approx(signed_log_value(0.0))
 
     # 2. Test Preprocessor in Tree Mode
     preprocessor_tree = Preprocessor(graphs_dir=str(tmp_path), mode="tree")
     data_tree, extracted = preprocessor_tree.process(message)
-    assert data_tree.num_nodes == 2  # global + variable
-    
-    idx_global = data_tree.node_ids.index("global")
-    # Tree mode: custom slots are at indices 16, 17, 18
-    assert data_tree.x[idx_global, 16].item() == pytest.approx(1.5)
-    assert data_tree.x[idx_global, 17].item() == pytest.approx(-2.7)
-    assert data_tree.x[idx_global, 18].item() == pytest.approx(0.0)
+    assert data_tree.num_nodes == 3  # global + f_root + variable
+
+    idx_f_root_tree = data_tree.node_ids.index("f_root")
+    cx_idx = ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
+    assert data_tree.x[idx_f_root_tree, cx_idx].item() == pytest.approx(signed_log_value(1.5))
+    assert data_tree.x[idx_f_root_tree, ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_f_x_val")].item() == pytest.approx(signed_log_value(-2.7))
+    assert data_tree.x[idx_f_root_tree, ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_y_target_val")].item() == pytest.approx(signed_log_value(0.0))
 
 
 def test_supervised_learning_preprocessor_static_initialization():
@@ -191,7 +190,7 @@ def test_supervised_learning_preprocessor_static_initialization():
     base_graphs_graph = {"P-supervised": base_graph_graph}
     
     idx_cx = base_graph_graph.node_ids.index("virtual_current_x")
-    idx_fx = base_graph_graph.node_ids.index("virtual_f_x")
+    idx_f_root = base_graph_graph.node_ids.index("f_root")
     idx_yt = base_graph_graph.node_ids.index("virtual_y_target")
     
     df_no_fx = pd.DataFrame([{
@@ -204,13 +203,18 @@ def test_supervised_learning_preprocessor_static_initialization():
     dataset_no_fx_graph = ProblemRunDataset(df_no_fx, base_graphs_graph, mode="graph")
     data_no_fx_graph = dataset_no_fx_graph[0]
     
-    assert data_no_fx_graph.x[idx_cx, 2].item() == 2.5
-    assert data_no_fx_graph.x[idx_fx, 2].item() == 0.0
-    assert data_no_fx_graph.x[idx_yt, 2].item() == 4.0
+    cx_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
+    fx_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_f_x_val")
+    yt_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_y_target_val")
+    has_idx = BASIC_NODE_FEATURE_SCHEMA.index("has_value")
     
-    assert data_no_fx_graph.x[idx_cx, 3].item() == 1.0
-    assert data_no_fx_graph.x[idx_fx, 3].item() == 1.0
-    assert data_no_fx_graph.x[idx_yt, 3].item() == 1.0
+    assert data_no_fx_graph.x[idx_cx, cx_idx].item() == pytest.approx(signed_log_value(2.5))
+    assert data_no_fx_graph.x[idx_f_root, fx_idx].item() == pytest.approx(signed_log_value(0.0))
+    assert data_no_fx_graph.x[idx_yt, yt_idx].item() == pytest.approx(signed_log_value(4.0))
+
+    assert data_no_fx_graph.x[idx_cx, has_idx].item() == 1.0
+    assert data_no_fx_graph.x[idx_f_root, has_idx].item() == 1.0
+    assert data_no_fx_graph.x[idx_yt, has_idx].item() == 1.0
 
     df_with_fx = pd.DataFrame([{
         "problem_id": "P-supervised",
@@ -222,25 +226,28 @@ def test_supervised_learning_preprocessor_static_initialization():
     
     dataset_with_fx_graph = ProblemRunDataset(df_with_fx, base_graphs_graph, mode="graph")
     data_with_fx_graph = dataset_with_fx_graph[0]
-    assert data_with_fx_graph.x[idx_fx, 2].item() == pytest.approx(10.12)
+    assert data_with_fx_graph.x[idx_f_root, fx_idx].item() == pytest.approx(signed_log_value(10.12))
 
     # 2. Test Supervised Initialization in Tree Mode
     base_graph_tree = converter.convert(raw, heterogeneous=False, enrich=False, mode="tree")
     base_graphs_tree = {"P-supervised": base_graph_tree}
-    
-    idx_global = base_graph_tree.node_ids.index("global")
-    
+
+    idx_f_root_tree = base_graph_tree.node_ids.index("f_root")
+
     dataset_no_fx_tree = ProblemRunDataset(df_no_fx, base_graphs_tree, mode="tree")
     data_no_fx_tree = dataset_no_fx_tree[0]
-    
-    # Tree mode: custom slots are indices 5, 6, 7 on global node
-    assert data_no_fx_tree.x[idx_global, 5].item() == 2.5
-    assert data_no_fx_tree.x[idx_global, 6].item() == 0.0
-    assert data_no_fx_tree.x[idx_global, 7].item() == 4.0
+
+    cx_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
+    fx_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_f_x_val")
+    yt_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_y_target_val")
+
+    assert data_no_fx_tree.x[idx_f_root_tree, cx_idx].item() == pytest.approx(signed_log_value(2.5))
+    assert data_no_fx_tree.x[idx_f_root_tree, fx_idx].item() == pytest.approx(signed_log_value(0.0))
+    assert data_no_fx_tree.x[idx_f_root_tree, yt_idx].item() == pytest.approx(signed_log_value(4.0))
 
     dataset_with_fx_tree = ProblemRunDataset(df_with_fx, base_graphs_tree, mode="tree")
     data_with_fx_tree = dataset_with_fx_tree[0]
-    assert data_with_fx_tree.x[idx_global, 6].item() == pytest.approx(10.12)
+    assert data_with_fx_tree.x[idx_f_root_tree, fx_idx].item() == pytest.approx(signed_log_value(10.12))
 
 
 def test_dynamic_feature_slicing_and_selection(tmp_path):
@@ -301,14 +308,14 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     assert data.x.shape[1] == 3
     
     idx_cx_pre = data.node_ids.index("virtual_current_x")
-    # In active_feats, "value" is at index 1
-    assert data.x[idx_cx_pre, 1].item() == pytest.approx(3.14)
+    # In active_feats, "virtual_current_x_val" is at index 2
+    assert data.x[idx_cx_pre, 2].item() == pytest.approx(signed_log_value(3.14))
 
     # 3. Test supervised dataset with active_features sliced (basic features)
     base_graph_basic = converter.convert(raw, heterogeneous=False, enrich=False, mode="graph")
     base_graphs_basic = {"P-slice": base_graph_basic}
     
-    active_feats_basic = ["node_type", "value", "virtual_y_target_val"]
+    active_feats_basic = ["node_type", "virtual_y_target_val", "has_value"]
     
     df = pd.DataFrame([{
         "problem_id": "P-slice",
@@ -322,16 +329,15 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     
     assert data_sup.x.shape[1] == 3
     idx_yt = data_sup.node_ids.index("virtual_y_target")
-    # In active_feats_basic, "value" is at index 1
-    assert data_sup.x[idx_yt, 1].item() == pytest.approx(9.9)
+    # In active_feats_basic, "virtual_y_target_val" is at index 1
+    assert data_sup.x[idx_yt, 1].item() == pytest.approx(signed_log_value(9.9))
 
     # 4. Test preprocessor in Tree Mode with sliced features
     active_feats_tree = ["node_type", "virtual_current_x_val", "virtual_f_x_val", "virtual_y_target_val"]
     preprocessor_tree = Preprocessor(graphs_dir=str(tmp_path), mode="tree", active_features=active_feats_tree)
-    
+
     data_tree, extracted = preprocessor_tree.process(message)
     assert data_tree.x.shape[1] == 4
-    idx_global = data_tree.node_ids.index("global")
-    # In active_feats_tree, "virtual_current_x_val" is at index 1, "virtual_f_x_val" is at index 2
-    assert data_tree.x[idx_global, 1].item() == pytest.approx(3.14)
-    assert data_tree.x[idx_global, 2].item() == pytest.approx(-1.2)
+    idx_f_root_tree = data_tree.node_ids.index("f_root")
+    assert data_tree.x[idx_f_root_tree, 1].item() == pytest.approx(signed_log_value(3.14))
+    assert data_tree.x[idx_f_root_tree, 2].item() == pytest.approx(signed_log_value(-1.2))

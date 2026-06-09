@@ -25,7 +25,7 @@ def sample_trial_configuration(
     trial: optuna.Trial,
     *,
     target_rollout: int = 2048,
-    padded_node_feature_count: int = 19,
+    padded_node_feature_count: int = 25,
 ) -> TrialConfiguration:
     random_seed = trial.suggest_int("random_seed", 0, 99_999)
     learning_rate = trial.suggest_float("learning_rate", 1e-6, 9e-3, log=True)

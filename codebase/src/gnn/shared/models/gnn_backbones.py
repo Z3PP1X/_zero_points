@@ -6,6 +6,92 @@ import torch.nn as nn
 from torch.nn import LeakyReLU
 from torch_geometric.nn import GATv2Conv, GCNConv, GINConv, GINEConv, SAGEConv, global_mean_pool
 
+from gnn.shared.utils.graph_utils import (
+    CANONICAL_EDGE_TYPE_VOCAB,
+    CANONICAL_LABEL_VOCAB,
+    ENRICHED_NODE_FEATURE_SCHEMA,
+)
+
+NUM_NODE_TYPES = 11
+NUM_LABELS = len(CANONICAL_LABEL_VOCAB)
+NUM_EDGE_TYPES = len(CANONICAL_EDGE_TYPE_VOCAB)
+NODE_TYPE_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("node_type")
+LABEL_ID_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("label_id")
+BELONGS_TO_F_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("belongs_to_f")
+BELONGS_TO_D1_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("belongs_to_d1")
+BELONGS_TO_D2_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("belongs_to_d2")
+EDGE_RELATION_TYPE_COL = 2
+
+
+EDGE_RELATION_TYPE_COL = 2
+
+
+class NodeFeatureEncoder(nn.Module):
+    """Embed node_type + label_id; encode remaining continuous columns."""
+
+    def __init__(
+        self,
+        padded_node_feature_count: int,
+        output_dim: int,
+        node_type_emb_dim: int = 8,
+        label_emb_dim: int = 16,
+        activation: nn.Module | None = None,
+    ):
+        super().__init__()
+        self.node_type_col = NODE_TYPE_COL
+        self.label_id_col = LABEL_ID_COL
+        continuous_dim = padded_node_feature_count - 2
+        cont_hidden = max(output_dim - node_type_emb_dim - label_emb_dim, 8)
+        self.continuous_encoder = nn.Linear(continuous_dim, cont_hidden)
+        self.node_type_emb = nn.Embedding(NUM_NODE_TYPES, node_type_emb_dim)
+        self.label_emb = nn.Embedding(NUM_LABELS, label_emb_dim)
+        self.fusion = nn.Linear(cont_hidden + node_type_emb_dim + label_emb_dim, output_dim)
+        self.activation = activation if activation is not None else LeakyReLU()
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        node_types = x[:, self.node_type_col].round().long().clamp(0, NUM_NODE_TYPES - 1)
+        label_ids = x[:, self.label_id_col].round().long().clamp(0, NUM_LABELS - 1)
+        continuous_cols = [idx for idx in range(x.size(1)) if idx not in (self.node_type_col, self.label_id_col)]
+        x_cont = x[:, continuous_cols]
+        fused = torch.cat(
+            [
+                self.continuous_encoder(x_cont),
+                self.node_type_emb(node_types),
+                self.label_emb(label_ids),
+            ],
+            dim=-1,
+        )
+        return self.activation(self.fusion(fused)), node_types
+
+
+class EdgeFeatureEncoder(nn.Module):
+    """Embed relation_type; encode remaining continuous edge columns."""
+
+    def __init__(
+        self,
+        padded_edge_feature_count: int,
+        output_dim: int,
+        relation_emb_dim: int = 8,
+        activation: nn.Module | None = None,
+    ):
+        super().__init__()
+        continuous_dim = padded_edge_feature_count - 1
+        cont_hidden = max(output_dim - relation_emb_dim, 4)
+        self.continuous_encoder = nn.Linear(continuous_dim, cont_hidden)
+        self.relation_type_emb = nn.Embedding(NUM_EDGE_TYPES, relation_emb_dim)
+        self.fusion = nn.Linear(cont_hidden + relation_emb_dim, output_dim)
+        self.activation = activation if activation is not None else LeakyReLU()
+
+    def forward(self, edge_attr: torch.Tensor) -> torch.Tensor:
+        relation_ids = edge_attr[:, EDGE_RELATION_TYPE_COL].round().long().clamp(0, NUM_EDGE_TYPES - 1)
+        continuous_cols = [idx for idx in range(edge_attr.size(1)) if idx != EDGE_RELATION_TYPE_COL]
+        edge_cont = edge_attr[:, continuous_cols]
+        fused = torch.cat(
+            [self.continuous_encoder(edge_cont), self.relation_type_emb(relation_ids)],
+            dim=-1,
+        )
+        return self.activation(self.fusion(fused))
+
 
 def split_global_mean_pool(x: torch.Tensor, batch_index: torch.Tensor, is_virtual: torch.Tensor) -> torch.Tensor:
     num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
@@ -294,20 +380,22 @@ class GraphPolicyBackbone(nn.Module):
         self.heads = heads
         self.output_dim = hidden_dim
         self.edge_dim = layout.edge_input_dim
+        self.activation = get_activation_module(activation)
 
-        self.node_encoder = nn.Linear(
+        self.node_encoder = NodeFeatureEncoder(
             layout.padded_node_feature_count,
             layout.node_input_dim,
+            activation=self.activation,
         )
-        self.edge_encoder = nn.Linear(
+        self.edge_encoder = EdgeFeatureEncoder(
             layout.padded_edge_feature_count,
             layout.edge_input_dim,
+            activation=self.activation,
         )
         self.global_encoder = nn.Linear(
             layout.padded_global_feature_count,
             layout.global_input_dim,
         )
-        self.activation = get_activation_module(activation)
         self.convs = nn.ModuleList(
             self._build_convs(architecture, layout, hidden_dim, heads, self.activation)
         )
@@ -411,20 +499,34 @@ class GraphPolicyBackbone(nn.Module):
         return layers
 
     def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        node_types = x[:, 0].round().long()
+        x_enc, node_types = self.node_encoder(x)
         is_cx = (node_types == 5)
-        is_fx = (node_types == 6)
+        is_f_root = (node_types == 6)
         is_yt = (node_types == 7)
         is_super = (node_types == 8)
-        is_virtual = (node_types >= 5) & (node_types <= 8)
+        is_d1_root = (node_types == 9)
+        is_d2_root = (node_types == 10)
+        is_virtual = (node_types >= 5) & (node_types <= 10)
         is_real = ~is_virtual
         is_func_op = (node_types == 1) | (node_types == 4)
+        belongs_to_f = (
+            x[:, BELONGS_TO_F_COL] > 0.5
+            if x.size(1) > BELONGS_TO_F_COL
+            else torch.ones(x.size(0), dtype=torch.bool, device=x.device)
+        )
+        belongs_to_d1 = (
+            x[:, BELONGS_TO_D1_COL] > 0.5
+            if x.size(1) > BELONGS_TO_D1_COL
+            else torch.zeros(x.size(0), dtype=torch.bool, device=x.device)
+        )
+        belongs_to_d2 = (
+            x[:, BELONGS_TO_D2_COL] > 0.5
+            if x.size(1) > BELONGS_TO_D2_COL
+            else torch.zeros(x.size(0), dtype=torch.bool, device=x.device)
+        )
 
-        x_enc = self.activation(self.node_encoder(x))
-        edge_emb = self.activation(
-            self.edge_encoder(
-                coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
-            )
+        edge_emb = self.edge_encoder(
+            coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
         )
 
         if global_features is not None:
@@ -441,9 +543,21 @@ class GraphPolicyBackbone(nn.Module):
 
         num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
 
-        if is_func_op.any() and is_fx.any():
-            fo_mean = global_mean_pool(x_enc[is_func_op], batch_index[is_func_op], size=num_graphs)
-            x_enc[is_fx] = x_enc[is_fx] + fo_mean[batch_index[is_fx]]
+        aggregator_specs = (
+            (is_f_root, belongs_to_f),
+            (is_d1_root, belongs_to_d1),
+            (is_d2_root, belongs_to_d2),
+        )
+        for is_agg, belongs_mask in aggregator_specs:
+            if is_func_op.any() and is_agg.any():
+                is_func_op_subtree = is_func_op & belongs_mask
+                if is_func_op_subtree.any():
+                    fo_mean = global_mean_pool(
+                        x_enc[is_func_op_subtree],
+                        batch_index[is_func_op_subtree],
+                        size=num_graphs,
+                    )
+                    x_enc[is_agg] = x_enc[is_agg] + fo_mean[batch_index[is_agg]]
 
         if is_super.any():
             all_mean = global_mean_pool(x_enc, batch_index, size=num_graphs)

@@ -94,7 +94,7 @@ class TestGraphNetwork(nn.Module):
 
     def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
         node_types = x[:, 0].round().long()
-        is_virtual = (node_types >= 5) & (node_types <= 8)
+        is_virtual = (node_types >= 5) & (node_types <= 10)
         is_real = ~is_virtual
 
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)

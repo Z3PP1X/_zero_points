@@ -34,13 +34,13 @@ model:
   edge_decoding: dot
   graph_pooling: mean
 
-# --- GNN Backbone Architecture ---
+# --- GNN Backbone Architecture (edge-aware only: gatv2conv | gineconv) ---
 gnn:
   layers_pre_mp: 1                  
   layers_mp: 3                      
   layers_post_mp: 2                 
   dim_inner: 128                    
-  layer_type: gatv2conv             
+  layer_type: gatv2conv             # gatv2conv -> gatv2_stack, gineconv -> gine_stack
   stage_type: stack
   act: gelu                   
   dropout: 0.2
