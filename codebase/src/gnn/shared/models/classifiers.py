@@ -1,13 +1,15 @@
 import torch
 import torch.nn as nn
 from torch.nn import LeakyReLU
-from torch_geometric.nn import GATv2Conv, GINEConv, global_mean_pool
+from torch_geometric.nn import GATv2Conv, GINEConv
 
 from gnn.shared.models.gnn_backbones import (
     EDGE_AWARE_ARCHITECTURE_NAMES,
     _gin_mlp,
     apply_edge_conv,
     coalesce_edge_attr,
+    filter_real_subgraph,
+    pool_split_embeddings,
 )
 
 
@@ -58,9 +60,13 @@ class TestGraphNetwork(nn.Module):
                 f"expected one of {EDGE_AWARE_ARCHITECTURE_NAMES}"
             )
 
+        self.input_dim = input_dim
         self.architecture = architecture
         self.edge_dim = edge_dim
+        self.hidden_dim = hidden_dim
+        self.heads = heads
         self.activation = LeakyReLU()
+        self.num_layers = 3
 
         if architecture == "gine_stack":
             self.conv1 = GINEConv(_gin_mlp(input_dim, hidden_dim, self.activation), edge_dim=edge_dim)
@@ -70,6 +76,18 @@ class TestGraphNetwork(nn.Module):
             self.conv1 = GATv2Conv(input_dim, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
             self.conv2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
             self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim)
+
+        self.convs = nn.ModuleList([self.conv1, self.conv2, self.conv3])
+        self.virtual_update_mlps = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self._virtual_mlp_input_dim(layer_idx), self._layer_output_dim(layer_idx)),
+                    nn.BatchNorm1d(self._layer_output_dim(layer_idx)),
+                    LeakyReLU(),
+                )
+                for layer_idx in range(self.num_layers)
+            ]
+        )
 
         self.classifier = nn.Sequential(
             nn.Linear(2 * hidden_dim + global_dim, hidden_dim),
@@ -92,29 +110,46 @@ class TestGraphNetwork(nn.Module):
             **kwargs,
         )
 
+    def _layer_output_dim(self, layer_idx: int) -> int:
+        is_last = layer_idx == self.num_layers - 1
+        if self.architecture == "gatv2_stack":
+            if is_last:
+                return self.hidden_dim
+            return self.hidden_dim * self.heads
+        return self.hidden_dim
+
+    def _virtual_mlp_input_dim(self, layer_idx: int) -> int:
+        if layer_idx == 0:
+            return self.input_dim
+        return self._layer_output_dim(layer_idx - 1)
+
     def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
         node_types = x[:, 0].round().long()
         is_virtual = (node_types >= 5) & (node_types <= 10)
         is_real = ~is_virtual
 
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
-        x = self.activation(apply_edge_conv(self.conv1, x, edge_index, edge_attr))
-        x = self.activation(apply_edge_conv(self.conv2, x, edge_index, edge_attr))
-        x = self.activation(apply_edge_conv(self.conv3, x, edge_index, edge_attr))
+        real_edge_index, real_edge_attr, _ = filter_real_subgraph(edge_index, edge_attr, is_real)
 
         num_graphs = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        h_real = x[is_real]
+        h_virt = x[is_virtual] if is_virtual.any() else None
+        batch_real = batch[is_real]
+        batch_virt = batch[is_virtual] if is_virtual.any() else None
 
-        if is_real.any():
-            x_real_pooled = global_mean_pool(x[is_real], batch[is_real], size=num_graphs)
-        else:
-            x_real_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
+        for layer_idx, conv in enumerate(self.convs):
+            h_real = self.activation(apply_edge_conv(conv, h_real, real_edge_index, real_edge_attr))
+            if is_virtual.any():
+                h_virt = self.virtual_update_mlps[layer_idx](h_virt)
 
-        if is_virtual.any():
-            x_virt_pooled = global_mean_pool(x[is_virtual], batch[is_virtual], size=num_graphs)
-        else:
-            x_virt_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
-
-        x_pooled = torch.cat([x_real_pooled, x_virt_pooled], dim=-1)
+        x_pooled = pool_split_embeddings(
+            h_real,
+            batch_real,
+            h_virt,
+            batch_virt,
+            num_graphs,
+            self.hidden_dim,
+        )
 
         if global_features is not None:
             global_features = global_features.view(x_pooled.size(0), -1)

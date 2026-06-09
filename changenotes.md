@@ -74,11 +74,21 @@ To prevent node representations from converging to indistinguishable vectors ove
 - Added layer-specific update MLPs for virtual node embeddings between convolutional layers.
 - Broadcasted the updated global supernode (type 8) to all real nodes by adding its embedding to theirs.
 
+### Task 5: Full Message-Passing Exclusion for Virtual Nodes
+- Virtual and aggregator nodes (types 5–10) no longer participate in convolutional message passing.
+- `filter_real_subgraph()` in `gnn_backbones.py` strips any edge touching a virtual node and remaps real nodes to a dense index space before each conv layer.
+- Real AST nodes (including the structural `global` node, type 0) message-pass only over real→real edges.
+- Virtual nodes are updated exclusively through per-layer `virtual_update_mlps`, whose input/output dims track each conv stage (including GAT head expansion).
+- Supernode seeding now pools **real nodes only** (not virtual hubs) before layer 0.
+- Applied consistently in `GraphPolicyBackbone` (RL) and `TestGraphNetwork` (supervised).
+- Real and virtual embeddings are kept in separate tensors during the layer loop (`h_real` / `h_virt`) so conv dims can diverge from virtual MLP dims; `pool_split_embeddings()` merges them only at readout.
+
 ---
 
 ## 3. Test Coverage & Verification
 
 - **Edge features**: Updated `test_graph_utils.py` to assert native `edge_attr` shape and removed node-projection assertions. Updated `test_virtual_nodes.py` and `test_trial_switch.py` for **19** node features. Added `edge_attr` to `test_gnn_policy_backbone.py`.
+- **MP exclusion tests**: `test_gnn_policy_backbone.py` now covers `filter_real_subgraph()` and verifies that perturbing virtual-only edge features does not change the backbone output.
 - **Node Count Adjustments**: Updated expected node count assertions in `test_graphml_import.py` and `test_virtual_nodes.py` (from 9 to 10 and 7 to 8 respectively) to account for the new global supernode (type 8).
 - **Full Verification**: Ran the complete test suite (52 tests) and verified that all tests pass successfully.
 

@@ -1,6 +1,62 @@
 import torch
 from feature_layout import FeatureLayout, GNN_ARCHITECTURE_CHOICES, GNN_ACTIVATION_CHOICES
-from gnn_backbones import build_graph_policy_backbone, GraphPolicyBackbone
+from gnn_backbones import (
+    NODE_TYPE_COL,
+    build_graph_policy_backbone,
+    filter_real_subgraph,
+)
+
+
+def test_filter_real_subgraph_drops_virtual_edges():
+    is_real = torch.tensor([True, True, False, True], dtype=torch.bool)
+    edge_index = torch.tensor(
+        [
+            [0, 0, 1, 2, 3],
+            [1, 2, 2, 1, 0],
+        ],
+        dtype=torch.long,
+    )
+    edge_attr = torch.tensor([[1.0], [2.0], [3.0], [4.0], [5.0]], dtype=torch.float)
+
+    real_edge_index, real_edge_attr, real_idx = filter_real_subgraph(edge_index, edge_attr, is_real)
+
+    assert real_idx.tolist() == [0, 1, 3]
+    assert real_edge_index.tolist() == [[0, 2], [1, 0]]
+    assert real_edge_attr.squeeze(-1).tolist() == [1.0, 5.0]
+
+
+def test_virtual_nodes_excluded_from_message_passing():
+    layout = FeatureLayout(node_input_dim=4, global_input_dim=6, edge_input_dim=4)
+    hidden_dim = 16
+    heads = 2
+    num_layers = 2
+
+    x = torch.randn(4, layout.padded_node_feature_count)
+    x[:, NODE_TYPE_COL] = torch.tensor([1.0, 2.0, 5.0, 8.0])
+    edge_index = torch.tensor([[0, 1, 2, 3, 0], [1, 2, 0, 0, 3]], dtype=torch.long)
+    edge_attr = torch.randn(edge_index.size(1), layout.padded_edge_feature_count)
+    batch_index = torch.zeros(4, dtype=torch.long)
+    global_features = torch.randn(1, 9)
+
+    backbone = build_graph_policy_backbone(
+        layout=layout,
+        architecture="gine_stack",
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        heads=heads,
+    )
+    backbone.eval()
+
+    with torch.no_grad():
+        out_base = backbone(x, edge_index, batch_index, global_features, edge_attr=edge_attr)
+
+        perturbed = edge_attr.clone()
+        perturbed[2] = perturbed[2] + 100.0
+        out_perturbed = backbone(x, edge_index, batch_index, global_features, edge_attr=perturbed)
+
+    assert out_base.shape == (1, hidden_dim)
+    assert torch.allclose(out_base, out_perturbed, atol=1e-5)
+
 
 def test_backbone_forward_pass_all_combinations():
     layout = FeatureLayout(node_input_dim=4, global_input_dim=6, edge_input_dim=4)

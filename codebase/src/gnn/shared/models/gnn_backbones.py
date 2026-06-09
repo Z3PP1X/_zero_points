@@ -110,6 +110,32 @@ def split_global_mean_pool(x: torch.Tensor, batch_index: torch.Tensor, is_virtua
     return torch.cat([x_real_pooled, x_virt_pooled], dim=-1)
 
 
+def pool_split_embeddings(
+    h_real: torch.Tensor,
+    batch_real: torch.Tensor,
+    h_virt: torch.Tensor | None,
+    batch_virt: torch.Tensor | None,
+    num_graphs: int,
+    readout_dim: int,
+) -> torch.Tensor:
+    """Pool real and virtual embedding tensors that may differ in feature dim until the final layer."""
+    ref = h_real if h_real.numel() > 0 else h_virt
+    assert ref is not None
+    device, dtype = ref.device, ref.dtype
+
+    if h_real.numel() > 0:
+        x_real_pooled = global_mean_pool(h_real, batch_real, size=num_graphs)
+    else:
+        x_real_pooled = torch.zeros(num_graphs, readout_dim, device=device, dtype=dtype)
+
+    if h_virt is not None and h_virt.numel() > 0:
+        x_virt_pooled = global_mean_pool(h_virt, batch_virt, size=num_graphs)
+    else:
+        x_virt_pooled = torch.zeros(num_graphs, readout_dim, device=device, dtype=dtype)
+
+    return torch.cat([x_real_pooled, x_virt_pooled], dim=-1)
+
+
 def coalesce_edge_attr(
     edge_attr: torch.Tensor | None,
     edge_index: torch.Tensor,
@@ -132,6 +158,24 @@ def apply_edge_conv(
     if isinstance(conv, GINEConv):
         return conv(x, edge_index, edge_attr)
     return conv(x, edge_index, edge_attr=edge_attr)
+
+
+def filter_real_subgraph(
+    edge_index: torch.Tensor,
+    edge_attr: torch.Tensor,
+    is_real: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Keep only real->real edges and remap endpoints to a dense 0..N_real-1 index space."""
+    src, dst = edge_index[0], edge_index[1]
+    edge_mask = is_real[src] & is_real[dst]
+    filtered_edges = edge_index[:, edge_mask]
+    filtered_attr = edge_attr[edge_mask]
+
+    real_idx = is_real.nonzero(as_tuple=False).view(-1)
+    remap = torch.full((is_real.size(0),), -1, dtype=torch.long, device=is_real.device)
+    remap[real_idx] = torch.arange(real_idx.numel(), device=is_real.device, dtype=torch.long)
+    remapped_edges = torch.stack([remap[filtered_edges[0]], remap[filtered_edges[1]]], dim=0)
+    return remapped_edges, filtered_attr, real_idx
 
 
 EDGE_AWARE_ARCHITECTURE_NAMES: List[str] = [
@@ -403,14 +447,16 @@ class GraphPolicyBackbone(nn.Module):
         self.current_x_proj = nn.Linear(1, layout.node_input_dim)
         self.y_target_proj = nn.Linear(1, layout.node_input_dim)
 
-        self.virtual_update_mlps = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU()
-            )
-            for _ in range(num_layers)
-        ])
+        self.virtual_update_mlps = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self._virtual_mlp_input_dim(layer_idx), self._layer_output_dim(layer_idx)),
+                    nn.BatchNorm1d(self._layer_output_dim(layer_idx)),
+                    nn.ReLU(),
+                )
+                for layer_idx in range(num_layers)
+            ]
+        )
 
         self.shared = nn.Sequential(
             nn.Linear(2 * hidden_dim + layout.global_input_dim, hidden_dim),
@@ -418,6 +464,19 @@ class GraphPolicyBackbone(nn.Module):
             self.activation,
             nn.Dropout(dropout),
         )
+
+    def _layer_output_dim(self, layer_idx: int) -> int:
+        is_last = layer_idx == self.num_layers - 1
+        if self.architecture == "gatv2_stack":
+            if is_last:
+                return self.hidden_dim
+            return self.hidden_dim * self.heads
+        return self.hidden_dim
+
+    def _virtual_mlp_input_dim(self, layer_idx: int) -> int:
+        if layer_idx == 0:
+            return self.layout.node_input_dim
+        return self._layer_output_dim(layer_idx - 1)
 
     def _build_convs(
         self,
@@ -559,24 +618,35 @@ class GraphPolicyBackbone(nn.Module):
                     )
                     x_enc[is_agg] = x_enc[is_agg] + fo_mean[batch_index[is_agg]]
 
-        if is_super.any():
-            all_mean = global_mean_pool(x_enc, batch_index, size=num_graphs)
-            x_enc[is_super] = x_enc[is_super] + all_mean[batch_index[is_super]]
+        if is_super.any() and is_real.any():
+            real_mean = global_mean_pool(x_enc[is_real], batch_index[is_real], size=num_graphs)
+            x_enc[is_super] = x_enc[is_super] + real_mean[batch_index[is_super]]
 
-        h = x_enc
+        real_edge_index, real_edge_emb, _ = filter_real_subgraph(edge_index, edge_emb, is_real)
+
+        h_real = x_enc[is_real]
+        h_virt = x_enc[is_virtual] if is_virtual.any() else None
+        batch_real = batch_index[is_real]
+        batch_virt = batch_index[is_virtual] if is_virtual.any() else None
+
         for layer_idx, conv in enumerate(self.convs):
-            h = self.activation(apply_edge_conv(conv, h, edge_index, edge_emb))
+            h_real = self.activation(apply_edge_conv(conv, h_real, real_edge_index, real_edge_emb))
 
             if is_virtual.any():
-                h_virt = h[is_virtual]
-                h_virt_updated = self.virtual_update_mlps[layer_idx](h_virt)
-                h[is_virtual] = h_virt_updated
+                h_virt = self.virtual_update_mlps[layer_idx](h_virt)
 
-            if is_super.any() and is_real.any():
-                super_embeddings = h[is_super]
-                h[is_real] = h[is_real] + super_embeddings[batch_index[is_real]]
+            if is_super.any() and is_real.any() and is_virtual.any():
+                super_emb = h_virt[is_super[is_virtual]]
+                h_real = h_real + super_emb[batch_index[is_real]]
 
-        h_pooled = split_global_mean_pool(h, batch_index, is_virtual)
+        h_pooled = pool_split_embeddings(
+            h_real,
+            batch_real,
+            h_virt,
+            batch_virt,
+            num_graphs,
+            self.hidden_dim,
+        )
 
         if global_features is not None:
             global_features = global_features.view(h_pooled.size(0), -1)
