@@ -1,0 +1,50 @@
+# config_base.yaml
+# Base GraphGym configuration for GNN inference time benchmarking
+
+out_dir: results
+
+# --- Dataset Section ---
+dataset:
+  format: custom_expression_graphs
+  name: run_20260603_123013/parallel_benchmark_results
+  task: graph
+  task_type: classification
+  transductive: False
+
+expression_graph:
+  enrich: True
+  synthetic: True
+  synthetic_dataset: run_20260604_154509/parallel_benchmark_results
+
+# --- Dummy training loop parameters (unused in inference but required by GraphGym config schema) ---
+train:
+  mode: custom
+  batch_size: 256
+  eval_period: 1
+  ckpt_period: 1
+  epoch_warmup: 0
+  epochs: 1
+
+# --- Model Structure ---
+model:
+  type: gnn
+  loss_fun: cross_entropy
+  edge_decoding: dot
+  graph_pooling: add
+
+# --- Default GNN Backbone Architecture ---
+gnn:
+  layers_pre_mp: 1                  
+  layers_mp: 3                      
+  layers_post_mp: 2                 
+  dim_inner: 128                    
+  layer_type: gatv2conv             
+  stage_type: stack
+  act: gelu                   
+  dropout: 0.2
+
+optim:
+  optimizer: adam
+  base_lr: 0.0001
+  weight_decay: 0.0005
+  scheduler: cosine_with_warmup
