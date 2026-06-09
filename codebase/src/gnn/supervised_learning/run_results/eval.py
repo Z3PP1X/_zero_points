@@ -220,14 +220,33 @@ class GNNResultEvaluator:
             for col_idx, metric in enumerate(metrics):
                 ax = fig.add_subplot(gs[row_idx, col_idx])
                 
-                # Check if we have enough data to pivot
                 try:
-                    pivot_grid = df.pivot_table(
-                        values=metric,
-                        index='dim_inner',
-                        columns='dropout',
-                        aggfunc=agg
-                    )
+                    if agg == 'max':
+                        # Find the row for each (dim_inner, dropout) combination with the highest pr_auc
+                        if 'pr_auc' in df.columns:
+                            idx = df.groupby(['dim_inner', 'dropout'])['pr_auc'].idxmax().dropna()
+                            best_df = df.loc[idx]
+                            pivot_grid = best_df.pivot_table(
+                                values=metric,
+                                index='dim_inner',
+                                columns='dropout',
+                                aggfunc='first'
+                            )
+                        else:
+                            pivot_grid = df.pivot_table(
+                                values=metric,
+                                index='dim_inner',
+                                columns='dropout',
+                                aggfunc=agg
+                            )
+                    else:
+                        pivot_grid = df.pivot_table(
+                            values=metric,
+                            index='dim_inner',
+                            columns='dropout',
+                            aggfunc=agg
+                        )
+                    
                     
                     # Sort index and columns to ensure ascending order of hyperparameters
                     pivot_grid = pivot_grid.sort_index(ascending=True)
