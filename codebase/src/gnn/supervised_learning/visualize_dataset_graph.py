@@ -335,18 +335,14 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         ntype = attrs.get("type", "")
         labels[node] = attrs.get("label") or str(node)
         
-        if node == "global":
-            node_colors.append("#2c3e50")  # Dark Blue-Grey
-            node_sizes.append(650)
-        elif node == "f_root":
-            node_colors.append("#27ae60")  # Dark Green
-            node_sizes.append(500)
-        elif node in ["d1_root", "d2_root"]:
-            node_colors.append("#2980b9" if node == "d1_root" else "#d35400")
-            node_sizes.append(500)
-        elif ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-            node_colors.append("#9b59b6")  # Uniform Purple for all Virtual Nodes
-            node_sizes.append(450)
+        if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
+            node_colors.append("#9b59b6")  # Uniform Purple for all Virtual/Structural Nodes
+            if node == "global":
+                node_sizes.append(650)
+            elif node in ["f_root", "d1_root", "d2_root"]:
+                node_sizes.append(500)
+            else:
+                node_sizes.append(450)
         elif attrs.get("belongs_to_f", 0.0) == 1.0:
             node_colors.append("#2ecc71")  # Vibrant Green (f)
             node_sizes.append(300)
