@@ -201,6 +201,13 @@ def build_networkx_graph(raw_dict, mode):
                 etype = e.get("type", "child_of")
                 break
         G.edges[u, v]["etype"] = etype
+
+    # Add virtual supernode edges if virtual_supernode is present
+    if "virtual_supernode" in G.nodes:
+        for node in list(G.nodes):
+            if node != "virtual_supernode":
+                G.add_edge("virtual_supernode", node, etype="supernode_connection")
+                G.add_edge(node, "virtual_supernode", etype="supernode_connection_reverse")
         
     return G
 
@@ -363,10 +370,13 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
     ast_edges = []
     virtual_edges = []
     reverse_edges = []
+    supernode_edges = []
     
     for u, v in G.edges:
         etype = G.edges[u, v].get("etype", "child_of")
-        if "virtual" in etype:
+        if "supernode_connection" in etype:
+            supernode_edges.append((u, v))
+        elif "virtual" in etype:
             virtual_edges.append((u, v))
         elif "reverse" in etype:
             reverse_edges.append((u, v))
@@ -390,6 +400,13 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         G, pos, edgelist=reverse_edges, ax=ax, edge_color="#d5dbdb",
         alpha=0.4, width=0.8, style="dotted", arrows=True, arrowsize=6
     )
+
+    # Draw Supernode coupling edges (extremely thin and transparent, light grey)
+    if supernode_edges:
+        nx.draw_networkx_edges(
+            G, pos, edgelist=supernode_edges, ax=ax, edge_color="#bdc3c7",
+            alpha=0.12, width=0.4, style="dotted", arrows=True, arrowsize=4
+        )
     
     # 4. Draw Nodes with thin border
     nx.draw_networkx_nodes(
