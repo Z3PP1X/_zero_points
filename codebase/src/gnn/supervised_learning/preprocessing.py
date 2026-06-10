@@ -361,6 +361,13 @@ class ProblemRunDataset(Dataset):
         cx_val = parse_float(row.get("x0", 0.0))
         yt_val = parse_float(row.get("y_target", 0.0))
         fx_val = parse_float(row.get("fx", 0.0))
+        # Local derivative state at x0. These are the physically decisive signals
+        # for a Newton (uses f') vs gMGF/Halley (uses f'') decision. They are
+        # injected onto the d1_root / d2_root aggregator nodes so the message
+        # passing in graph mode can use them; when absent in the dataset they
+        # default to 0.0 (previous behaviour).
+        d1x_val = parse_float(row.get("d1x", 0.0))
+        d2x_val = parse_float(row.get("d2x", 0.0))
 
         data.global_features = torch.tensor(
             [cx_val, yt_val], dtype=torch.float
@@ -374,6 +381,8 @@ class ProblemRunDataset(Dataset):
             cx_val=cx_val,
             fx_val=fx_val,
             yt_val=yt_val,
+            d1x_val=d1x_val,
+            d2x_val=d2x_val,
             mode=self.mode,
             enrich=self.enrich,
             set_has_value=not self.enrich,

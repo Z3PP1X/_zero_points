@@ -12,6 +12,12 @@ dataset:
   task: graph
   task_type: classification
   transductive: False
+  # Embed categorical node_type/label_id codes instead of feeding them as raw
+  # continuous values, and normalise the continuous columns. Implemented by
+  # ExpressionNodeEncoder in loader_graphgym.py.
+  node_encoder: True
+  node_encoder_name: ExpressionNodeEncoder
+  node_encoder_bn: True
 
 expression_graph:
   enrich: True
@@ -41,7 +47,7 @@ gnn:
   layers_post_mp: 2                 
   dim_inner: 128                    
   layer_type: gatv2conv             # gatv2conv -> gatv2_stack, gineconv -> gine_stack
-  stage_type: stack
+  stage_type: skipsum               # residual connections counter supernode-induced oversmoothing
   act: gelu                   
   dropout: 0.2
 

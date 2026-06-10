@@ -187,6 +187,77 @@ register_act("leaky_relu", nn.LeakyReLU)
 register_act("tanh", nn.Tanh)
 
 
+from torch_geometric.graphgym.register import register_node_encoder
+from gnn.shared.models.gnn_backbones import NUM_NODE_TYPES, NUM_LABELS
+
+
+@register_node_encoder("ExpressionNodeEncoder")
+class ExpressionNodeEncoder(torch.nn.Module):
+    """GraphGym node encoder for expression graphs.
+
+    The raw feature matrix stores ``node_type`` (col 0) and ``label_id`` (col 1)
+    as integer codes. Feeding them as continuous values imposes a meaningless
+    ordinal scale (e.g. ``Log=17`` ≈ 17 × ``Plus=3``) and discards the single
+    most discriminative signal: operator / function identity. This encoder embeds
+    both categorical columns and projects the remaining continuous columns
+    (which also normalises their disparate magnitudes), emitting ``dim_emb``
+    (= ``cfg.gnn.dim_inner``) features.
+
+    When an explicit ``active_features`` subset is configured the categorical
+    column positions are no longer guaranteed, so the encoder falls back to a
+    plain linear projection.
+    """
+
+    NODE_TYPE_COL = 0
+    LABEL_ID_COL = 1
+
+    def __init__(self, dim_emb: int):
+        super().__init__()
+        active = getattr(cfg.expression_graph, "active_features", "")
+        self.categorical = not bool(active)
+        self.activation = nn.GELU()
+
+        if self.categorical:
+            node_type_emb_dim = 8
+            label_emb_dim = 16
+            self.node_type_emb = nn.Embedding(NUM_NODE_TYPES, node_type_emb_dim)
+            self.label_emb = nn.Embedding(NUM_LABELS, label_emb_dim)
+            cont_hidden = max(dim_emb - node_type_emb_dim - label_emb_dim, 8)
+            # LazyLinear adapts to the (possibly enrich-dependent) continuous width.
+            self.continuous_encoder = nn.LazyLinear(cont_hidden)
+            self.fusion = nn.Linear(
+                cont_hidden + node_type_emb_dim + label_emb_dim, dim_emb
+            )
+        else:
+            self.proj = nn.LazyLinear(dim_emb)
+
+    def forward(self, batch):
+        x = batch.x
+        if self.categorical:
+            node_types = (
+                x[:, self.NODE_TYPE_COL].round().long().clamp(0, NUM_NODE_TYPES - 1)
+            )
+            label_ids = (
+                x[:, self.LABEL_ID_COL].round().long().clamp(0, NUM_LABELS - 1)
+            )
+            cont_cols = [
+                i for i in range(x.size(1)) if i not in (self.NODE_TYPE_COL, self.LABEL_ID_COL)
+            ]
+            x_cont = x[:, cont_cols] if cont_cols else x.new_zeros((x.size(0), 1))
+            fused = torch.cat(
+                [
+                    self.continuous_encoder(x_cont),
+                    self.node_type_emb(node_types),
+                    self.label_emb(label_ids),
+                ],
+                dim=-1,
+            )
+            batch.x = self.activation(self.fusion(fused))
+        else:
+            batch.x = self.activation(self.proj(x))
+        return batch
+
+
 def _resolve_edge_attr(batch, edge_dim: int, enrich: bool):
     edge_attr = getattr(batch, "edge_attr", None)
     if enrich:

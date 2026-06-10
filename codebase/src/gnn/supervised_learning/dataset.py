@@ -65,6 +65,29 @@ class DatasetLoader:
             "schritte_gmgf": "GMGF_iterSteps",
             "point_index": "point_index",
             "pointindex": "point_index",
+            # Function value f(x0) at the current iterate.
+            "fx": "fx",
+            "fx0": "fx",
+            "f_x0": "fx",
+            "f_x_0": "fx",
+            "fval": "fx",
+            "fvalue": "fx",
+            # First derivative f'(x0) — Newton step driver.
+            "d1x": "d1x",
+            "f1": "d1x",
+            "fprime": "d1x",
+            "fprime_x0": "d1x",
+            "dfx": "d1x",
+            "derivative1": "d1x",
+            "first_derivative": "d1x",
+            # Second derivative f''(x0) — curvature / Halley-style driver.
+            "d2x": "d2x",
+            "f2": "d2x",
+            "fsecond": "d2x",
+            "fdoubleprime": "d2x",
+            "d2fx": "d2x",
+            "derivative2": "d2x",
+            "second_derivative": "d2x",
         }
 
         rename_dict = {}

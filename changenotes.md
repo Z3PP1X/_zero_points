@@ -225,4 +225,36 @@ Refactored the GNN mathematical expression graph pipeline from a single-node hom
 - `codebase/src/gnn/reinforcement_learning/feature_layout.py`: Updated global node feature dimension sizes.
 - `codebase/src/gnn/tests/`: Updated test validation suites.
 
+---
+
+## 12. Methodology Fixes: Feature Encoding, RWPE Correctness, Derivative Injection, Oversmoothing
+
+Targeted fixes addressing mediocre discrimination and the large synthetic→curated generalization gap, following a methodical review of the supervised workflow and `graph_utils.py`.
+
+### 12.1 Categorical features are now embedded (discrimination)
+Previously `node_type`, `label_id`, and edge `relation_type` were integer codes consumed as **raw continuous floats** by the conv layers in both supervised pipelines. This imposes a meaningless ordinal scale (e.g. `Log=17` ≈ 17 × `Plus=3`) and corrupts the most discriminative signal — operator / function identity.
+- **Standalone (`TestGraphNetwork`)**: now applies the existing `NodeFeatureEncoder` (embeds `node_type` + `label_id`, projects/normalises continuous columns) and `EdgeFeatureEncoder` (embeds `relation_type`) at the input. Gated by a new `use_feature_encoder` flag; automatically disabled when an explicit `active_features` subset is selected (categorical column positions would otherwise be ambiguous). Edge encoder is only applied for the enriched 4-dim edge schema.
+- **GraphGym (the live experiment)**: added `ExpressionNodeEncoder` (`register_node_encoder`) implementing the same embedding + continuous-projection logic with `LazyLinear`, enabled in `config_supervised.yaml` (`dataset.node_encoder: True`, `node_encoder_bn: True`).
+
+### 12.2 RWPE made informative on trees (expressivity)
+The AST is a tree (bipartite), so the non-lazy random-walk return probability was identically **0** for odd step counts — `rwpe_1` and `rwpe_3` were dead (all-zero) features. Replaced with a **lazy random walk** `P = ½(I + D⁻¹A)`, recording return probabilities for steps `k=2..5`, so all four RWPE dimensions carry structural signal. (Existing trained checkpoints should be retrained.)
+
+### 12.3 Derivative / function-value injection (discrimination)
+`f(x0)`, `f'(x0)`, `f''(x0)` are the physically decisive quantities for a Newton (uses `f'`) vs gMGF/Halley (uses `f''`) decision, but were never reaching the model.
+- `dataset.py`: added header-normalisation aliases mapping common column names to canonical `fx`, `d1x`, `d2x`.
+- `preprocessing.py` (`ProblemRunDataset`): now reads `d1x`/`d2x` and passes them to `populate_task_virtual_values`, injecting `f'(x0)`/`f''(x0)` onto the `d1_root`/`d2_root` aggregator nodes (used by graph-mode message passing). Defaults to `0.0` when columns are absent (previous behaviour). `global_dim` is unchanged so `benchmark_inference.py` and saved-model shapes remain valid.
+
+### 12.4 Oversmoothing mitigation (GraphGym)
+The `virtual_supernode` (connected to every node) turns the graph into a diameter-2 star, which accelerates oversmoothing under plain `stack` message passing with mean/add pooling. Switched `gnn.stage_type` to `skipsum` (residual connections) in `config_supervised.yaml`.
+
+**Modified Files:**
+- `codebase/src/gnn/shared/utils/graph_utils.py`: Lazy-random-walk RWPE.
+- `codebase/src/gnn/shared/models/classifiers.py`: `TestGraphNetwork` node/edge feature encoders + `use_feature_encoder` flag.
+- `codebase/src/gnn/supervised_learning/dataset.py`: `fx`/`d1x`/`d2x` header aliases.
+- `codebase/src/gnn/supervised_learning/preprocessing.py`: derivative pass-through in `ProblemRunDataset`.
+- `codebase/src/gnn/supervised_learning/loader_graphgym.py`: `ExpressionNodeEncoder` registration.
+- `codebase/src/gnn/supervised_learning/config_supervised.yaml`: enable node encoder + `skipsum`.
+- `codebase/src/gnn/tests/test_graph_utils.py`: updated RWPE assertion.
+- `codebase/src/gnn/tests/test_supervised_classifier.py`: new forward-pass / encoder test suite.
+
 

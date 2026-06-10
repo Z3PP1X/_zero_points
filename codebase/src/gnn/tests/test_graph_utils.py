@@ -124,7 +124,10 @@ def test_enriched_graph_features(tmp_path):
         rwpe = node_features[13:17]
         assert len(lpe) == 4
         assert len(rwpe) == 4
-        assert rwpe[0] == 0.0
+        # Lazy random-walk return probability (step 2) is strictly positive for
+        # every node, including on bipartite trees. This guards against the
+        # earlier regression where odd-step RWPE dims were identically zero.
+        assert rwpe[0] > 0.0
 
     assert hasattr(data, "laplacian")
     assert data.laplacian.shape == (3, 3)

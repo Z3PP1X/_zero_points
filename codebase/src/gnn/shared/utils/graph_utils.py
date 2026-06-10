@@ -474,7 +474,13 @@ class TopologicalFeatureExtractor:
             except Exception:
                 lpe_features = np.zeros((num_nodes, 4))
 
-        # Random Walk Positional Encodings (RWPE) (4 steps)
+        # Random Walk Positional Encodings (RWPE) (4 steps).
+        # NOTE: the AST is a tree, hence bipartite. On a bipartite graph the
+        # return probability of a *non-lazy* random walk is exactly 0 for every
+        # odd number of steps, which previously made rwpe_1/rwpe_3 dead (all-zero)
+        # features. We use a *lazy* random walk P = 1/2 (I + D^-1 A) and record
+        # the return probabilities for steps k=2..5, so all four dimensions carry
+        # structural information regardless of bipartiteness.
         rwpe_features = np.zeros((num_nodes, 4))
         if num_nodes > 0:
             try:
@@ -483,12 +489,14 @@ class TopologicalFeatureExtractor:
                 d_inv = np.zeros_like(d)
                 d_inv[d > 0] = 1.0 / d[d > 0]
                 D_inv = np.diag(d_inv)
-                P = D_inv @ A
-                
-                Pk = np.eye(num_nodes)
+                P_lazy = 0.5 * (np.eye(num_nodes) + D_inv @ A)
+
+                # Skip k=1 (its diagonal is the constant 0.5 for every node and
+                # therefore carries no structural signal); record k=2..5.
+                Pk = P_lazy @ P_lazy
                 for step in range(4):
-                    Pk = Pk @ P
                     rwpe_features[:, step] = np.diag(Pk)
+                    Pk = Pk @ P_lazy
             except Exception:
                 rwpe_features = np.zeros((num_nodes, 4))
 
