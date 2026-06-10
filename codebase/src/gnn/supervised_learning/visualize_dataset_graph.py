@@ -344,14 +344,8 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         elif node in ["d1_root", "d2_root"]:
             node_colors.append("#2980b9" if node == "d1_root" else "#d35400")
             node_sizes.append(500)
-        elif ntype == "virtual_current_x":
-            node_colors.append("#8e44ad")  # Violet
-            node_sizes.append(450)
-        elif ntype == "virtual_y_target":
-            node_colors.append("#c0392b")  # Dark Red
-            node_sizes.append(450)
-        elif ntype == "virtual_supernode":
-            node_colors.append("#7f8c8d")  # Muted Grey
+        elif ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
+            node_colors.append("#9b59b6")  # Uniform Purple for all Virtual Nodes
             node_sizes.append(450)
         elif attrs.get("belongs_to_f", 0.0) == 1.0:
             node_colors.append("#2ecc71")  # Vibrant Green (f)
@@ -370,13 +364,12 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
     ast_edges = []
     virtual_edges = []
     reverse_edges = []
-    supernode_edges = []
     
     for u, v in G.edges:
         etype = G.edges[u, v].get("etype", "child_of")
-        if "supernode_connection" in etype:
-            supernode_edges.append((u, v))
-        elif "virtual" in etype:
+        # Any edge connected to a virtual node is categorized as a virtual edge
+        if u in ["virtual_current_x", "virtual_y_target", "virtual_supernode"] or \
+           v in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
             virtual_edges.append((u, v))
         elif "reverse" in etype:
             reverse_edges.append((u, v))
@@ -389,10 +382,10 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         alpha=0.8, width=1.2, arrows=True, arrowsize=10
     )
     
-    # Draw Virtual coupling edges (dashed, purple)
+    # Draw Virtual coupling edges (very thin, dashed, transparent purple)
     nx.draw_networkx_edges(
         G, pos, edgelist=virtual_edges, ax=ax, edge_color="#9b59b6",
-        alpha=0.6, width=1.0, style="dashed", arrows=True, arrowsize=8
+        alpha=0.15, width=0.5, style="dashed", arrows=True, arrowsize=5
     )
     
     # Draw Reverse message-passing edges (dotted, very light grey)
@@ -400,13 +393,6 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         G, pos, edgelist=reverse_edges, ax=ax, edge_color="#d5dbdb",
         alpha=0.4, width=0.8, style="dotted", arrows=True, arrowsize=6
     )
-
-    # Draw Supernode coupling edges (extremely thin and transparent, light grey)
-    if supernode_edges:
-        nx.draw_networkx_edges(
-            G, pos, edgelist=supernode_edges, ax=ax, edge_color="#bdc3c7",
-            alpha=0.12, width=0.4, style="dotted", arrows=True, arrowsize=4
-        )
     
     # 4. Draw Nodes with thin border
     nx.draw_networkx_nodes(
