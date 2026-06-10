@@ -2,30 +2,17 @@ import sys
 import os
 import argparse
 import torch
-import torch.nn as nn
-from torch import optim
 from pathlib import Path
 import mlflow
 from gnn.supervised_learning.preprocessing import GraphPipeline
 
-from torchmetrics.classification import (
-    MulticlassF1Score,
-    MulticlassPrecision,
-    MulticlassRecall,
-)
 import numpy as np
 import pandas as pd
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from sklearn.metrics import (
-    roc_auc_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    confusion_matrix,
-)
+from sklearn.metrics import confusion_matrix
 
 gnn_root = Path(__file__).resolve().parents[2]
 if str(gnn_root) not in sys.path:
@@ -34,19 +21,29 @@ src_root = Path(__file__).resolve().parents[3]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
-from gnn.shared.models.classifiers import TestGraphNetwork # noqa
 from gnn.supervised_learning.supervised_config import (
-    get_batch_edge_attr,
+    apply_expression_graph_overrides,
+    bootstrap_graphgym_cfg,
+    create_graphgym_model,
+    edge_dim_for_enrich,
     load_yaml_config,
     read_supervised_settings,
+    validate_layer_type,
 )
-
+from gnn.supervised_learning.loader_graphgym import (
+    compute_binary_metrics,
+    configure_class_weights,
+    get_pos_label,
+    set_pos_label_from_train_labels,
+)
+from torch_geometric.graphgym.loss import compute_loss
+from torch_geometric.graphgym.optim import create_optimizer, create_scheduler
 
 NUM_CORES = 6
 torch.set_num_threads(NUM_CORES)
 
 if torch.cuda.is_available():
-    torch.set_float32_matmul_precision('high')
+    torch.set_float32_matmul_precision("high")
 
 DEVICE = (
     torch.accelerator.current_accelerator().type
@@ -54,56 +51,81 @@ DEVICE = (
     else "cpu"
 )
 
-SEED = 42001
+DEFAULT_SEED = 42001
 TEST_SIZE = 0.2
-EPOCHS = 100
-BATCH_SIZE = 256
-LR = 1e-3
-SAVE_PATH = "../../_models/best_model.pth"
-
-f1_metric = MulticlassF1Score(num_classes=2).to(DEVICE)
-precision_metric = MulticlassPrecision(num_classes=2).to(DEVICE)
-recall_metric = MulticlassRecall(num_classes=2).to(DEVICE)
 
 
-def create_experiment_name(dataset_name: str, mode: str = "graph"):
-    return dataset_name + "_" + str(SEED) + "_" + str(EPOCHS) + "_" + mode
+def create_experiment_name(dataset_name: str, mode: str, epochs: int, seed: int) -> str:
+    return f"{dataset_name}_{seed}_{epochs}_{mode}"
 
 
-def train(model, loader, optimizer, criterion, enrich: bool = False):
+def train_epoch(model, loader, optimizer):
     model.train()
     running_loss = 0.0
 
     for batch in loader:
         batch = batch.to(DEVICE)
-
+        batch.split = "train"
         optimizer.zero_grad()
-        outputs = model(
-            batch.x,
-            batch.edge_index,
-            batch.batch,
-            batch.global_features,
-            edge_attr=get_batch_edge_attr(batch, enrich),
-        )
-        loss = criterion(outputs, batch.y.squeeze())
+        pred, true = model(batch)
+        loss, _ = compute_loss(pred, true)
         loss.backward()
         optimizer.step()
-
         running_loss += loss.item()
 
-    return running_loss / len(loader)
+    return running_loss / max(len(loader), 1)
+
+
+def evaluate(model, loader):
+    model.eval()
+    total_loss = 0.0
+    all_true = []
+    all_pred_score = []
+
+    with torch.no_grad():
+        for batch in loader:
+            batch = batch.to(DEVICE)
+            batch.split = "val"
+            pred, true = model(batch)
+            loss, pred_score = compute_loss(pred, true)
+            batch_size = true.size(0)
+            total_loss += loss.item() * batch_size
+            all_true.append(true.detach().cpu())
+            all_pred_score.append(pred_score.detach().cpu())
+
+    if not all_true:
+        empty_metrics = compute_binary_metrics(
+            torch.tensor([], dtype=torch.long),
+            torch.tensor([], dtype=torch.float),
+        )
+        return 0.0, empty_metrics, [], [], []
+
+    true_cat = torch.cat(all_true)
+    pred_cat = torch.cat(all_pred_score)
+    metrics = compute_binary_metrics(true_cat, pred_cat)
+    avg_loss = total_loss / max(true_cat.size(0), 1)
+
+    pos_label = get_pos_label()
+    if pred_cat.ndim > 1 and pred_cat.shape[1] > 1:
+        probs = pred_cat[:, pos_label].numpy().tolist()
+    else:
+        scores = pred_cat.numpy()
+        probs = scores.tolist() if pos_label == 1 else (1.0 - scores).tolist()
+
+    labels = true_cat.numpy().tolist()
+    preds = (np.array(probs) >= 0.5).astype(int).tolist()
+    if pos_label == 0:
+        preds = [1 - p for p in preds]
+
+    return avg_loss, metrics, labels, preds, probs
 
 
 def log_confusion_matrix(y_true, y_pred, epoch: int):
-    # Compute confusion matrix
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
 
-    # Plot confusion matrix
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
     ax.figure.colorbar(im, ax=ax)
-
-    # We want to show all ticks...
     ax.set(
         xticks=[0, 1],
         yticks=[0, 1],
@@ -127,7 +149,6 @@ def log_confusion_matrix(y_true, y_pred, epoch: int):
             )
 
     fig.tight_layout()
-
     temp_path = f"temp_cm_epoch_{epoch}.png"
     plt.savefig(temp_path, dpi=100)
     plt.close(fig)
@@ -144,66 +165,8 @@ def log_confusion_matrix(y_true, y_pred, epoch: int):
             pass
 
 
-def evaluate(model, loader, criterion, enrich: bool = False):
-    model.eval()
-    f1_metric.reset()
-    precision_metric.reset()
-    recall_metric.reset()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-
-    all_labels = []
-    all_preds = []
-    all_probs = []
-
-    with torch.no_grad():
-        for batch in loader:
-            batch = batch.to(DEVICE)
-            outputs = model(
-                batch.x,
-                batch.edge_index,
-                batch.batch,
-                batch.global_features,
-                edge_attr=get_batch_edge_attr(batch, enrich),
-            )
-            labels = batch.y.squeeze()
-            if labels.dim() == 0:
-                labels = labels.unsqueeze(0)
-            total_loss += criterion(outputs, labels).item()
-            preds = outputs.argmax(dim=1)
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
-            probs = torch.softmax(outputs, dim=1)
-            f1_metric.update(probs, labels)
-            precision_metric.update(probs, labels)
-            recall_metric.update(probs, labels)
-
-            all_labels.extend(labels.cpu().numpy().tolist())
-            all_preds.extend(preds.cpu().numpy().tolist())
-            if probs.dim() == 1:
-                probs = probs.unsqueeze(0)
-            all_probs.extend(probs[:, 1].cpu().numpy().tolist())
-
-    avg_loss = total_loss / len(loader)
-    accuracy = correct / total
-    f1_computed = f1_metric.compute().item()
-    precision_computed = precision_metric.compute().item()
-    recall_computed = recall_metric.compute().item()
-
-    return (
-        avg_loss,
-        accuracy,
-        f1_computed,
-        precision_computed,
-        recall_computed,
-        all_labels,
-        all_preds,
-        all_probs,
-    )
-
-
 def main(
+    config_path: Path,
     dataset_name: str,
     mode: str = "graph",
     enrich: bool = False,
@@ -212,22 +175,37 @@ def main(
     synthetic_dataset: str | None = None,
     layer_type: str = "gatv2conv",
 ):
+    seed = DEFAULT_SEED
+    cfg = bootstrap_graphgym_cfg(config_path, seed=seed)
+    apply_expression_graph_overrides(
+        cfg,
+        mode=mode,
+        enrich=enrich,
+        active_features=active_features,
+        synthetic=synthetic,
+        synthetic_dataset=synthetic_dataset,
+    )
+    cfg.gnn.layer_type = validate_layer_type(layer_type)
+    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
+
+    epochs = int(cfg.train.epochs)
+    batch_size = int(cfg.train.batch_size)
     repo_root = Path(__file__).resolve().parents[4]
-    dataset_path = dataset_name
     save_dir = repo_root / "_models"
     save_dir.mkdir(parents=True, exist_ok=True)
     save_path = save_dir / "best_model.pth"
+
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
     unified_loader = UnifiedDataLoader.get_instance(
-        dataset_name=dataset_path,
+        dataset_name=dataset_name,
         mode=mode,
         enrich=enrich,
     )
 
     pipeline = GraphPipeline(
-        dataset_name=dataset_path,
-        seed=SEED,
+        dataset_name=dataset_name,
+        seed=seed,
         mode=mode,
         enrich=enrich,
         active_features=active_features,
@@ -237,39 +215,51 @@ def main(
         layer_type=layer_type,
     )
 
-    train_loader, test_loader, class_weights = pipeline.pipe(
+    train_loader, val_loader, class_weights = pipeline.pipe(
         test_size=TEST_SIZE,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
+        stratify=True,
         num_workers=3,
     )
 
-    architecture = pipeline.architecture
+    sample = pipeline.train_dataset[0]
+    dim_in = sample.x.shape[1]
+    configure_class_weights(class_weights)
+    train_labels = torch.tensor(
+        [pipeline.train_dataset[i].y.item() for i in range(len(pipeline.train_dataset))]
+    )
+    set_pos_label_from_train_labels(train_labels)
 
-    print("Initializing GNN model...")
-    model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    print("Initializing GraphGym GNN model (same stack as main_graphgym.py)...")
+    model = create_graphgym_model(cfg, dim_in=dim_in, device=DEVICE)
+    optimizer = create_optimizer(model.parameters(), cfg.optim)
+    scheduler = create_scheduler(optimizer, cfg.optim)
 
     print(f"Initializing MLflow tracking at {mlflow.get_tracking_uri()} ...")
-    mlflow.set_experiment(dataset_path)
+    mlflow.set_experiment(dataset_name)
 
     print("Starting MLflow run and training loop...")
-    with mlflow.start_run(run_name=create_experiment_name(dataset_path, mode)):
+    with mlflow.start_run(run_name=create_experiment_name(dataset_name, mode, epochs, seed)):
         mlflow.log_params(
             {
-                "seed": SEED,
-                "epochs": EPOCHS,
-                "batch_size": BATCH_SIZE,
-                "lr": LR,
+                "seed": seed,
+                "epochs": epochs,
+                "batch_size": batch_size,
+                "base_lr": float(cfg.optim.base_lr),
+                "weight_decay": float(cfg.optim.weight_decay),
+                "scheduler": str(cfg.optim.scheduler),
                 "test_size": TEST_SIZE,
                 "device": DEVICE,
                 "num_threads": NUM_CORES,
-                "model": f"TestGraphNetwork ({architecture})",
-                "input_dim": pipeline.input_dim,
-                "edge_dim": pipeline.edge_dim,
-                "global_dim": pipeline.global_dim,
-                "architecture": architecture,
-                "layer_type": layer_type,
+                "model": "GraphGym GNN",
+                "input_dim": dim_in,
+                "edge_dim": int(cfg.dataset.edge_dim),
+                "layer_type": cfg.gnn.layer_type,
+                "layers_mp": int(cfg.gnn.layers_mp),
+                "dim_inner": int(cfg.gnn.dim_inner),
+                "stage_type": str(cfg.gnn.stage_type),
+                "graph_pooling": str(cfg.model.graph_pooling),
+                "loss_fun": str(cfg.model.loss_fun),
                 "mode": mode,
                 "enrich": enrich,
                 "active_features": active_features,
@@ -278,111 +268,78 @@ def main(
             }
         )
 
-        best_val_loss = float("inf")
+        best_val_pr_auc = float("-inf")
 
-        for epoch in range(EPOCHS):
-            print(f"\n--- Epoch {epoch + 1}/{EPOCHS} ---")
+        for epoch in range(epochs):
+            print(f"\n--- Epoch {epoch + 1}/{epochs} ---")
             print("  Training...")
-            train_loss = train(model, train_loader, optimizer, criterion, enrich=enrich)
+            train_loss = train_epoch(model, train_loader, optimizer)
+            scheduler.step()
             print("  Evaluating...")
-            val_loss, val_acc, f1_val, prec_val, rec_val, y_true, y_pred, y_prob = (
-                evaluate(model, test_loader, criterion, enrich=enrich)
-            )
+            val_loss, metrics, y_true, y_pred, y_prob = evaluate(model, val_loader)
 
-            # Compute advanced metrics
-            y_true_np = np.array(y_true)
-            y_pred_np = np.array(y_pred)
-            y_prob_np = np.array(y_prob)
-
-            if len(np.unique(y_true_np)) > 1:
-                roc_auc = float(roc_auc_score(y_true_np, y_prob_np))
-            else:
-                roc_auc = 0.5
-
-            f1_classes = f1_score(
-                y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0
-            )
-            prec_classes = precision_score(
-                y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0
-            )
-            rec_classes = recall_score(
-                y_true_np, y_pred_np, labels=[0, 1], average=None, zero_division=0
-            )
-
-            f1_c0, f1_c1 = float(f1_classes[0]), float(f1_classes[1])
-            prec_c0, prec_c1 = float(prec_classes[0]), float(prec_classes[1])
-            rec_c0, rec_c1 = float(rec_classes[0]), float(rec_classes[1])
-
-            # Log confusion matrix plot as artifact
             log_confusion_matrix(y_true, y_pred, epoch)
 
             mlflow.log_metrics(
                 {
                     "Loss/train": train_loss,
                     "Loss/val": val_loss,
-                    "Accuracy/val": val_acc,
-                    "F1": f1_val,
-                    "Precision": prec_val,
-                    "Recall": rec_val,
-                    "AUC/val": roc_auc,
-                    "F1_class_0": f1_c0,
-                    "F1_class_1": f1_c1,
-                    "Precision_class_0": prec_c0,
-                    "Precision_class_1": prec_c1,
-                    "Recall_class_0": rec_c0,
-                    "Recall_class_1": rec_c1,
+                    "Accuracy/val": metrics["accuracy"],
+                    "F1": metrics["f1"],
+                    "Precision": metrics["precision"],
+                    "Recall": metrics["recall"],
+                    "AUC/val": metrics["auc"],
+                    "PR_AUC/val": metrics["pr_auc"],
+                    "mean_confidence": metrics.get("mean_confidence", 0.0),
+                    "ece": metrics.get("ece", 0.0),
+                    "base_lr": float(optimizer.param_groups[0]["lr"]),
                 },
                 step=epoch,
             )
 
             print(
-                f"Epoch {epoch + 1}/{EPOCHS} | "
+                f"Epoch {epoch + 1}/{epochs} | "
                 f"Train Loss: {train_loss:.4f} | "
                 f"Val Loss: {val_loss:.4f} | "
-                f"Val Acc: {val_acc:.4f} | "
-                f"F1: {f1_val:.4f} | "
-                f"ROC-AUC: {roc_auc:.4f} | "
-                f"F1 (C0/C1): {f1_c0:.4f}/{f1_c1:.4f} | "
-                f"Prec (C0/C1): {prec_c0:.4f}/{prec_c1:.4f} | "
-                f"Rec (C0/C1): {rec_c0:.4f}/{rec_c1:.4f}"
+                f"Val Acc: {metrics['accuracy']:.4f} | "
+                f"F1: {metrics['f1']:.4f} | "
+                f"ROC-AUC: {metrics['auc']:.4f} | "
+                f"PR-AUC: {metrics['pr_auc']:.4f} | "
+                f"Recall: {metrics['recall']:.4f}"
             )
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            if metrics["pr_auc"] > best_val_pr_auc:
+                best_val_pr_auc = metrics["pr_auc"]
                 torch.save(model.state_dict(), str(save_path))
-                mlflow.log_metric("best_val_loss", best_val_loss, step=epoch)
-                print(f"  ↳ Saved best model (val_loss={val_loss:.4f})")
+                mlflow.log_metric("best_val_pr_auc", best_val_pr_auc, step=epoch)
+                print(f"  ↳ Saved best model (val_pr_auc={metrics['pr_auc']:.4f})")
 
         if synthetic and getattr(pipeline, "curated_loader", None) is not None:
             print("\nEvaluating best saved model on Curated (Real) Dataset...")
-            best_model = TestGraphNetwork.from_pipeline(pipeline).to(DEVICE)
-            best_model.load_state_dict(torch.load(str(save_path)))
-            cur_loss, cur_acc, f1_cur, prec_cur, rec_cur, cur_true, cur_pred, cur_prob = (
-                evaluate(best_model, pipeline.curated_loader, criterion, enrich=enrich)
-            )
-            cur_true_np = np.array(cur_true)
-            cur_prob_np = np.array(cur_prob)
-            if len(np.unique(cur_true_np)) > 1:
-                cur_roc_auc = float(roc_auc_score(cur_true_np, cur_prob_np))
-            else:
-                cur_roc_auc = 0.5
-            
+            best_model = create_graphgym_model(cfg, dim_in=dim_in, device=DEVICE)
+            best_model.load_state_dict(torch.load(str(save_path), map_location=DEVICE))
+            cur_loss, cur_metrics, _, _, _ = evaluate(best_model, pipeline.curated_loader)
+
             mlflow.log_metrics(
                 {
                     "Loss/curated": cur_loss,
-                    "Accuracy/curated": cur_acc,
-                    "F1/curated": f1_cur,
-                    "Precision/curated": prec_cur,
-                    "Recall/curated": rec_cur,
-                    "AUC/curated": cur_roc_auc,
+                    "Accuracy/curated": cur_metrics["accuracy"],
+                    "F1/curated": cur_metrics["f1"],
+                    "Precision/curated": cur_metrics["precision"],
+                    "Recall/curated": cur_metrics["recall"],
+                    "AUC/curated": cur_metrics["auc"],
+                    "PR_AUC/curated": cur_metrics["pr_auc"],
                 }
             )
             print("-" * 50)
-            print(f"Final Curated (Real) Evaluation | "
-                  f"Loss: {cur_loss:.4f} | "
-                  f"Acc: {cur_acc:.4f} | "
-                  f"F1: {f1_cur:.4f} | "
-                  f"ROC-AUC: {cur_roc_auc:.4f}")
+            print(
+                f"Final Curated (Real) Evaluation | "
+                f"Loss: {cur_loss:.4f} | "
+                f"Acc: {cur_metrics['accuracy']:.4f} | "
+                f"F1: {cur_metrics['f1']:.4f} | "
+                f"ROC-AUC: {cur_metrics['auc']:.4f} | "
+                f"PR-AUC: {cur_metrics['pr_auc']:.4f}"
+            )
             print("-" * 50)
 
         mlflow.pytorch.log_model(model, "model")
@@ -415,7 +372,7 @@ def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Start GNN Supervised Learning experiment"
+        description="Start GNN Supervised Learning experiment (GraphGym-aligned stack)"
     )
     parser.add_argument(
         "--dataset",
@@ -474,9 +431,6 @@ if __name__ == "__main__":
     synthetic = args.synthetic or settings["synthetic"]
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
 
-    # Resolve paths
-    repo_root = Path(__file__).resolve().parents[4]
-
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
     try:
@@ -513,6 +467,7 @@ if __name__ == "__main__":
                 f"Config: {config_path.name} | layer_type={layer_type} | enrich={enrich}"
             )
             main(
+                config_path=config_path,
                 dataset_name=dataset_name,
                 mode=mode,
                 enrich=enrich,

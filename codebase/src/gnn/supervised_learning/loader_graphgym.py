@@ -29,6 +29,26 @@ from gnn.supervised_learning.supervised_config import (
     validate_layer_type,
 )
 
+_CLASS_WEIGHTS = torch.tensor([1.0, 1.0], dtype=torch.float)
+
+
+def configure_class_weights(class_weights: torch.Tensor) -> None:
+    """Update the shared class weights used by ``weighted_cross_entropy`` loss."""
+    global _CLASS_WEIGHTS
+    _CLASS_WEIGHTS = class_weights.detach().float().clone()
+
+
+@register_loss("weighted_cross_entropy")
+def weighted_cross_entropy_loss(pred, true):
+    device = pred.device
+    w = _CLASS_WEIGHTS.to(device)
+    if pred.ndim > 1 and true.ndim == 1:
+        log_pred = F.log_softmax(pred, dim=-1)
+        return F.nll_loss(log_pred, true.long(), weight=w), log_pred
+    true = true.float()
+    bce_loss = torch.nn.BCEWithLogitsLoss(pos_weight=w[1] / w[0])
+    return bce_loss(pred, true), torch.sigmoid(pred)
+
 
 # Monkey patch GraphGym Logger to compute PR-AUC dynamically on any system/environment (e.g. Cloud GPU)
 import torch_geometric.graphgym.logger as pyg_logger
@@ -508,33 +528,11 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         print(f"  Class 0 (gMGF):   count={class_counts[0].item()}, weight={class_weights[0].item():.4f}")
         print(f"  Class 1 (Newton): count={class_counts[1].item()}, weight={class_weights[1].item():.4f}")
 
-        # Register a custom weighted cross entropy loss that overrides the default unweighted one.
-        # PyG's compute_loss() checks register.loss_dict BEFORE falling through to the default
-        # F.nll_loss path (see torch_geometric/graphgym/loss.py lines 27-30).
-        # The custom function receives pred/true AFTER the squeeze in loss.py lines 23-24.
-        # IMPORTANT: This function must NEVER return None, so it always intercepts and
-        # prevents fallthrough to the cfg.model.loss_fun check.
-        _class_weights = class_weights  # capture in closure
-
-        @register_loss('weighted_cross_entropy')
-        def weighted_cross_entropy_loss(pred, true):
-            device = pred.device
-            w = _class_weights.to(device)
-            # Multiclass path: pred is [N, C], true is [N]
-            if pred.ndim > 1 and true.ndim == 1:
-                log_pred = F.log_softmax(pred, dim=-1)
-                return F.nll_loss(log_pred, true.long(), weight=w), log_pred
-            # Binary/multilabel fallback: pred is [N], true is [N]
-            else:
-                true = true.float()
-                bce_loss = torch.nn.BCEWithLogitsLoss(
-                    pos_weight=w[1] / w[0]  # ratio of positive class weight
-                )
-                return bce_loss(pred, true), torch.sigmoid(pred)
+        configure_class_weights(class_weights)
 
     except Exception as e:
-        print(f"[Warning] Failed to compute class weights or register weighted loss: {e}")
-        print("[Warning] Falling back to unweighted cross entropy loss.")
+        print(f"[Warning] Failed to compute class weights: {e}")
+        print("[Warning] Falling back to uniform class weights.")
 
     # Calculate and save class balance information for validation synthetic and curated datasets
     try:

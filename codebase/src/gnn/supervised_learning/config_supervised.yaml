@@ -36,7 +36,7 @@ train:
 # --- Model Structure ---
 model:
   type: gnn
-  loss_fun: cross_entropy
+  loss_fun: weighted_cross_entropy
   edge_decoding: dot
   graph_pooling: mean
 
