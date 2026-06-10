@@ -453,7 +453,7 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
             Patch(facecolor="#e67e22", edgecolor="#d35400", label="2nd Derivative f''(x)"),
             Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual / Structural"),
         ]
-    ax.legend(
+    leg = ax.legend(
         handles=legend_elements,
         loc="upper center",
         ncol=4,
@@ -473,6 +473,7 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         output_path,
         format=fmt,
         bbox_inches="tight",
+        bbox_extra_artists=(leg,),
         transparent=True,
         dpi=300
     )
