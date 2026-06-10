@@ -39,7 +39,7 @@ from gnn.shared.utils.graph_utils import (
 )
 
 
-def build_networkx_graph(raw_dict, mode):
+def build_networkx_graph(raw_dict, mode, enrich=True):
     """
     Constructs a NetworkX graph from raw graph dictionary matching the dataset loader's modes.
     """
@@ -192,7 +192,7 @@ def build_networkx_graph(raw_dict, mode):
     )
     
     # Store clean attributes for exporters/drawers
-    for u, v in G.edges:
+    for u, v in list(G.edges):
         # Resolve edge labels
         edge_data = raw_dict.get("edges", [])
         etype = "child_of"
@@ -201,13 +201,18 @@ def build_networkx_graph(raw_dict, mode):
                 etype = e.get("type", "child_of")
                 break
         G.edges[u, v]["etype"] = etype
+        
+        # Add reverse edge if enrich is True
+        if enrich:
+            G.add_edge(v, u, etype=etype + "_reverse")
 
     # Add virtual supernode edges if virtual_supernode is present
     if "virtual_supernode" in G.nodes:
         for node in list(G.nodes):
             if node != "virtual_supernode":
                 G.add_edge("virtual_supernode", node, etype="supernode_connection")
-                G.add_edge(node, "virtual_supernode", etype="supernode_connection_reverse")
+                if enrich:
+                    G.add_edge(node, "virtual_supernode", etype="supernode_connection_reverse")
         
     return G
 
