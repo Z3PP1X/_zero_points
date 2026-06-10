@@ -396,15 +396,43 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         edgecolors="#2c3e50", linewidths=0.8
     )
     
-    # 5. Draw Labels
+    # 5. Draw Labels only for virtual/structural nodes, offset slightly above
+    virtual_labels = {}
+    for node in G.nodes:
+        attrs = G.nodes[node]
+        ntype = attrs.get("type", "")
+        if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
+            virtual_labels[node] = attrs.get("label") or str(node)
+            
+    label_pos = {node: (x, y + 0.12) for node, (x, y) in pos.items() if node in virtual_labels}
+    
     nx.draw_networkx_labels(
-        G, pos, labels=labels, ax=ax, font_size=8,
-        font_family="sans-serif", font_color="black"
+        G, label_pos, labels=virtual_labels, ax=ax, font_size=8,
+        font_family="sans-serif", font_color="#2c3e50", font_weight="bold"
     )
     
-    # Add title and color legend context
+    # 6. Add Color-Coordinated Legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor="#2ecc71", edgecolor="#27ae60", label="Function f(x)"),
+        Patch(facecolor="#3498db", edgecolor="#2980b9", label="1st Derivative f'(x)"),
+        Patch(facecolor="#e67e22", edgecolor="#d35400", label="2nd Derivative f''(x)"),
+        Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual / Structural"),
+    ]
+    ax.legend(
+        handles=legend_elements,
+        loc="upper center",
+        ncol=4,
+        bbox_to_anchor=(0.5, -0.02),
+        frameon=True,
+        facecolor="white",
+        edgecolor="#bdc3c7",
+        fontsize=8
+    )
+    
+    # Add title
     plt.title(f"Expression Graph (Mode: {G.graph.get('mode', 'N/A')}, ID: {G.graph.get('id', 'N/A')})",
-              fontsize=12, fontweight="bold", pad=10)
+              fontsize=12, fontweight="bold", pad=15)
     
     # Save the output
     plt.savefig(
