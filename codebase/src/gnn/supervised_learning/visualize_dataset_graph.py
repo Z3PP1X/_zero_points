@@ -35,7 +35,8 @@ from gnn.shared.utils.graph_utils import (
     compute_belongs_to_d1,
     compute_belongs_to_d2,
     FUNCTION_AGGREGATOR_IDS,
-    TopologicalFeatureExtractor
+    TopologicalFeatureExtractor,
+    get_hetero_node_type
 )
 
 
@@ -334,32 +335,45 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
     node_colors = []
     node_sizes = []
     labels = {}
+    is_hetero = (G.graph.get("mode") == "graph_hetero")
     
     for node in G.nodes:
         attrs = G.nodes[node]
         ntype = attrs.get("type", "")
         labels[node] = attrs.get("label") or str(node)
         
-        if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-            node_colors.append("#9b59b6")  # Uniform Purple for all Virtual/Structural Nodes
-            if node == "global":
-                node_sizes.append(650)
-            elif node in ["f_root", "d1_root", "d2_root"]:
-                node_sizes.append(500)
-            else:
-                node_sizes.append(450)
-        elif attrs.get("belongs_to_f", 0.0) == 1.0:
-            node_colors.append("#2ecc71")  # Vibrant Green (f)
-            node_sizes.append(300)
-        elif attrs.get("belongs_to_d1", 0.0) == 1.0:
-            node_colors.append("#3498db")  # Vibrant Blue (f')
-            node_sizes.append(300)
-        elif attrs.get("belongs_to_d2", 0.0) == 1.0:
-            node_colors.append("#e67e22")  # Vibrant Orange (f'')
-            node_sizes.append(300)
+        # Determine node size based on its structural role
+        if node == "global":
+            size = 650
+        elif node in ["f_root", "d1_root", "d2_root"]:
+            size = 500
+        elif ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
+            size = 450
         else:
-            node_colors.append("#bdc3c7")  # Silver
-            node_sizes.append(300)
+            size = 300
+        node_sizes.append(size)
+        
+        if is_hetero:
+            h_type = get_hetero_node_type(ntype)
+            if h_type == "operator":
+                node_colors.append("#3498db")  # Vibrant Blue
+            elif h_type == "variable":
+                node_colors.append("#2ecc71")  # Vibrant Green
+            elif h_type == "constant":
+                node_colors.append("#e67e22")  # Vibrant Orange
+            else:  # virtual
+                node_colors.append("#9b59b6")  # Vibrant Purple
+        else:
+            if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
+                node_colors.append("#9b59b6")  # Uniform Purple for all Virtual/Structural Nodes
+            elif attrs.get("belongs_to_f", 0.0) == 1.0:
+                node_colors.append("#2ecc71")  # Vibrant Green (f)
+            elif attrs.get("belongs_to_d1", 0.0) == 1.0:
+                node_colors.append("#3498db")  # Vibrant Blue (f')
+            elif attrs.get("belongs_to_d2", 0.0) == 1.0:
+                node_colors.append("#e67e22")  # Vibrant Orange (f'')
+            else:
+                node_colors.append("#bdc3c7")  # Silver
 
     # 3. Categorize and color edges
     ast_edges = []
@@ -418,12 +432,20 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
     
     # 6. Add Color-Coordinated Legend
     from matplotlib.patches import Patch
-    legend_elements = [
-        Patch(facecolor="#2ecc71", edgecolor="#27ae60", label="Function f(x)"),
-        Patch(facecolor="#3498db", edgecolor="#2980b9", label="1st Derivative f'(x)"),
-        Patch(facecolor="#e67e22", edgecolor="#d35400", label="2nd Derivative f''(x)"),
-        Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual / Structural"),
-    ]
+    if is_hetero:
+        legend_elements = [
+            Patch(facecolor="#3498db", edgecolor="#2980b9", label="Operator"),
+            Patch(facecolor="#2ecc71", edgecolor="#27ae60", label="Variable"),
+            Patch(facecolor="#e67e22", edgecolor="#d35400", label="Constant"),
+            Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual"),
+        ]
+    else:
+        legend_elements = [
+            Patch(facecolor="#2ecc71", edgecolor="#27ae60", label="Function f(x)"),
+            Patch(facecolor="#3498db", edgecolor="#2980b9", label="1st Derivative f'(x)"),
+            Patch(facecolor="#e67e22", edgecolor="#d35400", label="2nd Derivative f''(x)"),
+            Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual / Structural"),
+        ]
     ax.legend(
         handles=legend_elements,
         loc="upper center",
@@ -458,11 +480,11 @@ def main():
     parser.add_argument("--graph-id", "-i", type=str, default="0",
                         help="ID of the graph to visualize (e.g. '0', '1')")
     parser.add_argument("--mode", "-m", type=str, default="graph",
-                        choices=["graph", "tree", "tree_derivatives"],
+                        choices=["graph", "tree", "tree_derivatives", "graph_bidirectional", "graph_hetero"],
                         help="Graph mode layout representation")
     parser.add_argument("--format", "-f", type=str, default="pdf",
-                        choices=["pdf", "svg", "gexf", "all"],
-                        help="Output format (pdf, svg, gexf for Gephi, or all)")
+                        choices=["pdf", "svg", "gexf", "png", "all"],
+                        help="Output format (pdf, svg, gexf for Gephi, png, or all)")
     parser.add_argument("--output-dir", "-o", type=str, default="visualizations",
                         help="Subdirectory to save the visualization results")
     parser.add_argument("--layout", type=str, default="hierarchical",
@@ -472,11 +494,31 @@ def main():
                         help="Set flag if loading a synthetic dataset file")
     args = parser.parse_args()
     
+    # Map visualizer modes to loader configurations
+    if args.mode == "tree":
+        loader_mode = "tree"
+        enrich = False
+    elif args.mode == "tree_derivatives":
+        loader_mode = "tree_derivatives"
+        enrich = False
+    elif args.mode == "graph":
+        loader_mode = "graph"
+        enrich = False
+    elif args.mode == "graph_bidirectional":
+        loader_mode = "graph"
+        enrich = True
+    elif args.mode == "graph_hetero":
+        loader_mode = "graph"
+        enrich = True
+    else:
+        loader_mode = args.mode
+        enrich = True
+
     # Initialize unified graph loader
     loader = GraphDataLoader(
         name=args.dataset_name,
-        mode=args.mode,
-        enrich=True,
+        mode=loader_mode,
+        enrich=enrich,
         is_synthetic=args.is_synthetic or "synthetic" in args.dataset_name
     )
     
@@ -494,7 +536,7 @@ def main():
         raw_dict = raw_val
         
     # Build the NetworkX graph with mode layout
-    G = build_networkx_graph(raw_dict, args.mode)
+    G = build_networkx_graph(raw_dict, loader_mode, enrich=enrich)
     G.graph["mode"] = args.mode
     G.graph["id"] = args.graph_id
     
@@ -505,7 +547,7 @@ def main():
     base_filename = f"graph_{args.graph_id}_{args.mode}"
     
     # Save selected formats
-    formats = [args.format] if args.format != "all" else ["pdf", "svg", "gexf"]
+    formats = [args.format] if args.format != "all" else ["pdf", "svg", "gexf", "png"]
     
     for fmt in formats:
         filepath = out_dir / f"{base_filename}.{fmt}"
