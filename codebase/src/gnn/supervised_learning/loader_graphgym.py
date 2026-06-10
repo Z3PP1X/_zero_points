@@ -237,19 +237,20 @@ class ExpressionNodeEncoder(torch.nn.Module):
         self.categorical = not bool(active)
         self.activation = nn.GELU()
 
+        dim_in = cfg.share.dim_in
         if self.categorical:
             node_type_emb_dim = 8
             label_emb_dim = 16
             self.node_type_emb = nn.Embedding(NUM_NODE_TYPES, node_type_emb_dim)
             self.label_emb = nn.Embedding(NUM_LABELS, label_emb_dim)
             cont_hidden = max(dim_emb - node_type_emb_dim - label_emb_dim, 8)
-            # LazyLinear adapts to the (possibly enrich-dependent) continuous width.
-            self.continuous_encoder = nn.LazyLinear(cont_hidden)
+            cont_in = max(dim_in - 2, 1)
+            self.continuous_encoder = nn.Linear(cont_in, cont_hidden)
             self.fusion = nn.Linear(
                 cont_hidden + node_type_emb_dim + label_emb_dim, dim_emb
             )
         else:
-            self.proj = nn.LazyLinear(dim_emb)
+            self.proj = nn.Linear(dim_in, dim_emb)
 
     def forward(self, batch):
         x = batch.x
