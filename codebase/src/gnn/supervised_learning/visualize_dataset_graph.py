@@ -229,10 +229,17 @@ def compute_hierarchical_layout(G):
         node for node in G.nodes 
         if node not in ["global", "f_root", "d1_root", "d2_root", "virtual_current_x", "virtual_y_target", "virtual_supernode"]
     ]
-    G_ast = G.subgraph(ast_nodes)
     
-    if len(G_ast) > 0:
-        topo = TopologicalFeatureExtractor.extract_and_annotate(nx.DiGraph(G_ast), enrich=True)
+    # Build clean directed graph for depth extraction (filtering out reverse edges to avoid cycles)
+    G_ast_clean = nx.DiGraph()
+    G_ast_clean.add_nodes_from(ast_nodes)
+    for u, v, d in G.edges(data=True):
+        if u in ast_nodes and v in ast_nodes:
+            if "reverse" not in d.get("etype", ""):
+                G_ast_clean.add_edge(u, v)
+    
+    if len(G_ast_clean) > 0:
+        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast_clean, enrich=True)
         depths = topo["depths"]
     else:
         depths = {}
