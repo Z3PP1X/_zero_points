@@ -403,12 +403,12 @@ def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
         ntype = attrs.get("type", "")
         if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
             virtual_labels[node] = attrs.get("label") or str(node)
-            
-    label_pos = {node: (x, y + 0.16) for node, (x, y) in pos.items() if node in virtual_labels}
+    label_pos = {node: (x, y + 0.12) for node, (x, y) in pos.items() if node in virtual_labels}
     
     nx.draw_networkx_labels(
         G, label_pos, labels=virtual_labels, ax=ax, font_size=8,
-        font_family="sans-serif", font_color="black", font_weight="bold"
+        font_family="sans-serif", font_color="black", font_weight="bold",
+        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8)
     )
     
     # 6. Add Color-Coordinated Legend
