@@ -569,23 +569,23 @@ class ExpressionGraphConverter:
                 combined_nodes.append({
                     "id": "f_root", "label": "f_root", "type": "f_root", "value": None
                 })
-                combined_edges.append({"source": "global", "target": "f_root", "type": "belongs_to_f"})
+                combined_edges.append({"source": "f_root", "target": "global", "type": "belongs_to_f"})
                 for root in roots_f:
-                    combined_edges.append({"source": "f_root", "target": root, "type": "child_of"})
+                    combined_edges.append({"source": root, "target": "f_root", "type": "child_of"})
             if roots_d1:
                 combined_nodes.append({
                     "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
                 })
-                combined_edges.append({"source": "global", "target": "d1_root", "type": "belongs_to_d1"})
+                combined_edges.append({"source": "d1_root", "target": "global", "type": "belongs_to_d1"})
                 for root in roots_d1:
-                    combined_edges.append({"source": "d1_root", "target": root, "type": "child_of"})
+                    combined_edges.append({"source": root, "target": "d1_root", "type": "child_of"})
             if roots_d2:
                 combined_nodes.append({
                     "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
                 })
-                combined_edges.append({"source": "global", "target": "d2_root", "type": "belongs_to_d2"})
+                combined_edges.append({"source": "d2_root", "target": "global", "type": "belongs_to_d2"})
                 for root in roots_d2:
-                    combined_edges.append({"source": "d2_root", "target": root, "type": "child_of"})
+                    combined_edges.append({"source": root, "target": "d2_root", "type": "child_of"})
 
             raw["nodes"] = combined_nodes
             raw["edges"] = combined_edges
@@ -671,11 +671,11 @@ class ExpressionGraphConverter:
                 if src in existing_aggregators and tgt in existing_aggregators:
                     raw["edges"].append({"source": src, "target": tgt, "type": "virtual"})
                     raw["edges"].append({"source": tgt, "target": src, "type": "virtual"})
-            # virtual_y_target -> global node
+            # global node -> virtual_y_target
             if global_node_id is not None:
                 raw["edges"].append({
-                    "source": "virtual_y_target",
-                    "target": global_node_id,
+                    "source": global_node_id,
+                    "target": "virtual_y_target",
                     "type": "virtual"
                 })
         
@@ -752,10 +752,10 @@ class ExpressionGraphConverter:
                 # Fetch edge betweenness centrality
                 eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
 
-                # Forward Edge
+                # Forward Edge (Child -> Parent)
                 G_enriched.add_edge(
-                    parent,
                     child,
+                    parent,
                     child_index=float(child_idx),
                     direction=0.0,
                     relation_type=float(self._encode_edge_type(etype)),
@@ -763,10 +763,10 @@ class ExpressionGraphConverter:
                     etype=etype,
                 )
 
-                # Backward Edge
+                # Backward Edge (Parent -> Child)
                 G_enriched.add_edge(
-                    child,
                     parent,
+                    child,
                     child_index=float(child_idx),
                     direction=1.0,
                     relation_type=float(self._encode_edge_type(etype + "_reverse")),
@@ -1153,7 +1153,7 @@ class ExpressionGraphConverter:
             dst_type = get_hetero_node_type(G.nodes[v].get("type", ""))
             
             is_reverse = (attrs.get("direction", 0.0) == 1.0)
-            parent = v if is_reverse else u
+            parent = u if is_reverse else v
             parent_label = G.nodes[parent].get("label", "")
             
             etype = attrs.get("etype", "")

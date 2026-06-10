@@ -75,23 +75,23 @@ def build_networkx_graph(raw_dict, mode, enrich=True):
             combined_nodes.append({
                 "id": "f_root", "label": "f_root", "type": "f_root", "value": None
             })
-            combined_edges.append({"source": "global", "target": "f_root", "type": "belongs_to_f"})
+            combined_edges.append({"source": "f_root", "target": "global", "type": "belongs_to_f"})
             for root in roots_f:
-                combined_edges.append({"source": "f_root", "target": root, "type": "child_of"})
+                combined_edges.append({"source": root, "target": "f_root", "type": "child_of"})
         if roots_d1:
             combined_nodes.append({
                 "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
             })
-            combined_edges.append({"source": "global", "target": "d1_root", "type": "belongs_to_d1"})
+            combined_edges.append({"source": "d1_root", "target": "global", "type": "belongs_to_d1"})
             for root in roots_d1:
-                combined_edges.append({"source": "d1_root", "target": root, "type": "child_of"})
+                combined_edges.append({"source": root, "target": "d1_root", "type": "child_of"})
         if roots_d2:
             combined_nodes.append({
                 "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
             })
-            combined_edges.append({"source": "global", "target": "d2_root", "type": "belongs_to_d2"})
+            combined_edges.append({"source": "d2_root", "target": "global", "type": "belongs_to_d2"})
             for root in roots_d2:
-                combined_edges.append({"source": "d2_root", "target": root, "type": "child_of"})
+                combined_edges.append({"source": root, "target": "d2_root", "type": "child_of"})
 
         raw["nodes"] = combined_nodes
         raw["edges"] = combined_edges
@@ -176,11 +176,11 @@ def build_networkx_graph(raw_dict, mode, enrich=True):
             if src in existing_aggregators and tgt in existing_aggregators:
                 raw["edges"].append({"source": src, "target": tgt, "type": "virtual"})
                 raw["edges"].append({"source": tgt, "target": src, "type": "virtual"})
-        # virtual_y_target -> global node
+        # global node -> virtual_y_target
         if global_node_id is not None:
             raw["edges"].append({
-                "source": "virtual_y_target",
-                "target": global_node_id,
+                "source": global_node_id,
+                "target": "virtual_y_target",
                 "type": "virtual"
             })
 
@@ -230,13 +230,13 @@ def compute_hierarchical_layout(G):
         if node not in ["global", "f_root", "d1_root", "d2_root", "virtual_current_x", "virtual_y_target", "virtual_supernode"]
     ]
     
-    # Build clean directed graph for depth extraction (filtering out reverse edges to avoid cycles)
+    # Build clean directed graph for depth extraction (filtering out reverse edges and reversing directions to get top-down depth)
     G_ast_clean = nx.DiGraph()
     G_ast_clean.add_nodes_from(ast_nodes)
     for u, v, d in G.edges(data=True):
         if u in ast_nodes and v in ast_nodes:
             if "reverse" not in d.get("etype", ""):
-                G_ast_clean.add_edge(u, v)
+                G_ast_clean.add_edge(v, u)
     
     if len(G_ast_clean) > 0:
         topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast_clean, enrich=True)
