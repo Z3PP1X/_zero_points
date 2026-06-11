@@ -26,12 +26,123 @@ from gnn.supervised_learning.run_results.feature_importance import (
     run_post_training_feature_importance,
 )
 from gnn.supervised_learning.preprocessing import GraphPipeline # noqa
+from gnn.supervised_learning.curated_eval_schedule import (
+    CuratedEvalSchedule,
+    parse_curated_eval_schedule,
+    should_evaluate_curated,
+)
 from gnn.supervised_learning.supervised_config import (
     edge_dim_for_enrich,
     validate_layer_type,
 )
 
 set_cfg(cfg)
+
+
+class CuratedEvalCallback(pl.callbacks.Callback):
+    """Run curated holdout evaluation on a schedule, not every validation epoch."""
+
+    def __init__(self, curated_loader, schedule: CuratedEvalSchedule):
+        super().__init__()
+        self.curated_loader = curated_loader
+        self.schedule = schedule
+        self._best_val_pr_auc = float("-inf")
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if self.curated_loader is None:
+            return
+
+        val_pr_auc_tensor = trainer.callback_metrics.get("val_pr_auc")
+        if val_pr_auc_tensor is None:
+            return
+        val_pr_auc = float(val_pr_auc_tensor)
+        is_new_highscore = val_pr_auc > self._best_val_pr_auc
+        if is_new_highscore:
+            self._best_val_pr_auc = val_pr_auc
+
+        should_run, reason = should_evaluate_curated(
+            trainer.current_epoch,
+            self.schedule,
+            is_new_test_highscore=is_new_highscore,
+        )
+        if not should_run:
+            return
+
+        metrics = self._evaluate_curated(pl_module)
+        pl_module.log(
+            "val_loss_curated",
+            metrics["loss"],
+            prog_bar=True,
+            sync_dist=True,
+        )
+        pl_module.log("val_auc_curated", metrics["auc"], prog_bar=True, sync_dist=True)
+        pl_module.log(
+            "val_pr_auc_curated",
+            metrics["pr_auc"],
+            prog_bar=True,
+            sync_dist=True,
+        )
+        self._write_test_logger_stats(trainer, metrics)
+        print(
+            f"[GraphGym] Curated holdout eval (epoch {trainer.current_epoch + 1}, "
+            f"reason={reason}) | PR-AUC={metrics['pr_auc']:.4f}"
+        )
+
+    def _evaluate_curated(self, pl_module) -> dict[str, float]:
+        from gnn.supervised_learning.loader_graphgym import compute_binary_metrics
+
+        pl_module.eval()
+        loss_sum = 0.0
+        count = 0
+        true_parts = []
+        pred_parts = []
+
+        with torch.no_grad():
+            for batch in self.curated_loader:
+                batch = batch.to(pl_module.device)
+                batch.split = "test"
+                outputs = pl_module(batch)
+                if outputs is None:
+                    continue
+                loss = float(outputs["loss"])
+                batch_size = outputs["true"].size(0)
+                loss_sum += loss * batch_size
+                count += batch_size
+                true_parts.append(outputs["true"].detach().cpu())
+                pred_parts.append(outputs["pred_score"].detach().cpu())
+
+        if count == 0:
+            return {"loss": 0.0, "auc": 0.0, "pr_auc": 0.0}
+
+        true = torch.cat(true_parts)
+        pred = torch.cat(pred_parts)
+        metric_values = compute_binary_metrics(true, pred)
+        return {
+            "loss": loss_sum / count,
+            **metric_values,
+        }
+
+    @staticmethod
+    def _write_test_logger_stats(trainer, metrics: dict[str, float]) -> None:
+        for callback in trainer.callbacks:
+            if not isinstance(callback, LoggerCallback):
+                continue
+            if len(callback._logger) <= 2:
+                return
+            stats = {
+                "loss": round(metrics["loss"], cfg.round),
+                "lr": 0,
+                "time_iter": 0,
+                "accuracy": metrics.get("accuracy", 0.0),
+                "precision": metrics.get("precision", 0.0),
+                "recall": metrics.get("recall", 0.0),
+                "f1": metrics.get("f1", 0.0),
+                "auc": metrics.get("auc", 0.0),
+                "pr_auc": metrics.get("pr_auc", 0.0),
+            }
+            callback.test_logger.update_stats(**stats)
+            callback.test_logger.write_epoch(trainer.current_epoch)
+            return
 
 
 class ValMetricLogger(pl.callbacks.Callback):
@@ -83,10 +194,6 @@ class ValMetricLogger(pl.callbacks.Callback):
                 pl_module.log('val_loss', avg_loss, prog_bar=True, sync_dist=True)
                 pl_module.log('val_auc', metrics['auc'], prog_bar=True, sync_dist=True)
                 pl_module.log('val_pr_auc', metrics['pr_auc'], prog_bar=True, sync_dist=True)
-            elif idx == 1:
-                pl_module.log('val_loss_curated', avg_loss, prog_bar=True, sync_dist=True)
-                pl_module.log('val_auc_curated', metrics['auc'], prog_bar=True, sync_dist=True)
-                pl_module.log('val_pr_auc_curated', metrics['pr_auc'], prog_bar=True, sync_dist=True)
 
         self._val_data = {}
 
@@ -125,10 +232,17 @@ def train_with_best_ckpt(model, datamodule, logger=True):
         )
         callbacks.append(ckpt_cbk)
     
-    # Override val_dataloader to return [val_loader (synthetic 20%), test_loader (curated)]
+    curated_loader = None
     if cfg.expression_graph.synthetic and len(datamodule.loaders) >= 3:
-        datamodule.val_dataloader = lambda: [datamodule.loaders[1], datamodule.loaders[2]]
-        
+        curated_loader = datamodule.loaders[2]
+        curated_schedule = parse_curated_eval_schedule(cfg.train)
+        callbacks.append(CuratedEvalCallback(curated_loader, curated_schedule))
+        print(
+            "[GraphGym] Curated holdout schedule: "
+            f"period={curated_schedule.period}, "
+            f"on_test_highscore={curated_schedule.on_test_highscore}"
+        )
+
     trainer = pl.Trainer(
         enable_checkpointing=cfg.train.enable_ckpt,
         callbacks=callbacks,
@@ -180,7 +294,6 @@ def main():
         cfg.accelerator = "cuda" if torch.cuda.is_available() else "cpu"
 
     cfg.optim.max_epoch = cfg.train.epochs
-    cfg.train.eval_period = 1
 
     layer_type = validate_layer_type(cfg.gnn.layer_type)
     enrich = bool(getattr(cfg.expression_graph, "enrich", False))

@@ -34,6 +34,8 @@ train:
   ckpt_period: 1
   epoch_warmup: 0
   epochs: 1
+  curated_eval_period: 5
+  curated_eval_on_test_highscore: true
 
 # --- Model Structure ---
 model:

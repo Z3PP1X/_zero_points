@@ -392,6 +392,8 @@ def set_custom_cfg(cfg):
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
     cfg.train.epoch_warmup = 5
+    cfg.train.curated_eval_period = 5
+    cfg.train.curated_eval_on_test_highscore = True
     cfg.params = 0
 
 
@@ -504,7 +506,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         val_data_list = [  # unseen synthetic test data — evaluated every eval_period for checkpoint selection
             pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
         ]
-        curated_data_list = [  # curated real-world problems — evaluated ONCE at the end with the best model
+        curated_data_list = [  # curated real-world holdout — scheduled during training, final test at end
             pipeline.curated_dataset[i] for i in range(len(pipeline.curated_dataset))
         ]
 
@@ -513,7 +515,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         train_indices = list(range(len(train_data_list)))
         # val = unseen synthetic (20%): runs every eval_period epoch, used for checkpoint selection
         val_indices = list(range(len(train_data_list), len(train_data_list) + len(val_data_list)))
-        # test = curated real-world: runs ONCE after training ends with the best saved model
+        # test = curated real-world holdout (periodic during training + final run with best ckpt)
         test_indices = list(range(len(train_data_list) + len(val_data_list), len(all_data_list)))
     else:
         train_data_list = [

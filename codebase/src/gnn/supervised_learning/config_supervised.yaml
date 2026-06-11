@@ -47,6 +47,9 @@ train:
   ckpt_period: 20
   epoch_warmup: 5
   epochs: 25
+  # Curated real-world holdout: not every epoch — periodic and/or on synthetic-test highscore
+  curated_eval_period: 5          # run every Nth epoch (5, 10, 15, …); 0 disables periodic runs
+  curated_eval_on_test_highscore: true  # also run when unseen synthetic val PR-AUC improves
 
 # --- Model Structure ---
 model:

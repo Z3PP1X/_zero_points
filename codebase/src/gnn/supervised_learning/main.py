@@ -254,6 +254,14 @@ def main(
     print(f"Initializing MLflow tracking at {mlflow.get_tracking_uri()} ...")
     mlflow.set_experiment(dataset_name)
 
+    from gnn.supervised_learning.curated_eval_schedule import (
+        parse_curated_eval_schedule,
+        should_evaluate_curated,
+    )
+
+    curated_schedule = parse_curated_eval_schedule(cfg.train)
+    curated_loader = getattr(pipeline, "curated_loader", None)
+
     print("Starting MLflow run and training loop...")
     with mlflow.start_run(run_name=create_experiment_name(dataset_name, mode, epochs, seed)):
         mlflow.log_params(
@@ -283,6 +291,8 @@ def main(
                 "positional_encodings": list(feature_selection.positional_encodings),
                 "synthetic": synthetic,
                 "synthetic_dataset": synthetic_dataset,
+                "curated_eval_period": curated_schedule.period,
+                "curated_eval_on_test_highscore": curated_schedule.on_test_highscore,
             }
         )
 
@@ -326,13 +336,39 @@ def main(
                 f"Recall: {metrics['recall']:.4f}"
             )
 
-            if metrics["pr_auc"] > best_val_pr_auc:
+            is_new_highscore = metrics["pr_auc"] > best_val_pr_auc
+            if is_new_highscore:
                 best_val_pr_auc = metrics["pr_auc"]
                 torch.save(model.state_dict(), str(save_path))
                 mlflow.log_metric("best_val_pr_auc", best_val_pr_auc, step=epoch)
                 print(f"  ↳ Saved best model (val_pr_auc={metrics['pr_auc']:.4f})")
 
-        if synthetic and getattr(pipeline, "curated_loader", None) is not None:
+            if synthetic and curated_loader is not None:
+                should_run_curated, curated_reason = should_evaluate_curated(
+                    epoch,
+                    curated_schedule,
+                    is_new_test_highscore=is_new_highscore,
+                )
+                if should_run_curated:
+                    cur_loss, cur_metrics, _, _, _ = evaluate(model, curated_loader)
+                    mlflow.log_metrics(
+                        {
+                            "Loss/curated": cur_loss,
+                            "Accuracy/curated": cur_metrics["accuracy"],
+                            "F1/curated": cur_metrics["f1"],
+                            "Precision/curated": cur_metrics["precision"],
+                            "Recall/curated": cur_metrics["recall"],
+                            "AUC/curated": cur_metrics["auc"],
+                            "PR_AUC/curated": cur_metrics["pr_auc"],
+                        },
+                        step=epoch,
+                    )
+                    print(
+                        f"  ↳ Curated holdout eval ({curated_reason}) | "
+                        f"PR-AUC={cur_metrics['pr_auc']:.4f}"
+                    )
+
+        if synthetic and curated_loader is not None:
             print("\nEvaluating best saved model on Curated (Real) Dataset...")
             best_model = create_graphgym_model(cfg, dim_in=dim_in, device=DEVICE)
             best_model.load_state_dict(torch.load(str(save_path), map_location=DEVICE))
