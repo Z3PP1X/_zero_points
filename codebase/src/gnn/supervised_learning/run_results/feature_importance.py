@@ -58,7 +58,22 @@ ENRICHED_FEATURE_SCHEMA = [
 
 def resolve_feature_names(cfg) -> list[str]:
     """Return active node feature names for the current GraphGym config."""
+    from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
+    from gnn.shared.utils.feature_config import plain_dict
+
     enrich = bool(getattr(cfg.expression_graph, "enrich", False))
+
+    try:
+        expr_graph_dict = plain_dict(cfg.expression_graph)
+        _, active_features = resolve_expression_graph_features(
+            expr_graph_dict,
+            enrich=enrich,
+        )
+        if active_features is not None:
+            return active_features
+    except Exception as e:
+        logging.warning(f"Failed to resolve active features dynamically: {e}")
+
     schema = ENRICHED_FEATURE_SCHEMA if enrich else BASIC_FEATURE_SCHEMA
     active_features_str = getattr(cfg.expression_graph, "active_features", "") or ""
     if active_features_str.strip():

@@ -34,6 +34,8 @@ def select_best_epoch_row(
     """Return the stats row with the best metric after excluding warmup epochs."""
     eligible = filter_post_warmup(stats_list, warmup_epochs=warmup_epochs)
     performance_np = np.array([stats[metric] for stats in eligible])
+    if metric in LOWER_IS_BETTER_METRICS and agg == "argmax":
+        agg = "argmin"
     idx = int(eval(f"performance_np.{agg}()"))
     return eligible[idx]
 
