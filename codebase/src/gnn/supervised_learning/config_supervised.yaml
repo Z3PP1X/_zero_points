@@ -21,8 +21,23 @@ dataset:
 
 expression_graph:
   enrich: True
+  mode: graph
+  edge_direction: top_down  # top_down | bottom_up | bidirectional (virtual nodes always bidirectional)
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
+
+  # Node/edge feature classes (CLI: --feature-groups, --positional-encoding)
+  # Classes: node | topology | positional | edge
+  features:
+    node: true        # node_type, label_id, value, has_value, virtual_*, belongs_to_*
+    topology: true    # depth, height, subtree_size, out_degree, betweenness_centrality
+    positional:
+      enabled: true
+      encodings: [lpe, rwpe]  # lpe = Laplacian PE, rwpe = random-walk PE
+    edge: true        # child_index, direction, relation_type, edge_betweenness_centrality
+
+  # Optional explicit override (disables grouped toggles above when non-empty)
+  active_features: ""
 
 # --- Training Loop Section ---
 train:

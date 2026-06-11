@@ -9,9 +9,17 @@ from typing import Any
 import torch
 import yaml
 
+from gnn.shared.utils.feature_config import (
+    FeatureSelection,
+    active_features_to_csv,
+    merge_feature_selection,
+    parse_feature_selection_from_mapping,
+    resolve_active_node_features,
+)
 from gnn.shared.utils.graph_utils import (
     BASIC_EDGE_FEATURE_SCHEMA,
     ENRICHED_EDGE_FEATURE_SCHEMA,
+    validate_edge_direction,
 )
 
 SUPERVISED_LAYER_TYPES: tuple[str, ...] = ("gatv2conv", "gineconv")
@@ -79,29 +87,63 @@ def bootstrap_graphgym_cfg(config_path: Path | str, seed: int | None = None):
     return cfg
 
 
+def resolve_expression_graph_features(
+    expression_graph: dict[str, Any] | None,
+    *,
+    enrich: bool,
+    feature_groups: list[str] | None = None,
+    positional_encoding: list[str] | None = None,
+    active_features: list[str] | None = None,
+) -> tuple[FeatureSelection, list[str] | None]:
+    """Resolve grouped feature toggles into an active node-feature list."""
+    selection = merge_feature_selection(
+        parse_feature_selection_from_mapping(expression_graph),
+        feature_groups=feature_groups,
+        positional_encoding=positional_encoding,
+        active_features=active_features,
+    )
+    return selection, resolve_active_node_features(selection, enrich=enrich)
+
+
 def apply_expression_graph_overrides(
     cfg,
     *,
     mode: str | None = None,
     enrich: bool | None = None,
     active_features: list[str] | None = None,
+    feature_groups: list[str] | None = None,
+    positional_encoding: list[str] | None = None,
     synthetic: bool | None = None,
     synthetic_dataset: str | None = None,
-) -> None:
+    edge_direction: str | None = None,
+) -> FeatureSelection:
     """Apply CLI overrides onto a loaded GraphGym cfg."""
     if mode is not None:
         cfg.expression_graph.mode = mode
+    current_enrich = enrich if enrich is not None else bool(cfg.expression_graph.enrich)
     if enrich is not None:
         cfg.expression_graph.enrich = enrich
         cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
-    if active_features is not None:
-        cfg.expression_graph.active_features = (
-            ",".join(active_features) if active_features else ""
-        )
+    from gnn.shared.utils.feature_config import plain_dict
+
+    selection, resolved_features = resolve_expression_graph_features(
+        {
+            "features": plain_dict(getattr(cfg.expression_graph, "features", {})),
+            "active_features": getattr(cfg.expression_graph, "active_features", ""),
+        },
+        enrich=current_enrich,
+        feature_groups=feature_groups,
+        positional_encoding=positional_encoding,
+        active_features=active_features,
+    )
+    cfg.expression_graph.active_features = active_features_to_csv(resolved_features)
     if synthetic is not None:
         cfg.expression_graph.synthetic = synthetic
     if synthetic_dataset is not None:
         cfg.expression_graph.synthetic_dataset = synthetic_dataset
+    if edge_direction is not None:
+        cfg.expression_graph.edge_direction = validate_edge_direction(edge_direction)
+    return selection
 
 
 def create_graphgym_model(cfg, dim_in: int, device: str | torch.device):
@@ -122,23 +164,23 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
 
     enrich = bool(expression_graph.get("enrich", False))
     layer_type = validate_layer_type(gnn_cfg.get("layer_type", "gatv2conv"))
-    active_features_str = expression_graph.get("active_features") or ""
-    active_features = None
-    if active_features_str:
-        active_features = [
-            feature.strip()
-            for feature in str(active_features_str).split(",")
-            if feature.strip()
-        ]
+    feature_selection, active_features = resolve_expression_graph_features(
+        expression_graph,
+        enrich=enrich,
+    )
 
     return {
         "dataset_name": dataset_cfg.get("name"),
         "mode": expression_graph.get("mode", "graph"),
         "enrich": enrich,
+        "edge_direction": validate_edge_direction(
+            expression_graph.get("edge_direction", "top_down")
+        ),
         "layer_type": layer_type,
         "architecture": architecture_from_layer_type(layer_type),
         "edge_dim": edge_dim_for_enrich(enrich),
         "synthetic": bool(expression_graph.get("synthetic", False)),
         "synthetic_dataset": expression_graph.get("synthetic_dataset") or None,
         "active_features": active_features,
+        "feature_selection": feature_selection,
     }

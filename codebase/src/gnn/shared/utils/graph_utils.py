@@ -239,6 +239,27 @@ BASIC_EDGE_FEATURE_SCHEMA = [
     "edge_type",
 ]
 
+EDGE_DIRECTIONS: tuple[str, ...] = ("top_down", "bottom_up", "bidirectional")
+VIRTUAL_TASK_NODE_IDS: frozenset[str] = frozenset(
+    {"virtual_current_x", "virtual_y_target", "virtual_supernode"}
+)
+
+
+def validate_edge_direction(edge_direction: str) -> str:
+    if edge_direction not in EDGE_DIRECTIONS:
+        raise ValueError(
+            f"Unsupported edge_direction {edge_direction!r}; "
+            f"expected one of {list(EDGE_DIRECTIONS)}"
+        )
+    return edge_direction
+
+
+def is_virtual_task_edge(parent: str, child: str, etype: str) -> bool:
+    """True for virtual-hub edges that always remain bidirectional."""
+    if etype == "virtual" or "supernode" in etype:
+        return True
+    return parent in VIRTUAL_TASK_NODE_IDS or child in VIRTUAL_TASK_NODE_IDS
+
 BASIC_NODE_FEATURE_SCHEMA = [
     "node_type",
     "label_id",
@@ -531,9 +552,127 @@ class ExpressionGraphConverter:
     def __init__(self):
         pass
 
+    def _effective_edge_direction(self, parent: str, child: str, etype: str, edge_direction: str) -> str:
+        if is_virtual_task_edge(parent, child, etype):
+            return "bidirectional"
+        return edge_direction
+
+    def _add_enriched_ast_edges(
+        self,
+        G_enriched: nx.DiGraph,
+        parent: str,
+        child: str,
+        child_idx: int,
+        etype: str,
+        eb_val: float,
+        edge_direction: str,
+    ) -> None:
+        effective = self._effective_edge_direction(parent, child, etype, edge_direction)
+        if effective in ("top_down", "bidirectional"):
+            G_enriched.add_edge(
+                parent,
+                child,
+                child_index=float(child_idx),
+                direction=0.0,
+                relation_type=float(self._encode_edge_type(etype)),
+                edge_betweenness_centrality=eb_val,
+                etype=etype,
+            )
+        if effective in ("bottom_up", "bidirectional"):
+            G_enriched.add_edge(
+                child,
+                parent,
+                child_index=float(child_idx),
+                direction=1.0 if effective == "bidirectional" else 0.0,
+                relation_type=float(self._encode_edge_type(etype + "_reverse")),
+                edge_betweenness_centrality=eb_val,
+                etype=etype + "_reverse",
+            )
+
+    def _add_basic_ast_edges(
+        self,
+        G_enriched: nx.DiGraph,
+        parent: str,
+        child: str,
+        child_idx: int,
+        etype: str,
+        edge_direction: str,
+    ) -> None:
+        effective = self._effective_edge_direction(parent, child, etype, edge_direction)
+        if effective in ("top_down", "bidirectional"):
+            G_enriched.add_edge(
+                parent,
+                child,
+                edge_type=self._encode_edge_type(etype),
+                child_index=float(child_idx),
+                etype=etype,
+            )
+        if effective in ("bottom_up", "bidirectional"):
+            G_enriched.add_edge(
+                child,
+                parent,
+                edge_type=self._encode_edge_type(etype + "_reverse"),
+                child_index=float(child_idx),
+                etype=etype + "_reverse",
+            )
+
+    def _add_virtual_supernode_edges(self, G_enriched: nx.DiGraph, node_ids: list[str]) -> None:
+        if "virtual_supernode" not in node_ids:
+            return
+        supernode_etype = self._encode_edge_type("virtual")
+        for node in node_ids:
+            if node == "virtual_supernode":
+                continue
+            G_enriched.add_edge(
+                "virtual_supernode",
+                node,
+                child_index=0.0,
+                direction=0.0,
+                relation_type=float(supernode_etype),
+                edge_betweenness_centrality=0.0,
+                etype="supernode_connection",
+            )
+            G_enriched.add_edge(
+                node,
+                "virtual_supernode",
+                child_index=0.0,
+                direction=1.0,
+                relation_type=float(self._encode_edge_type("virtual_reverse")),
+                edge_betweenness_centrality=0.0,
+                etype="supernode_connection_reverse",
+            )
+
+    def _add_virtual_supernode_edges_basic(self, G_enriched: nx.DiGraph, node_ids: list[str]) -> None:
+        if "virtual_supernode" not in node_ids:
+            return
+        supernode_etype = self._encode_edge_type("virtual")
+        for node in node_ids:
+            if node == "virtual_supernode":
+                continue
+            G_enriched.add_edge(
+                "virtual_supernode",
+                node,
+                edge_type=supernode_etype,
+                child_index=0.0,
+                etype="supernode_connection",
+            )
+            G_enriched.add_edge(
+                node,
+                "virtual_supernode",
+                edge_type=self._encode_edge_type("virtual_reverse"),
+                child_index=0.0,
+                etype="supernode_connection_reverse",
+            )
+
     def convert(
-        self, source: Union[str, Path, dict], heterogeneous: bool = False, enrich: bool = True, mode: str = "graph"
+        self,
+        source: Union[str, Path, dict],
+        heterogeneous: bool = False,
+        enrich: bool = True,
+        mode: str = "graph",
+        edge_direction: str = "top_down",
     ) -> Union[Data, HeteroData]:
+        edge_direction = validate_edge_direction(edge_direction)
         raw = self._load(source)
         
         # Make a copy of raw to avoid modifying the original dict in-place if passed as object
@@ -739,7 +878,6 @@ class ExpressionGraphConverter:
 
                 G_enriched.add_node(node, **enriched_attrs)
 
-            # Build bidirectional edges for rich representation
             child_counters = {}
             for edge in raw.get("edges", []):
                 parent = edge["source"]
@@ -749,56 +887,18 @@ class ExpressionGraphConverter:
                 child_idx = child_counters.get(parent, 0)
                 child_counters[parent] = child_idx + 1
 
-                # Fetch edge betweenness centrality
                 eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
-
-                # Forward Edge (Child -> Parent)
-                G_enriched.add_edge(
-                    child,
-                    parent,
-                    child_index=float(child_idx),
-                    direction=0.0,
-                    relation_type=float(self._encode_edge_type(etype)),
-                    edge_betweenness_centrality=eb_val,
-                    etype=etype,
-                )
-
-                # Backward Edge (Parent -> Child)
-                G_enriched.add_edge(
+                self._add_enriched_ast_edges(
+                    G_enriched,
                     parent,
                     child,
-                    child_index=float(child_idx),
-                    direction=1.0,
-                    relation_type=float(self._encode_edge_type(etype + "_reverse")),
-                    edge_betweenness_centrality=eb_val,
-                    etype=etype + "_reverse",
+                    child_idx,
+                    etype,
+                    eb_val,
+                    edge_direction,
                 )
 
-            # Add virtual supernode edges here, after all other edges are constructed
-            if "virtual_supernode" in node_ids:
-                supernode_etype = self._encode_edge_type("virtual")
-                for node in node_ids:
-                    if node != "virtual_supernode":
-                        # Forward Edge (virtual_supernode -> node)
-                        G_enriched.add_edge(
-                            "virtual_supernode",
-                            node,
-                            child_index=0.0,
-                            direction=0.0,
-                            relation_type=float(supernode_etype),
-                            edge_betweenness_centrality=0.0,
-                            etype="supernode_connection",
-                        )
-                        # Backward Edge (node -> virtual_supernode)
-                        G_enriched.add_edge(
-                            node,
-                            "virtual_supernode",
-                            child_index=0.0,
-                            direction=1.0,
-                            relation_type=float(self._encode_edge_type("virtual_reverse")),
-                            edge_betweenness_centrality=0.0,
-                            etype="supernode_connection_reverse",
-                        )
+            self._add_virtual_supernode_edges(G_enriched, node_ids)
         else:
             ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
             for node in node_ids:
@@ -807,7 +907,6 @@ class ExpressionGraphConverter:
                 enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
                 G_enriched.add_node(node, **enriched_attrs)
 
-            # Build edges for basic representation
             child_counters = {}
             for edge in raw.get("edges", []):
                 parent = edge["source"]
@@ -817,33 +916,16 @@ class ExpressionGraphConverter:
                 child_idx = child_counters.get(parent, 0)
                 child_counters[parent] = child_idx + 1
 
-                G_enriched.add_edge(
+                self._add_basic_ast_edges(
+                    G_enriched,
                     parent,
                     child,
-                    edge_type=self._encode_edge_type(etype),
-                    child_index=float(child_idx),
-                    etype=etype,
+                    child_idx,
+                    etype,
+                    edge_direction,
                 )
 
-            # Add supernode edges when enrich=False
-            if "virtual_supernode" in node_ids:
-                supernode_etype = self._encode_edge_type("virtual")
-                for node in node_ids:
-                    if node != "virtual_supernode":
-                        G_enriched.add_edge(
-                            "virtual_supernode",
-                            node,
-                            edge_type=supernode_etype,
-                            child_index=0.0,
-                            etype="supernode_connection",
-                        )
-                        G_enriched.add_edge(
-                            node,
-                            "virtual_supernode",
-                            edge_type=self._encode_edge_type("virtual_reverse"),
-                            child_index=0.0,
-                            etype="supernode_connection_reverse",
-                        )
+            self._add_virtual_supernode_edges_basic(G_enriched, node_ids)
 
         if heterogeneous:
             data = self._to_hetero(G_enriched, raw, topo, enrich)
@@ -1193,11 +1275,19 @@ class ExpressionGraphConverter:
 class GraphConversionPipeline:
     """Loads all JSON graph files from a directory and converts them to PyG objects."""
 
-    def __init__(self, experiments_dir: Union[str, Path], heterogeneous: bool = False, enrich: bool = True, mode: str = "graph"):
+    def __init__(
+        self,
+        experiments_dir: Union[str, Path],
+        heterogeneous: bool = False,
+        enrich: bool = True,
+        mode: str = "graph",
+        edge_direction: str = "top_down",
+    ):
         self.experiments_dir = Path(experiments_dir)
         self.heterogeneous = heterogeneous
         self.enrich = enrich
         self.mode = mode
+        self.edge_direction = validate_edge_direction(edge_direction)
         self.converter = ExpressionGraphConverter()
         self.graphs: dict[str, Union[Data, HeteroData]] = {}
         self._convert_all()
@@ -1213,7 +1303,11 @@ class GraphConversionPipeline:
                 continue
             graph_id = raw.get("id", json_path.stem)
             self.graphs[graph_id] = self.converter.convert(
-                raw, heterogeneous=self.heterogeneous, enrich=self.enrich, mode=self.mode
+                raw,
+                heterogeneous=self.heterogeneous,
+                enrich=self.enrich,
+                mode=self.mode,
+                edge_direction=self.edge_direction,
             )
         print(f"Geladen: {len(self.graphs)} Graphen")
 

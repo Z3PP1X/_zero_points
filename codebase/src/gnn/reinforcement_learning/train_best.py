@@ -43,6 +43,14 @@ from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
 from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
 from gnn.reinforcement_learning.feature_layout import FeatureLayout, EDGE_INPUT_DIM_CHOICES
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
+from gnn.reinforcement_learning.rl_config import (
+    RL_EXPERIMENT_CHOICES,
+    add_shared_graph_args,
+    load_yaml_config,
+    read_rl_settings,
+    resolve_rl_features,
+    resolve_rl_setting,
+)
 
 # ZMQ Port configuration
 RECEIVER_PORT = 5650
@@ -242,6 +250,7 @@ def set_random_seeds(random_seed: int) -> None:
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Start Standalone GNN RL PPO Training with Best Hyperparameters")
+    add_shared_graph_args(parser)
     parser.add_argument(
         "--db",
         type=str,
@@ -251,8 +260,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--experiment",
         type=str,
-        default="kein_inv",
-        choices=["nur_f", "f_fp_roh", "kein_inv"],
+        default=None,
+        choices=list(RL_EXPERIMENT_CHOICES),
         help="The experiment name / graph directory to use.",
     )
     parser.add_argument(
@@ -264,25 +273,25 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timesteps",
         type=int,
-        default=250000,
+        default=None,
         help="Total environment timesteps for the full training run.",
     )
     parser.add_argument(
         "--n-envs",
         type=int,
-        default=1,
+        default=None,
         help="Number of parallel Mathematica environments.",
     )
     parser.add_argument(
         "--save-dir",
         type=str,
-        default="models",
+        default=None,
         help="Directory to save the checkpoints and the final model.",
     )
     parser.add_argument(
         "--model-name",
         type=str,
-        default="gnn_ppo_best",
+        default=None,
         help="Base name for the saved model files.",
     )
     parser.add_argument(
@@ -304,33 +313,20 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout-fallback",
         type=float,
-        default=5.0,
+        default=None,
         help="Initial fallback timeout in seconds.",
     )
     parser.add_argument(
         "--timeout-cushion",
         type=float,
-        default=2.0,
+        default=None,
         help="Cushion added to rolling roundtrip average.",
     )
     parser.add_argument(
         "--timeout-window",
         type=int,
-        default=100,
-        help="Rolling window size for timeout average.",
-    )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="graph",
-        choices=["graph", "tree", "tree_derivatives"],
-        help="Select GNN experiment mode: graph (with virtual nodes), tree (features on global node, f only) or tree_derivatives (f, f', f'' connected via global node)"
-    )
-    parser.add_argument(
-        "--active-features",
-        type=str,
         default=None,
-        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
+        help="Rolling window size for timeout average.",
     )
     return parser
 
@@ -339,11 +335,46 @@ def main() -> None:
     parser = build_argument_parser()
     args = parser.parse_args()
 
-    active_features = None
-    if args.active_features is not None:
-        active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
-        print(f"[Pipeline] Aktivierte Features ({len(active_features)}): {active_features}")
-    
+    script_dir = Path(__file__).resolve().parent
+    config_path = script_dir / args.config
+    settings = read_rl_settings(load_yaml_config(config_path))
+
+    experiment = resolve_rl_setting(args.experiment, settings["experiment"])
+    mode = resolve_rl_setting(args.mode, settings["mode"])
+    edge_direction = resolve_rl_setting(args.edge_direction, settings["edge_direction"])
+    timesteps = int(
+        resolve_rl_setting(args.timesteps, settings["train_best_timesteps"])
+    )
+    n_envs = int(resolve_rl_setting(args.n_envs, settings["train_best_n_envs"]))
+    save_dir = str(resolve_rl_setting(args.save_dir, settings["save_dir"]))
+    model_name = str(resolve_rl_setting(args.model_name, settings["model_name"]))
+    timeout_fallback = float(
+        resolve_rl_setting(args.timeout_fallback, settings["train_best_timeout_fallback"])
+    )
+    timeout_cushion = float(
+        resolve_rl_setting(args.timeout_cushion, settings["train_best_timeout_cushion"])
+    )
+    timeout_window = int(
+        resolve_rl_setting(args.timeout_window, settings["train_best_timeout_window"])
+    )
+    no_torch_compile = resolve_rl_setting(
+        None,
+        settings["no_torch_compile"],
+        is_flag=True,
+        flag_set=args.no_torch_compile,
+    )
+
+    feature_selection, active_features = resolve_rl_features(
+        load_yaml_config(config_path).get("experiment") or {},
+        enrich=True,
+        feature_groups=args.feature_groups,
+        positional_encoding=args.positional_encoding,
+        active_features=args.active_features,
+    )
+    print(f"[Pipeline] Feature groups: {feature_selection.enabled_groups()}")
+    print(f"[Pipeline] Positional encodings: {list(feature_selection.positional_encodings)}")
+    print(f"[Pipeline] Active node features: {feature_selection.summary(enrich=True)}")
+
     padded_node_feature_count = len(active_features) if active_features is not None else 25
 
     # 1. Load and parse hyperparameter configuration
@@ -355,7 +386,10 @@ def main() -> None:
         sys.exit(1)
 
     print("\n--- GNN RL RUN CONFIGURATION ---")
-    print(f"  Experiment:       {args.experiment}")
+    print(f"  Config:           {config_path.name}")
+    print(f"  Experiment:       {experiment}")
+    print(f"  Mode:             {mode}")
+    print(f"  Edge direction:   {edge_direction}")
     print(f"  GNN Architecture: {trial_config.policy.architecture}")
     print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
@@ -375,12 +409,12 @@ def main() -> None:
     set_random_seeds(trial_config.ppo.random_seed)
 
     # 2. Initialize Gateway, Monitor, and Preprocessor
-    mlflow.set_experiment(f"GNN_RL_Full_Training_{args.experiment}")
+    mlflow.set_experiment(f"GNN_RL_Full_Training_{experiment}")
 
     traffic_monitor = GatewayTrafficMonitor(
-        timeout_fallback_s=args.timeout_fallback,
-        timeout_cushion_s=args.timeout_cushion,
-        timeout_window_size=args.timeout_window,
+        timeout_fallback_s=timeout_fallback,
+        timeout_cushion_s=timeout_cushion,
+        timeout_window_size=timeout_window,
     )
     state_logger = GatewayStateLogger()
     gateway = NetworkGateway(
@@ -393,12 +427,13 @@ def main() -> None:
     )
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
     unified_loader = UnifiedDataLoader.get_instance(
-        dataset_name=args.experiment,
-        mode=args.mode,
+        dataset_name=experiment,
+        mode=mode,
         enrich=True,
+        edge_direction=edge_direction,
     )
     loader = unified_loader.graph_loader
-    preprocessor = Preprocessor(loader=loader, mode=args.mode, active_features=active_features)
+    preprocessor = Preprocessor(loader=loader, mode=mode, active_features=active_features)
 
     print(f"[Pipeline] Initializing ZMQ NetworkGateway on receiver={RECEIVER_PORT}, sender={SENDER_PORT}...")
     gateway.init()
@@ -426,7 +461,7 @@ def main() -> None:
         gateway=gateway,
         preprocessor=preprocessor,
         reward_calculator=reward_calculator,
-        n_envs=args.n_envs,
+        n_envs=n_envs,
         max_nodes=200,
         max_edges=1000,
     )
@@ -442,7 +477,7 @@ def main() -> None:
     )
 
     # Attempt torch compile if requested
-    if not args.no_torch_compile:
+    if not no_torch_compile:
         from gnn.shared.models.gnn_backbones import maybe_torch_compile
         gnn_model = maybe_torch_compile(gnn_model, enabled=True)
 
@@ -470,19 +505,19 @@ def main() -> None:
     # Callback and training start
     training_callback = TrainingCallback(
         check_freq=1000,
-        save_path=args.save_dir,
-        model_name=args.model_name,
+        save_path=save_dir,
+        model_name=model_name,
         traffic_monitor=traffic_monitor,
     )
 
-    print(f"\n[Training] Starting full training of {args.timesteps} steps...")
-    print(f"[Training] Checkpoints and best model will be saved to '{args.save_dir}/'")
+    print(f"\n[Training] Starting full training of {timesteps} steps...")
+    print(f"[Training] Checkpoints and best model will be saved to '{save_dir}/'")
 
     # Start MLflow run
-    with mlflow.start_run(run_name=f"Full_Training_Run_{args.model_name}"):
+    with mlflow.start_run(run_name=f"Full_Training_Run_{model_name}"):
         try:
             # Log all parameters to MLflow
-            mlflow.log_param("experiment", args.experiment)
+            mlflow.log_param("experiment", experiment)
             mlflow.log_param("gnn_architecture", trial_config.policy.architecture)
             mlflow.log_param("gnn_activation", trial_config.policy.activation)
             mlflow.log_param("hidden_dim", trial_config.policy.hidden_dim)
@@ -492,9 +527,10 @@ def main() -> None:
             mlflow.log_param("gamma", trial_config.ppo.gamma)
             mlflow.log_param("ent_coef", trial_config.ppo.ent_coef)
             mlflow.log_param("seed", trial_config.ppo.random_seed)
-            mlflow.log_param("n_envs", args.n_envs)
-            mlflow.log_param("timesteps", args.timesteps)
-            mlflow.log_param("mode", args.mode)
+            mlflow.log_param("n_envs", n_envs)
+            mlflow.log_param("timesteps", timesteps)
+            mlflow.log_param("mode", mode)
+            mlflow.log_param("edge_direction", edge_direction)
 
             # Log reward parameters
             mlflow.log_param("reward_version", "v2_tolerance")
@@ -505,10 +541,10 @@ def main() -> None:
             mlflow.log_param("time_bad_penalty", trial_config.reward.time_bad_penalty)
 
             # Start learning
-            model.learn(total_timesteps=args.timesteps, callback=training_callback)
+            model.learn(total_timesteps=timesteps, callback=training_callback)
 
             # Save the final model
-            final_path = os.path.join(args.save_dir, f"{args.model_name}_final.zip")
+            final_path = os.path.join(save_dir, f"{model_name}_final.zip")
             model.save(final_path)
             print(f"\n[Training] Training completed successfully!")
             print(f"[Training] Saved final model to: {final_path}")

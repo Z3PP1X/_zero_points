@@ -79,7 +79,9 @@ def test_enriched_graph_features(tmp_path):
     }
 
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw, heterogeneous=False, mode="tree")
+    data = converter.convert(
+        raw, heterogeneous=False, mode="tree", edge_direction="bidirectional"
+    )
 
     assert data.nodes == 3
     assert data.num_nodes == 3
@@ -148,3 +150,78 @@ def test_enriched_graph_features(tmp_path):
 
     eb = data.edge_attr[:, 3].tolist()
     assert all(val > 0.0 for val in eb)
+
+
+def test_edge_direction_top_down_has_parent_to_child_only():
+    raw = {
+        "id": "P-direction-test",
+        "nodes": [
+            {"id": "root", "label": "Plus", "type": "operator", "value": None},
+            {"id": "leaf", "label": "x", "type": "variable", "value": None},
+        ],
+        "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
+    }
+    data = ExpressionGraphConverter().convert(
+        raw, heterogeneous=False, enrich=True, mode="tree", edge_direction="top_down"
+    )
+    assert data.edge_index.shape == (2, 1)
+    src, dst = data.edge_index[:, 0].tolist()
+    assert src == 0 and dst == 1
+
+
+def test_edge_direction_bottom_up_has_child_to_parent_only():
+    raw = {
+        "id": "P-direction-test",
+        "nodes": [
+            {"id": "root", "label": "Plus", "type": "operator", "value": None},
+            {"id": "leaf", "label": "x", "type": "variable", "value": None},
+        ],
+        "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
+    }
+    data = ExpressionGraphConverter().convert(
+        raw, heterogeneous=False, enrich=True, mode="tree", edge_direction="bottom_up"
+    )
+    assert data.edge_index.shape == (2, 1)
+    src, dst = data.edge_index[:, 0].tolist()
+    assert src == 1 and dst == 0
+
+
+def test_virtual_edges_stay_bidirectional_with_top_down_mode():
+    raw = {
+        "id": "P-virtual-direction-test",
+        "nodes": [
+            {"id": "global", "label": "GLOBAL", "type": "global", "value": None},
+            {"id": "x1", "label": "x", "type": "variable", "value": None},
+            {"id": "virtual_current_x", "label": "virtual_current_x", "type": "virtual_current_x", "value": None},
+        ],
+        "edges": [
+            {"source": "global", "target": "x1", "type": "child_of"},
+            {"source": "virtual_current_x", "target": "x1", "type": "virtual"},
+        ],
+    }
+    data = ExpressionGraphConverter().convert(
+        raw, heterogeneous=False, enrich=True, mode="graph", edge_direction="top_down"
+    )
+    vcx_idx = data.node_ids.index("virtual_current_x")
+    x1_idx = data.node_ids.index("x1")
+    global_idx = data.node_ids.index("global")
+    virtual_edge_count = sum(
+        1
+        for edge_idx in range(data.edge_index.size(1))
+        if {
+            int(data.edge_index[0, edge_idx].item()),
+            int(data.edge_index[1, edge_idx].item()),
+        }
+        == {vcx_idx, x1_idx}
+    )
+    ast_edge_count = sum(
+        1
+        for edge_idx in range(data.edge_index.size(1))
+        if {
+            int(data.edge_index[0, edge_idx].item()),
+            int(data.edge_index[1, edge_idx].item()),
+        }
+        == {global_idx, x1_idx}
+    )
+    assert virtual_edge_count == 2
+    assert ast_edge_count == 1

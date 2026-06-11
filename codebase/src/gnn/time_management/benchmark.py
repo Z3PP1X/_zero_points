@@ -73,11 +73,13 @@ def main():
     print(f"========================================================")
     
     # 2. Load curated dataset (always run_20260603_123013/parallel_benchmark_results)
+    edge_direction = getattr(cfg.expression_graph, "edge_direction", "top_down")
     loader = GraphDataLoader(
         name="run_20260603_123013/parallel_benchmark_results",
         mode=cfg.expression_graph.mode,
         enrich=cfg.expression_graph.enrich,
         heterogeneous=False,
+        edge_direction=edge_direction,
     )
     pipeline = GraphPipeline(
         dataset_name="run_20260603_123013/parallel_benchmark_results",

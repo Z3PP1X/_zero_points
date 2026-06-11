@@ -1,0 +1,46 @@
+# config_rl.yaml
+# Central overview of all CLI settings for the GNN reinforcement-learning pipeline.
+# Values here are defaults; command-line flags override them at runtime.
+
+# Dataset / graph experiment
+# CLI: --experiment, --mode, --edge-direction, --feature-groups, --positional-encoding
+experiment:
+  name: nur_f  # nur_f | f_fp_roh | kein_inv
+  mode: graph  # graph | tree | tree_derivatives
+  edge_direction: top_down  # top_down | bottom_up | bidirectional (virtual nodes always bidirectional)
+
+  # Feature classes: node | topology | positional | edge
+  features:
+    node: true
+    topology: true
+    positional:
+      enabled: true
+      encodings: [lpe, rwpe]
+    edge: true
+
+  # Optional explicit override (disables grouped toggles above when non-empty)
+  active_features: ""
+
+# Optuna hyperparameter search (main.py)
+optuna:
+  timesteps: 10000
+  n_trials: 50
+  n_envs: 1
+  continue_study: false
+
+# Gateway / Mathematica roundtrip timeouts
+gateway:
+  timeout_fallback: 5.0
+  timeout_cushion: 1.0
+  timeout_window: 100
+
+# Full training with best trial (train_best.py)
+train_best:
+  timesteps: 250000
+  n_envs: 1
+  save_dir: models
+  model_name: gnn_ppo_best
+  no_torch_compile: false
+  timeout_fallback: 5.0
+  timeout_cushion: 2.0
+  timeout_window: 100

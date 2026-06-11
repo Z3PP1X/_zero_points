@@ -28,6 +28,7 @@ class UnifiedDataLoader:
         add_traces: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
+        edge_direction: str = "top_down",
     ) -> UnifiedDataLoader:
         """
         Retrieves a cached singleton/multiton instance matching the parameter configuration.
@@ -39,7 +40,17 @@ class UnifiedDataLoader:
             r_key = run_key if run_key is not None else dataset_name
             d_name = dataset_name
 
-        key = (d_name, r_key, mode, enrich, heterogeneous, add_traces, str(base_dir) if base_dir else None, is_synthetic)
+        key = (
+            d_name,
+            r_key,
+            mode,
+            enrich,
+            heterogeneous,
+            add_traces,
+            str(base_dir) if base_dir else None,
+            is_synthetic,
+            edge_direction,
+        )
         if key not in cls._instances:
             cls._instances[key] = cls(
                 dataset_name=d_name,
@@ -50,6 +61,7 @@ class UnifiedDataLoader:
                 add_traces=add_traces,
                 base_dir=base_dir,
                 is_synthetic=is_synthetic,
+                edge_direction=edge_direction,
             )
         return cls._instances[key]
 
@@ -68,6 +80,7 @@ class UnifiedDataLoader:
         add_traces: bool,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
+        edge_direction: str = "top_down",
     ):
         self.dataset_name = dataset_name
         self.run_key = run_key
@@ -77,6 +90,7 @@ class UnifiedDataLoader:
         self.add_traces = add_traces
         self.base_dir = base_dir
         self.is_synthetic = is_synthetic
+        self.edge_direction = edge_direction
 
         # Unified lookup name for GraphDataLoader
         # For compatibility with GraphDataLoader's parsing, if run_key differs from dataset_name, pass "run_key/dataset_name"
@@ -96,6 +110,7 @@ class UnifiedDataLoader:
             heterogeneous=self.heterogeneous,
             base_dir=self.base_dir,
             is_synthetic=self.is_synthetic,
+            edge_direction=self.edge_direction,
         )
 
         # Automatically enrich missing x0/startwert values from graph data

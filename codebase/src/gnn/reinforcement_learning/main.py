@@ -1,6 +1,5 @@
 import sys
 import argparse
-import os
 from pathlib import Path
 import torch
 
@@ -19,6 +18,14 @@ from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway
 from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
 from gnn.reinforcement_learning.ppo_optuna_workflow import PpoOptunaWorkflow
 from gnn.reinforcement_learning.preprocessor import Preprocessor
+from gnn.reinforcement_learning.rl_config import (
+    RL_EXPERIMENT_CHOICES,
+    add_shared_graph_args,
+    load_yaml_config,
+    read_rl_settings,
+    resolve_rl_features,
+    resolve_rl_setting,
+)
 
 RECEIVER_PORT = 5650
 RESULTS_PORT = 5693
@@ -28,36 +35,37 @@ CONTROL_PORT = 6000
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Start GNN RL Pipeline with SB3 & Optuna")
+    add_shared_graph_args(parser)
     parser.add_argument(
         "--experiment",
         type=str,
-        default="nur_f",
-        choices=["nur_f", "f_fp_roh", "kein_inv"],
+        default=None,
+        choices=list(RL_EXPERIMENT_CHOICES),
     )
-    parser.add_argument("--timesteps", type=int, default=10000)
-    parser.add_argument("--n_trials", type=int, default=50)
+    parser.add_argument("--timesteps", type=int, default=None)
+    parser.add_argument("--n_trials", type=int, default=None)
     parser.add_argument(
         "--timeout-fallback",
         type=float,
-        default=5.0,
+        default=None,
         help="Initiale Timeout-Wartezeit in Sekunden ohne Roundtrip-Historie.",
     )
     parser.add_argument(
         "--timeout-cushion",
         type=float,
-        default=1.0,
+        default=None,
         help="Puffer in Sekunden auf den gleitenden Roundtrip-Durchschnitt.",
     )
     parser.add_argument(
         "--timeout-window",
         type=int,
-        default=100,
+        default=None,
         help="Anzahl erfolgreicher Roundtrips für den gleitenden Durchschnitt.",
     )
     parser.add_argument(
         "--n-envs",
         type=int,
-        default=1,
+        default=None,
         help=(
             "Anzahl paralleler Mathematica-Slots für SB3-Training "
             "(gemeinsames Senden/Sammeln pro VecEnv-Schritt)."
@@ -68,35 +76,56 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Set this flag to continue the last not finished study, otherwise start a new one.",
     )
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="graph",
-        choices=["graph", "tree", "tree_derivatives"],
-        help="Select GNN experiment mode: graph (with virtual nodes), tree (features on global node, f only) or tree_derivatives (f, f', f'' connected via global node)"
-    )
-    parser.add_argument(
-        "--active-features",
-        type=str,
-        default=None,
-        help="Comma-separated list of active GNN node features to use (dynamically adapts dimensions)."
-    )
     return parser
 
 
 def main() -> None:
     if torch.cuda.is_available():
-        torch.set_float32_matmul_precision('high')
-        
+        torch.set_float32_matmul_precision("high")
+
     parser = build_argument_parser()
     args = parser.parse_args()
 
-    mlflow.set_experiment(f"GNN_RL_Optuna_{args.experiment}")
+    script_dir = Path(__file__).resolve().parent
+    config_path = script_dir / args.config
+    settings = read_rl_settings(load_yaml_config(config_path))
+
+    experiment = resolve_rl_setting(args.experiment, settings["experiment"])
+    mode = resolve_rl_setting(args.mode, settings["mode"])
+    edge_direction = resolve_rl_setting(args.edge_direction, settings["edge_direction"])
+    timesteps = int(resolve_rl_setting(args.timesteps, settings["timesteps"]))
+    n_trials = int(resolve_rl_setting(args.n_trials, settings["n_trials"]))
+    n_envs = int(resolve_rl_setting(args.n_envs, settings["n_envs"]))
+    continue_study = resolve_rl_setting(
+        None,
+        settings["continue_study"],
+        is_flag=True,
+        flag_set=args.continue_study,
+    )
+    timeout_fallback = float(
+        resolve_rl_setting(args.timeout_fallback, settings["timeout_fallback"])
+    )
+    timeout_cushion = float(
+        resolve_rl_setting(args.timeout_cushion, settings["timeout_cushion"])
+    )
+    timeout_window = int(
+        resolve_rl_setting(args.timeout_window, settings["timeout_window"])
+    )
+
+    feature_selection, active_features = resolve_rl_features(
+        load_yaml_config(config_path).get("experiment") or {},
+        enrich=True,
+        feature_groups=args.feature_groups,
+        positional_encoding=args.positional_encoding,
+        active_features=args.active_features,
+    )
+
+    mlflow.set_experiment(f"GNN_RL_Optuna_{experiment}")
 
     traffic_monitor = GatewayTrafficMonitor(
-        timeout_fallback_s=args.timeout_fallback,
-        timeout_cushion_s=args.timeout_cushion,
-        timeout_window_size=args.timeout_window,
+        timeout_fallback_s=timeout_fallback,
+        timeout_cushion_s=timeout_cushion,
+        timeout_window_size=timeout_window,
     )
     state_logger = GatewayStateLogger()
     gateway = NetworkGateway(
@@ -108,27 +137,28 @@ def main() -> None:
         state_logger=state_logger,
     )
     print(
-        f"Optuna: {args.n_trials} Trials × {args.timesteps} Schritte | "
-        f"Experiment: {args.experiment} | Parallel-Envs: {args.n_envs} | "
-        f"Continue Study: {args.continue_study}"
+        f"Optuna: {n_trials} Trials × {timesteps} Schritte | "
+        f"Experiment: {experiment} | Mode: {mode} | Edge direction: {edge_direction} | "
+        f"Parallel-Envs: {n_envs} | Continue Study: {continue_study} | Config: {config_path.name}"
     )
-    active_features = None
-    if args.active_features is not None:
-        active_features = [f.strip() for f in args.active_features.split(",") if f.strip()]
-        print(f"Aktivierte Features ({len(active_features)}): {active_features}")
-    
+    print(f"Feature groups: {feature_selection.enabled_groups()}")
+    print(f"Positional encodings: {list(feature_selection.positional_encodings)}")
+    print(f"Active node features: {feature_selection.summary(enrich=True)}")
+
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
+
     unified_loader = UnifiedDataLoader.get_instance(
-        dataset_name=args.experiment,
-        mode=args.mode,
+        dataset_name=experiment,
+        mode=mode,
         enrich=True,
+        edge_direction=edge_direction,
     )
     loader = unified_loader.graph_loader
-    
-    preprocessor = Preprocessor(loader=loader, mode=args.mode, active_features=active_features)
+
+    preprocessor = Preprocessor(loader=loader, mode=mode, active_features=active_features)
     print(
         f"Graph-Templates: {len(preprocessor.known_problem_ids)} Problem-IDs indexiert, "
-        f"lazy LRU-Cache aktiv (mode: {args.mode})"
+        f"lazy LRU-Cache aktiv (mode: {mode})"
     )
     gateway.init()
     traffic_monitor.start()
@@ -136,13 +166,13 @@ def main() -> None:
     workflow = PpoOptunaWorkflow(
         gateway=gateway,
         preprocessor=preprocessor,
-        experiment_name=args.experiment,
-        timesteps_per_trial=args.timesteps,
-        n_envs=args.n_envs,
+        experiment_name=experiment,
+        timesteps_per_trial=timesteps,
+        n_envs=n_envs,
     )
 
     try:
-        study = workflow.optimize(n_trials=args.n_trials, continue_study=args.continue_study)
+        study = workflow.optimize(n_trials=n_trials, continue_study=continue_study)
         print("\n--- OPTUNA STUDY COMPLETED ---")
         print("Best trial:")
         best_trial = study.best_trial

@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Union, Any, Dict, Set
 from torch_geometric.data import Data, HeteroData
-from gnn.shared.utils.graph_utils import ExpressionGraphConverter
+from gnn.shared.utils.graph_utils import ExpressionGraphConverter, validate_edge_direction
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,14 @@ class GraphDataLoader:
         heterogeneous: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
+        edge_direction: str = "top_down",
     ):
         self.name = name
         self.mode = mode
         self.enrich = enrich
         self.heterogeneous = heterogeneous
         self.is_synthetic = is_synthetic
+        self.edge_direction = validate_edge_direction(edge_direction)
         self.converter = ExpressionGraphConverter()
 
         # Resolve the source path (root graphs vs legacy fallbacks)
@@ -187,7 +189,8 @@ class GraphDataLoader:
             raw_dict,
             heterogeneous=self.heterogeneous,
             enrich=self.enrich,
-            mode=self.mode
+            mode=self.mode,
+            edge_direction=self.edge_direction,
         )
         self._converted_cache[gid_str] = converted
         return converted.clone()

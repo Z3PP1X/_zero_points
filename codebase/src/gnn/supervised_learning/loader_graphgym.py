@@ -377,9 +377,17 @@ def set_custom_cfg(cfg):
     cfg.expression_graph = CN()
     cfg.expression_graph.mode = "graph"  # "graph", "tree", or "tree_derivatives"
     cfg.expression_graph.enrich = False
-    cfg.expression_graph.active_features = ""  # Comma-separated list or empty for all
+    cfg.expression_graph.features = CN()
+    cfg.expression_graph.features.node = True
+    cfg.expression_graph.features.topology = True
+    cfg.expression_graph.features.positional = CN()
+    cfg.expression_graph.features.positional.enabled = True
+    cfg.expression_graph.features.positional.encodings = ["lpe", "rwpe"]
+    cfg.expression_graph.features.edge = True
+    cfg.expression_graph.active_features = ""  # Explicit override list, or empty for grouped toggles
     cfg.expression_graph.synthetic = False
     cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name
+    cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
@@ -402,10 +410,14 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     - cfg.expression_graph.mode: injects GNN mode ("graph", "tree",
         or "tree_derivatives")
     - cfg.expression_graph.enrich: injects GNN feature enrichment (True or False)
-    - cfg.expression_graph.active_features: injects list of active features
+    - cfg.expression_graph.features: grouped node/edge feature toggles
+    - cfg.expression_graph.active_features: optional explicit feature override list
     - cfg.expression_graph.synthetic: injects synthetic mode (True or False)
     - cfg.expression_graph.synthetic_dataset: injects synthetic dataset name
+    - cfg.expression_graph.edge_direction: AST message-passing direction
     """
+    from gnn.shared.utils.graph_utils import validate_edge_direction
+
     dataset_name = cfg.dataset.name
     batch_size = cfg.train.batch_size
     seed = getattr(cfg, "seed", 42001)
@@ -414,16 +426,21 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     enrich = getattr(cfg.expression_graph, "enrich", False)
     layer_type = validate_layer_type(cfg.gnn.layer_type)
     cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
-    active_features_str = getattr(cfg.expression_graph, "active_features", "")
+    from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
 
     synthetic = getattr(cfg.expression_graph, "synthetic", False)
     synthetic_dataset = getattr(cfg.expression_graph, "synthetic_dataset", "")
+    edge_direction = validate_edge_direction(
+        getattr(cfg.expression_graph, "edge_direction", "top_down")
+    )
 
-    active_features = None
-    if active_features_str:
-        active_features = [
-            f.strip() for f in active_features_str.split(",") if f.strip()
-        ]
+    feature_selection, active_features = resolve_expression_graph_features(
+        {
+            "features": getattr(cfg.expression_graph, "features", {}),
+            "active_features": getattr(cfg.expression_graph, "active_features", ""),
+        },
+        enrich=enrich,
+    )
 
     if "/" in dataset_name:
         run_key, _ = dataset_name.split("/", 1)
@@ -443,12 +460,12 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Layer Type:     {layer_type}")
     print(f"  Injected Edge Dim:       {cfg.dataset.edge_dim}")
     print(f"  Injected Synthetic:      {synthetic}")
+    print(f"  Injected Edge Direction: {edge_direction}")
     if synthetic:
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
-    if active_features is not None:
-        print(f"  Injected Features ({len(active_features)}): {active_features}")
-    else:
-        print("  Injected Features:       ALL")
+    print(f"  Injected Feature Groups: {feature_selection.enabled_groups()}")
+    print(f"  Injected Positional:     {list(feature_selection.positional_encodings)}")
+    print(f"  Injected Features:       {feature_selection.summary(enrich)}")
     print("----------------------------------------\n")
 
     from gnn.shared.utils.graph_loader import GraphDataLoader
@@ -458,6 +475,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         mode=mode,
         enrich=enrich,
         heterogeneous=False,
+        edge_direction=edge_direction,
     )
 
     pipeline = GraphPipeline(

@@ -13,8 +13,18 @@ dataset:
 
 expression_graph:
   enrich: True
+  mode: graph
+  edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
+  features:
+    node: true
+    topology: true
+    positional:
+      enabled: true
+      encodings: [lpe, rwpe]
+    edge: true
+  active_features: ""
 
 # --- Dummy training loop parameters (unused in inference but required by GraphGym config schema) ---
 train:

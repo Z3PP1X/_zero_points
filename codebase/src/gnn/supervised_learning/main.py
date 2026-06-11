@@ -171,19 +171,34 @@ def main(
     mode: str = "graph",
     enrich: bool = False,
     active_features: list[str] | None = None,
+    feature_groups: list[str] | None = None,
+    positional_encoding: list[str] | None = None,
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
     layer_type: str = "gatv2conv",
+    edge_direction: str = "top_down",
 ):
     seed = DEFAULT_SEED
     cfg = bootstrap_graphgym_cfg(config_path, seed=seed)
-    apply_expression_graph_overrides(
+    feature_selection = apply_expression_graph_overrides(
         cfg,
         mode=mode,
         enrich=enrich,
         active_features=active_features,
+        feature_groups=feature_groups,
+        positional_encoding=positional_encoding,
         synthetic=synthetic,
         synthetic_dataset=synthetic_dataset,
+        edge_direction=edge_direction,
+    )
+    resolved_active_features = (
+        None
+        if not cfg.expression_graph.active_features
+        else [
+            feature.strip()
+            for feature in str(cfg.expression_graph.active_features).split(",")
+            if feature.strip()
+        ]
     )
     cfg.gnn.layer_type = validate_layer_type(layer_type)
     cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
@@ -201,6 +216,7 @@ def main(
         dataset_name=dataset_name,
         mode=mode,
         enrich=enrich,
+        edge_direction=edge_direction,
     )
 
     pipeline = GraphPipeline(
@@ -208,7 +224,7 @@ def main(
         seed=seed,
         mode=mode,
         enrich=enrich,
-        active_features=active_features,
+        active_features=resolved_active_features,
         unified_loader=unified_loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
@@ -262,7 +278,9 @@ def main(
                 "loss_fun": str(cfg.model.loss_fun),
                 "mode": mode,
                 "enrich": enrich,
-                "active_features": active_features,
+                "active_features": resolved_active_features,
+                "feature_groups": feature_selection.enabled_groups(),
+                "positional_encodings": list(feature_selection.positional_encodings),
                 "synthetic": synthetic,
                 "synthetic_dataset": synthetic_dataset,
             }
@@ -399,11 +417,15 @@ if __name__ == "__main__":
         help="Override GNN experiment mode from config.",
     )
     parser.add_argument(
-        "--active-features",
+        "--edge-direction",
         type=str,
         default=None,
-        help="Comma-separated list of active GNN node features to use (overrides config).",
+        choices=["top_down", "bottom_up", "bidirectional"],
+        help="AST message-passing direction (virtual-node edges stay bidirectional).",
     )
+    from gnn.shared.utils.feature_config import add_feature_cli_args
+
+    add_feature_cli_args(parser)
     parser.add_argument(
         "--synthetic",
         action="store_true",
@@ -427,6 +449,7 @@ if __name__ == "__main__":
 
     mode = args.mode or settings["mode"]
     enrich = settings["enrich"]
+    edge_direction = args.edge_direction or settings["edge_direction"]
     layer_type = settings["layer_type"]
     synthetic = args.synthetic or settings["synthetic"]
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
@@ -435,7 +458,10 @@ if __name__ == "__main__":
 
     try:
         loader = UnifiedDataLoader.get_instance(
-            dataset_name=dataset_name, mode=mode, enrich=enrich
+            dataset_name=dataset_name,
+            mode=mode,
+            enrich=enrich,
+            edge_direction=edge_direction,
         )
         print("Curated dataset loaded successfully!")
         print(loader.data.tail())
@@ -446,7 +472,10 @@ if __name__ == "__main__":
     if synthetic and synthetic_dataset:
         try:
             synth_loader = UnifiedDataLoader.get_instance(
-                dataset_name=synthetic_dataset, mode=mode, enrich=enrich
+                dataset_name=synthetic_dataset,
+                mode=mode,
+                enrich=enrich,
+                edge_direction=edge_direction,
             )
             print("Synthetic dataset loaded successfully!")
             print(synth_loader.data.tail())
@@ -456,25 +485,33 @@ if __name__ == "__main__":
 
     if not args.dry_run:
         try:
-            active_feats = settings["active_features"]
-            if args.active_features is not None:
-                active_feats = [
-                    f.strip() for f in args.active_features.split(",") if f.strip()
-                ]
-            if active_feats:
-                print(f"Aktivierte Features: {active_feats}")
+            from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
+
+            preview_selection, _ = resolve_expression_graph_features(
+                load_yaml_config(config_path).get("expression_graph"),
+                enrich=enrich,
+                feature_groups=args.feature_groups,
+                positional_encoding=args.positional_encoding,
+                active_features=args.active_features,
+            )
+            print(f"Feature groups: {preview_selection.enabled_groups()}")
+            print(f"Positional encodings: {list(preview_selection.positional_encodings)}")
+            print(f"Active node features: {preview_selection.summary(enrich)}")
             print(
-                f"Config: {config_path.name} | layer_type={layer_type} | enrich={enrich}"
+                f"Config: {config_path.name} | layer_type={layer_type} | enrich={enrich} | edge_direction={edge_direction}"
             )
             main(
                 config_path=config_path,
                 dataset_name=dataset_name,
                 mode=mode,
                 enrich=enrich,
-                active_features=active_feats,
+                feature_groups=args.feature_groups,
+                positional_encoding=args.positional_encoding,
+                active_features=args.active_features,
                 synthetic=synthetic,
                 synthetic_dataset=synthetic_dataset,
                 layer_type=layer_type,
+                edge_direction=edge_direction,
             )
         except Exception as e:
             print(
