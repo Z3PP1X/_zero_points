@@ -1,3 +1,4 @@
+import re
 import sys
 
 import pandas as pd
@@ -12,6 +13,76 @@ if str(gnn_root) not in sys.path:
 src_root = Path(__file__).resolve().parents[3]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
+
+
+_LEGACY_HEADER_ALIASES: dict[str, str] = {
+    "problem_id": "problem_id",
+    "problemid": "problem_id",
+    "y_target": "y_target",
+    "ytarget": "y_target",
+    "zielwert": "y_target",
+    "startwert": "x0",
+    "x0": "x0",
+    "newton_abstime": "Newton_absTime",
+    "newtonabstime": "Newton_absTime",
+    "avg_abs_time_newton": "Newton_absTime",
+    "gmgf_abstime": "GMGF_absTime",
+    "gmgfabstime": "GMGF_absTime",
+    "avg_abs_time_gmgf": "GMGF_absTime",
+    "newton_itersteps": "Newton_iterSteps",
+    "newtonitersteps": "Newton_iterSteps",
+    "schritte_newton": "Newton_iterSteps",
+    "gmgf_itersteps": "GMGF_iterSteps",
+    "gmgfitersteps": "GMGF_iterSteps",
+    "schritte_gmgf": "GMGF_iterSteps",
+    "point_index": "point_index",
+    "pointindex": "point_index",
+    # Function value f(x0) at the current iterate.
+    "fx": "fx",
+    "fx0": "fx",
+    "f_x0": "fx",
+    "f_x_0": "fx",
+    "fval": "fx",
+    "fvalue": "fx",
+    # First derivative f'(x0) — Newton step driver.
+    "d1x": "d1x",
+    "f1": "d1x",
+    "fprime": "d1x",
+    "fprime_x0": "d1x",
+    "dfx": "d1x",
+    "derivative1": "d1x",
+    "first_derivative": "d1x",
+    # Second derivative f''(x0) — curvature / Halley-style driver.
+    "d2x": "d2x",
+    "f2": "d2x",
+    "fsecond": "d2x",
+    "fdoubleprime": "d2x",
+    "d2fx": "d2x",
+    "derivative2": "d2x",
+    "second_derivative": "d2x",
+}
+
+
+def canonical_dataset_column(col: str) -> str | None:
+    """Map a raw CSV header to a canonical pipeline column name.
+
+    New datasets export Mathematica-style headers ``x0``, ``f(x0)``, ``f'(x0)``,
+    and ``f''(x0)``. Derivative primes must be resolved *before* stripping
+    apostrophes, otherwise all three collapse to ``f(x0)``.
+    """
+    s = col.strip().replace('"', "")
+    s = s.replace("′", "'").replace("″", "'").replace("ʼ", "'")
+    s = s.lower()
+
+    if re.fullmatch(r"f''\(x_?0\)", s):
+        return "d2x"
+    if re.fullmatch(r"f'\(x_?0\)", s):
+        return "d1x"
+    if re.fullmatch(r"f\(x_?0\)", s):
+        return "fx"
+
+    clean_col = s.replace("'", "")
+    return _LEGACY_HEADER_ALIASES.get(clean_col)
 
 
 class DatasetLoader:
@@ -43,58 +114,11 @@ class DatasetLoader:
         if self._data is None:
             return
 
-        mapping = {
-            "problem_id": "problem_id",
-            "problemid": "problem_id",
-            "y_target": "y_target",
-            "ytarget": "y_target",
-            "zielwert": "y_target",
-            "startwert": "x0",
-            "x0": "x0",
-            "newton_abstime": "Newton_absTime",
-            "newtonabstime": "Newton_absTime",
-            "avg_abs_time_newton": "Newton_absTime",
-            "gmgf_abstime": "GMGF_absTime",
-            "gmgfabstime": "GMGF_absTime",
-            "avg_abs_time_gmgf": "GMGF_absTime",
-            "newton_itersteps": "Newton_iterSteps",
-            "newtonitersteps": "Newton_iterSteps",
-            "schritte_newton": "Newton_iterSteps",
-            "gmgf_itersteps": "GMGF_iterSteps",
-            "gmgfitersteps": "GMGF_iterSteps",
-            "schritte_gmgf": "GMGF_iterSteps",
-            "point_index": "point_index",
-            "pointindex": "point_index",
-            # Function value f(x0) at the current iterate.
-            "fx": "fx",
-            "fx0": "fx",
-            "f_x0": "fx",
-            "f_x_0": "fx",
-            "fval": "fx",
-            "fvalue": "fx",
-            # First derivative f'(x0) — Newton step driver.
-            "d1x": "d1x",
-            "f1": "d1x",
-            "fprime": "d1x",
-            "fprime_x0": "d1x",
-            "dfx": "d1x",
-            "derivative1": "d1x",
-            "first_derivative": "d1x",
-            # Second derivative f''(x0) — curvature / Halley-style driver.
-            "d2x": "d2x",
-            "f2": "d2x",
-            "fsecond": "d2x",
-            "fdoubleprime": "d2x",
-            "d2fx": "d2x",
-            "derivative2": "d2x",
-            "second_derivative": "d2x",
-        }
-
         rename_dict = {}
         for col in self._data.columns:
-            clean_col = col.strip().replace('"', "").replace("'", "").lower()
-            if clean_col in mapping:
-                rename_dict[col] = mapping[clean_col]
+            canonical = canonical_dataset_column(col)
+            if canonical is not None:
+                rename_dict[col] = canonical
 
         if rename_dict:
             self._data = self._data.rename(columns=rename_dict)
