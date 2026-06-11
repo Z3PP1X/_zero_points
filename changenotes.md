@@ -257,4 +257,83 @@ The `virtual_supernode` (connected to every node) turns the graph into a diamete
 - `codebase/src/gnn/tests/test_graph_utils.py`: updated RWPE assertion.
 - `codebase/src/gnn/tests/test_supervised_classifier.py`: new forward-pass / encoder test suite.
 
+---
+
+## 13. Configurable AST Edge Direction & Grouped Feature Toggles
+
+Added experiment controls for AST message-passing direction and structured feature selection across supervised and RL pipelines.
+
+### 13.1 AST edge direction (`edge_direction`)
+AST edges (parent→child in the raw tree) can now be compiled with configurable message-passing direction:
+
+| Value | Message flow |
+|---|---|
+| `top_down` | parent → child (root to leaves) |
+| `bottom_up` | child → parent (leaves to root) |
+| `bidirectional` | both directions (separate forward/reverse edges) |
+
+**Virtual nodes are always bidirectional** — edges touching `virtual_current_x`, `virtual_y_target`, `virtual_supernode`, or with type `virtual` / `supernode` ignore the setting.
+
+Core logic lives in `graph_utils.py` via `_add_enriched_ast_edges()` / `_add_basic_ast_edges()`. The setting propagates through `GraphDataLoader`, `UnifiedDataLoader`, GraphGym dependency injection, and both training entry points.
+
+CLI: `--edge-direction top_down|bottom_up|bidirectional`  
+YAML: `expression_graph.edge_direction` (supervised) / `experiment.edge_direction` (RL)
+
+### 13.2 Feature classes & positional-encoding experiments
+Node/edge features are catalogued in `shared/utils/feature_config.py` by class:
+
+| Class | Enriched members |
+|---|---|
+| **node** | `node_type`, `label_id`, `value`, `has_value`, `virtual_*`, `belongs_to_*` |
+| **topology** | `depth`, `height`, `subtree_size`, `out_degree`, `betweenness_centrality` |
+| **positional** | `lpe_1..4` (Laplacian PE), `rwpe_1..4` (random-walk PE) |
+| **edge** | `child_index`, `direction`, `relation_type`, `edge_betweenness_centrality` |
+
+Grouped toggles in YAML (`expression_graph.features` / `experiment.features`):
+
+```yaml
+features:
+  node: true
+  topology: true
+  positional:
+    enabled: true
+    encodings: [lpe, rwpe]
+  edge: true
+active_features: ""   # optional explicit override list
+```
+
+CLI list arguments (supervised `main.py`, RL `main.py`, RL `train_best.py`):
+- `--feature-groups node topology positional` — enable only selected classes
+- `--positional-encoding lpe rwpe` — Laplacian and/or random-walk PE
+- `--positional-encoding none` — disable all positional encodings
+- `--active-features node_type,depth,lpe_1,...` — explicit override (disables group resolution)
+
+Examples:
+```bash
+# LPE only
+python main.py --config config_supervised.yaml --positional-encoding lpe
+
+# No positional encodings
+python main.py --config config_rl.yaml --positional-encoding none
+```
+
+Node-feature slicing is fully wired; the **edge** class is documented in config for overview (edge dim still follows `enrich` mode).
+
+### 13.3 Central RL YAML config
+- `reinforcement_learning/config_rl.yaml` — documents all RL CLI defaults (experiment, features, Optuna, gateway, train_best sections).
+- `reinforcement_learning/rl_config.py` — YAML loader + CLI override resolution shared by `main.py` and `train_best.py`.
+
+### 13.4 Tests
+- `test_graph_utils.py`: edge-direction tests (top_down, bottom_up, virtual edges stay bidirectional).
+- `test_feature_config.py`: group resolution, positional-encoding toggles, explicit overrides.
+- `test_rl_config.py`: RL YAML settings including feature selection.
+
+**Modified / added files:**
+- `shared/utils/graph_utils.py`, `graph_loader.py`, `unified_loader.py`
+- `shared/utils/feature_config.py` (new)
+- `supervised_learning/config_supervised.yaml`, `supervised_config.py`, `loader_graphgym.py`, `main.py`
+- `reinforcement_learning/config_rl.yaml`, `rl_config.py`, `main.py`, `train_best.py` (new config modules)
+- `time_management/config_base.yaml`, `time_management/benchmark.py`
+- `tests/test_graph_utils.py`, `tests/test_feature_config.py`, `tests/test_rl_config.py`
+
 

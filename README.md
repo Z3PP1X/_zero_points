@@ -15,11 +15,14 @@ Dieses Repository enthält eine vollständige Pipeline für maschinelles Lernen 
   * `aggregate_graphgym.py`: Aggregation der GraphGym-Läufe in CSVs.
   * `run_results/`: Post-Training-Evaluation (`post_eval.py`, `eval.py`, `training_curves.py`, `diagnostics.py`).
   * `config_supervised.yaml` & `grid.yaml`: Basis-Config und Hyperparameter-Grid für GraphGym.
-* `codebase/src/gnn/`: Dateien für Reinforcement Learning.
+* `codebase/src/gnn/reinforcement_learning/`: Dateien für Reinforcement Learning.
   * `main.py`: Einstiegspunkt für Phase 1 (Optuna Hyperparameter-Tuning).
   * `train_best.py`: Einstiegspunkt für Phase 2 (Bestes PPO-Modell trainieren).
-  * `shared/utils/graph_utils.py`: Kernmodul zur Graphml-Konvertierung, Feature-Extraktion und Verknüpfung von Ableitungen.
-  * `shared/utils/unified_loader.py`: Der neue vereinheitlichte `UnifiedDataLoader` (Singleton/Multiton-Muster) zur synchronen Verwaltung von Tabellen- und Graphen-Daten.
+  * `config_rl.yaml` & `rl_config.py`: Zentrale YAML-Defaults und CLI-Override-Auflösung für alle RL-Einstellungen.
+* `codebase/src/gnn/shared/utils/`:
+  * `graph_utils.py`: Kernmodul zur Graphml-Konvertierung, Feature-Extraktion, AST-Kantenrichtung und Verknüpfung von Ableitungen.
+  * `feature_config.py`: Feature-Katalog (node / topology / positional / edge) und Auflösung gruppenbasierter Feature-Toggles.
+  * `unified_loader.py`: Vereinheitlichter `UnifiedDataLoader` (Singleton/Multiton-Muster) zur synchronen Verwaltung von Tabellen- und Graphen-Daten.
 
 ---
 
@@ -63,24 +66,37 @@ python main.py --dry-run
 # 2. Spezifisches Dataset laden (Dry-Run oder Training):
 python main.py --dataset run_20260408_160456/dataset_4 --dry-run
 
-# 3. Standard GNN-Lauf im Graph-Modus (mit virtuellen Knoten) und 8 Basis-Features:
-python main.py --mode graph
+# 3. Standard GNN-Lauf im Graph-Modus (mit virtuellen Knoten):
+python main.py --config config_supervised.yaml --mode graph
 
-# 4. GNN-Lauf im Tree-Modus (Globale Features) mit 19 angereicherten (Enriched) Features:
-python main.py --mode tree --enrich
+# 4. GNN-Lauf im Tree-Modus mit angereicherten (Enriched) Features:
+python main.py --config config_supervised.yaml --mode tree
 
-# 5. GNN-Lauf mit dynamischer Feature-Filterung (Slicing):
-python main.py --mode graph --enrich --active-features "node_type,depth,value,virtual_current_x_val"
+# 5. Bottom-up Message Passing auf AST-Kanten (virtuelle Knoten bleiben bidirektional):
+python main.py --config config_supervised.yaml --edge-direction bottom_up
+
+# 6. Nur Laplacian-Positional-Encoding (LPE), ohne Random-Walk-PE (RWPE):
+python main.py --config config_supervised.yaml --positional-encoding lpe
+
+# 7. Keine Positional Encodings, nur Node- und Topologie-Features:
+python main.py --config config_supervised.yaml --feature-groups node topology --positional-encoding none
+
+# 8. Explizite Feature-Liste (überschreibt Gruppen-Toggles):
+python main.py --config config_supervised.yaml --active-features "node_type,depth,value,virtual_current_x_val"
 ```
 
 #### 📋 CLI-Optionen
 | Parameter | Standard | Optionen | Beschreibung |
 | :--- | :--- | :--- | :--- |
-| `--dataset` | `run_20260408_160456/dataset_4` | String | Pfad zum Dataset (z. B. `run_key/dataset_name`). |
+| `--config` | `config_supervised.yaml` | String | GraphGym-YAML mit Architektur-, Feature- und Graph-Einstellungen. |
+| `--dataset` | aus Config | String | Pfad zum Dataset (z. B. `run_key/dataset_name`). |
 | `--dry-run` | *aus* | Flag | Lädt den Datensatz kurz, um die Struktur zu validieren (ohne volles Training). |
 | `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` | Bestimmt das Graphen- und Features-Layout:<br>• `graph`: f, f' und f'' verbunden über den globalen Knoten + alle 3 virtuellen Knoten für dynamische Solver-Werte.<br>• `tree`: Nur der Funktionstree f (keine Ableitungen, keine Ableitungsknoten geladen) ohne virtuelle Knoten; dynamische Werte werden direkt als Slots auf dem globalen Knoten platziert.<br>• `tree_derivatives`: f, f' und f'' verbunden über den globalen Knoten (ohne virtuelle Knoten); dynamische Werte werden direkt auf dem globalen Knoten platziert. |
-| `--enrich` | *aus* | Flag | Schaltet zwischen **8 Basis-Features** (ohne Flag) und **19 angereicherten topologischen/spektralen Features** (mit Flag) um. |
-| `--active-features` | `None` | String (Komma-separiert) | Erlaubt die Übergabe einer exakten Teilmenge an Features (z. B. `"node_type,depth,value"`). Passt die Eingangsdimensionen des GNNs automatisch an. |
+| `--edge-direction` | `top_down` | `top_down`, `bottom_up`, `bidirectional` | AST-Message-Passing-Richtung (parent→child, child→parent oder beides). Kanten an virtuellen Knoten (`virtual_current_x`, `virtual_y_target`, `virtual_supernode`) bleiben immer bidirektional. |
+| `--feature-groups` | alle (aus Config) | Liste | Aktiviert nur bestimmte Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
+| `--positional-encoding` | `lpe rwpe` | Liste | Positional Encodings: `lpe` (Laplacian), `rwpe` (Random Walk), oder `none`. |
+| `--active-features` | `None` | String (Komma-separiert) | Explizite Teilmenge an Knoten-Features; überschreibt `--feature-groups` und `--positional-encoding`. |
+| `--enrich` | aus Config | Flag | Schaltet zwischen **12 Basis-Knoten-Features** und **24 angereicherten Knoten-Features** (plus native Edge-Features) um. |
 
 ---
 
@@ -202,10 +218,29 @@ Sie können Parameter direkt in `config_supervised.yaml` modifizieren:
   dataset:
     name: run_20260408_160456/dataset_4  # Pfad zum Datensatz
   expression_graph:
-    mode: graph        # graph oder tree
-    enrich: True       # Feature-Enrichment aktivieren/deaktivieren
-    active_features: "node_type,value"   # Optional: Feature-Selektion
+    mode: graph
+    enrich: True
+    edge_direction: top_down   # top_down | bottom_up | bidirectional
+    features:
+      node: true               # node_type, label_id, value, virtual_*, belongs_to_*
+      topology: true           # depth, height, subtree_size, out_degree, betweenness
+      positional:
+        enabled: true
+        encodings: [lpe, rwpe] # lpe = Laplacian PE, rwpe = Random-Walk PE
+      edge: true               # native edge_attr (child_index, direction, …)
+    active_features: ""        # Optional: explizite Override-Liste
   ```
+
+#### 🧩 Feature-Klassen (Übersicht)
+
+| Klasse | Enriched-Features |
+| :--- | :--- |
+| **node** | `node_type`, `label_id`, `value`, `has_value`, `virtual_*`, `belongs_to_*` |
+| **topology** | `depth`, `height`, `subtree_size`, `out_degree`, `betweenness_centrality` |
+| **positional** | `lpe_1..4` (Laplacian), `rwpe_1..4` (Random Walk) |
+| **edge** | `child_index`, `direction`, `relation_type`, `edge_betweenness_centrality` |
+
+Die Auflösung erfolgt zentral über `shared/utils/feature_config.py` und ist für Supervised und RL identisch.
 
 ---
 
@@ -218,21 +253,35 @@ Startet eine Optuna-Studie zur parallelen Suche der besten Hyperparameter (PPO-S
 
 #### 🏃 Befehlsbeispiele
 ```bash
-cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn
+cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/reinforcement_learning
 
-# Tuning-Lauf mit 4 parallelen mathematischen Slots starten:
-python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --n-envs 4
+# Tuning-Lauf mit zentraler YAML-Config und 4 parallelen Slots:
+python main.py --config config_rl.yaml --experiment kein_inv --n_trials 50 --timesteps 16384 --n-envs 4
+
+# Bidirektionales AST-Message-Passing:
+python main.py --config config_rl.yaml --edge-direction bidirectional
+
+# Nur LPE, ohne RWPE:
+python main.py --config config_rl.yaml --positional-encoding lpe
 
 # Pausierte Studie fortsetzen (Resume):
-python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --continue-study --n-envs 4
+python main.py --config config_rl.yaml --experiment kein_inv --continue-study --n-envs 4
 ```
 
 #### 📋 CLI-Optionen
-* `--experiment`: Datensatz/Graph-Ordner unter `graphs/` (`nur_f`, `f_fp_roh`, `kein_inv`).
-* `--timesteps`: PPO-Schritte pro Trial (Standard: `10000`).
-* `--n_trials`: Gesamtanzahl der Suchen (Standard: `50`).
-* `--n-envs`: Anzahl paralleler mathematischer Umgebungen (Standard: `1`).
-* `--continue-study`: Setzen Sie dieses Flag, um die letzte nicht abgeschlossene Studie fortzusetzen, anstatt sie zu überschreiben.
+| Parameter | Standard | Beschreibung |
+| :--- | :--- | :--- |
+| `--config` | `config_rl.yaml` | Zentrale YAML mit allen RL-Defaults (Experiment, Optuna, Gateway, train_best). |
+| `--experiment` | aus Config | Graph-Ordner: `nur_f`, `f_fp_roh`, `kein_inv`. |
+| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives`. |
+| `--edge-direction` | `top_down` | AST-Kantenrichtung; virtuelle Knoten bleiben bidirektional. |
+| `--feature-groups` | alle | Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
+| `--positional-encoding` | `lpe rwpe` | `lpe`, `rwpe`, oder `none`. |
+| `--active-features` | — | Explizite Knoten-Feature-Liste (überschreibt Gruppen). |
+| `--timesteps` | `10000` | PPO-Schritte pro Trial. |
+| `--n_trials` | `50` | Anzahl Optuna-Trials. |
+| `--n-envs` | `1` | Parallele Mathematica-Umgebungen. |
+| `--continue-study` | *aus* | Letzte Studie fortsetzen statt neu starten. |
 
 ---
 
@@ -241,21 +290,23 @@ Liest den besten Trial aus der SQLite-Optuna-Datenbank aus und trainiert das opt
 
 #### 🏃 Befehlsbeispiele
 ```bash
-cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn
+cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/reinforcement_learning
 
 # 1. Parameter-Überprüfung des besten Trials (Dry-Run):
-python train_best.py --db optuna_kein_inv_n45g69_20260527_163125.db --experiment kein_inv --dry-run
+python train_best.py --config config_rl.yaml --db optuna_kein_inv_n45g69_20260527_163125.db --dry-run
 
-# 2. Ausgedehntes Training (z.B. 300.000 Schritte) starten:
-python train_best.py --db optuna_kein_inv_n45g69_20260527_163125.db --experiment kein_inv --timesteps 300000 --n-envs 4
+# 2. Ausgedehntes Training mit Feature-Experiment (nur RWPE):
+python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps 300000 --positional-encoding rwpe --n-envs 4
 ```
 
 #### 📋 CLI-Optionen
 * `--db`: **Erforderlich**. Pfad zur SQLite-Optuna-Datenbankdatei.
-* `--timesteps`: Gesamte Anzahl der Trainingsschritte für das beste Modell (Standard: `250000`).
-* `--save-dir`: Speicherverzeichnis für Kontrollpunkte (Checkpoints) und Finalmodelle.
+* `--config`: YAML-Defaults (`config_rl.yaml`); explizite CLI-Flags überschreiben YAML-Werte.
+* `--edge-direction`, `--feature-groups`, `--positional-encoding`, `--active-features`: wie im Supervised-Workflow.
+* `--timesteps`: Gesamte Anzahl der Trainingsschritte (Standard aus `config_rl.yaml`: `250000`).
+* `--save-dir` / `--model-name`: Ausgabeordner und Modellname.
 * `--dry-run`: Lädt nur die Hyperparameter und initialisiert das Modell zu Testzwecken.
-* `--no-torch-compile`: Deaktiviert `torch.compile` für die GNN-Module (falls Kompatibilitätsprobleme auftreten).
+* `--no-torch-compile`: Deaktiviert `torch.compile` für die GNN-Module.
 
 ---
 
