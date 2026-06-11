@@ -51,6 +51,8 @@ class CuratedEvalCallback(pl.callbacks.Callback):
     def on_validation_epoch_end(self, trainer, pl_module):
         if self.curated_loader is None:
             return
+        if getattr(trainer, "sanity_checking", False):
+            return
 
         val_pr_auc_tensor = trainer.callback_metrics.get("val_pr_auc")
         if val_pr_auc_tensor is None:
@@ -100,8 +102,7 @@ class CuratedEvalCallback(pl.callbacks.Callback):
         with torch.no_grad():
             for batch in self.curated_loader:
                 batch = batch.to(pl_module.device)
-                batch.split = "test"
-                outputs = pl_module(batch)
+                outputs = pl_module._shared_step(batch, split="test")
                 if outputs is None:
                     continue
                 loss = float(outputs["loss"])
