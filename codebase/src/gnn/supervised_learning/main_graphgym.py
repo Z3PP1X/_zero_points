@@ -112,36 +112,47 @@ class CuratedEvalCallback(pl.callbacks.Callback):
                 pred_parts.append(outputs["pred_score"].detach().cpu())
 
         if count == 0:
-            return {"loss": 0.0, "auc": 0.0, "pr_auc": 0.0}
+            return {
+                "loss": 0.0,
+                "auc": 0.0,
+                "pr_auc": 0.0,
+                "true": None,
+                "pred": None,
+            }
 
         true = torch.cat(true_parts)
         pred = torch.cat(pred_parts)
         metric_values = compute_binary_metrics(true, pred)
         return {
             "loss": loss_sum / count,
+            "true": true,
+            "pred": pred,
             **metric_values,
         }
 
     @staticmethod
-    def _write_test_logger_stats(trainer, metrics: dict[str, float]) -> None:
+    def _write_test_logger_stats(trainer, metrics: dict) -> None:
+        true = metrics.get("true")
+        pred = metrics.get("pred")
+        if true is None or pred is None or true.numel() == 0:
+            return
+
         for callback in trainer.callbacks:
             if not isinstance(callback, LoggerCallback):
                 continue
             if len(callback._logger) <= 2:
                 return
-            stats = {
-                "loss": round(metrics["loss"], cfg.round),
-                "lr": 0,
-                "time_iter": 0,
-                "accuracy": metrics.get("accuracy", 0.0),
-                "precision": metrics.get("precision", 0.0),
-                "recall": metrics.get("recall", 0.0),
-                "f1": metrics.get("f1", 0.0),
-                "auc": metrics.get("auc", 0.0),
-                "pr_auc": metrics.get("pr_auc", 0.0),
-            }
-            callback.test_logger.update_stats(**stats)
-            callback.test_logger.write_epoch(trainer.current_epoch)
+            test_logger = callback.test_logger
+            test_logger.reset()
+            test_logger.update_stats(
+                true=true,
+                pred=pred,
+                loss=float(metrics["loss"]),
+                lr=0.0,
+                time_used=0.0,
+                params=cfg.params,
+            )
+            test_logger.write_epoch(trainer.current_epoch)
             return
 
 

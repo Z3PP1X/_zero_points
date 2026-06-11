@@ -174,6 +174,13 @@ _orig_logger_basic = pyg_logger.Logger.basic
 
 
 def custom_logger_basic(self):
+    if self._size_current == 0:
+        return {
+            "loss": 0.0,
+            "lr": round(self._lr, cfg.round),
+            "params": self._params,
+            "time_iter": 0.0,
+        }
     stats = _orig_logger_basic(self)
     stats["base_lr"] = round(float(getattr(cfg.optim, "base_lr", 0.0)), cfg.round)
     return stats
@@ -194,9 +201,10 @@ def custom_on_validation_batch_end(self, trainer, pl_module, outputs, batch, bat
         self.test_logger.update_stats(**stats)
 
 def custom_on_validation_epoch_end(self, trainer, pl_module):
-    self.val_logger.write_epoch(trainer.current_epoch)
-    if len(self._logger) > 2:
-        self.test_logger.write_epoch(trainer.current_epoch)
+    if self.val_logger._size_current > 0:
+        self.val_logger.write_epoch(trainer.current_epoch)
+    # Curated holdout (test split) is logged on a schedule via CuratedEvalCallback,
+    # not during every synthetic validation epoch.
 
 pyg_logger.LoggerCallback.on_validation_batch_end = custom_on_validation_batch_end
 pyg_logger.LoggerCallback.on_validation_epoch_end = custom_on_validation_epoch_end
