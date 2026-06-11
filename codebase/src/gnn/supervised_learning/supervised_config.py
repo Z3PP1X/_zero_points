@@ -22,17 +22,34 @@ from gnn.shared.utils.graph_utils import (
     validate_edge_direction,
 )
 
-SUPERVISED_LAYER_TYPES: tuple[str, ...] = ("gatv2conv", "gineconv")
+SUPERVISED_LAYER_TYPES: tuple[str, ...] = (
+    "gatv2conv",
+    "gineconv",
+    "gcnconv",
+    "ginconv",
+)
 
 LAYER_TYPE_TO_ARCHITECTURE: dict[str, str] = {
     "gatv2conv": "gatv2_stack",
     "gineconv": "gine_stack",
+    "gcnconv": "gcn_stack",
+    "ginconv": "gin_stack",
 }
+
+LAYERS_WITHOUT_EDGE_FEATURES: frozenset[str] = frozenset({"gcnconv", "ginconv"})
 
 
 def load_yaml_config(path: Path | str) -> dict[str, Any]:
     with open(path, "r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
+
+
+def _warn_no_edge_features(layer_type: str) -> None:
+    if layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
+        architecture = LAYER_TYPE_TO_ARCHITECTURE[layer_type]
+        print(
+            f"Warning: selected architecture {architecture} does not support edge_features"
+        )
 
 
 def validate_layer_type(layer_type: str) -> str:
@@ -41,6 +58,7 @@ def validate_layer_type(layer_type: str) -> str:
             f"Unsupported gnn.layer_type {layer_type!r}; "
             f"expected one of {list(SUPERVISED_LAYER_TYPES)}"
         )
+    _warn_no_edge_features(layer_type)
     return layer_type
 
 
