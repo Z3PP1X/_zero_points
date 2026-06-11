@@ -42,7 +42,8 @@ expression_graph:
 # --- Training Loop Section ---
 train:
   mode: custom
-  batch_size: 256
+  batch_size: 2048
+  num_workers: 0
   eval_period: 10
   ckpt_period: 20
   epoch_warmup: 5

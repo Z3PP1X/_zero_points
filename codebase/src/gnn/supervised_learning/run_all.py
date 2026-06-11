@@ -102,9 +102,9 @@ def main():
         "-n",
         "--num",
         type=int,
-        default=2,
+        default=1,
         metavar="N",
-        help="Number of parallel training jobs when --parallel is set (default: 2)",
+        help="Number of parallel training jobs when --parallel is set (default: 1)",
     )
     parser.add_argument(
         "--skip-training",
@@ -136,6 +136,10 @@ def main():
 
     if args.num < 1:
         parser.error("--num must be at least 1")
+    
+    if args.parallel and args.num > 2:
+        print(f"[Orchestrator] Warning: --num {args.num} requested, but running >2 experiments concurrently can cause CPU starvation. Capping to 2.")
+        args.num = 2
 
     script_dir = Path(__file__).resolve().parent
     gnn_root = script_dir.parent

@@ -40,6 +40,14 @@ class GraphDataLoader:
         self.source_path = self._resolve_source(name, base_dir)
         print(f"[GraphDataLoader] Resolved graph source for '{name}' to: {self.source_path}")
 
+        # Setup disk cache directory
+        if self.source_path.is_file():
+            self.cache_dir = self.source_path.parent / ".pt_cache" / self.source_path.stem
+        else:
+            self.cache_dir = self.source_path / ".pt_cache"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[GraphDataLoader] Using disk cache at: {self.cache_dir}")
+
         self._raw_sources: dict[str, Union[dict, Path]] = {}
         self._converted_cache: dict[str, Union[Data, HeteroData]] = {}
 
@@ -168,6 +176,7 @@ class GraphDataLoader:
         return str(graph_id) in self._raw_sources
 
     def get_graph(self, graph_id: Any) -> Union[Data, HeteroData]:
+        import torch
         gid_str = str(graph_id)
         if gid_str not in self._raw_sources:
             raise KeyError(f"Graph ID '{gid_str}' not found in loaded graphs.")
@@ -175,6 +184,18 @@ class GraphDataLoader:
         # Return clone from memory cache if already converted
         if gid_str in self._converted_cache:
             return self._converted_cache[gid_str].clone()
+
+        # Check disk cache
+        # Clean graph_id to prevent path issues
+        clean_gid = "".join(c for c in gid_str if c.isalnum() or c in ('_', '-'))
+        cache_file = self.cache_dir / f"{clean_gid}_{self.mode}_{self.enrich}_{self.heterogeneous}_{self.edge_direction}.pt"
+        if cache_file.exists():
+            try:
+                converted = torch.load(cache_file, weights_only=False)
+                self._converted_cache[gid_str] = converted
+                return converted.clone()
+            except Exception as e:
+                logger.warning(f"Failed to load cached graph {cache_file}: {e}")
 
         # Retrieve and parse raw data
         raw_val = self._raw_sources[gid_str]
@@ -192,6 +213,13 @@ class GraphDataLoader:
             mode=self.mode,
             edge_direction=self.edge_direction,
         )
+        
+        # Save to disk cache
+        try:
+            torch.save(converted, cache_file)
+        except Exception as e:
+            logger.warning(f"Failed to save cached graph {cache_file}: {e}")
+
         self._converted_cache[gid_str] = converted
         return converted.clone()
 

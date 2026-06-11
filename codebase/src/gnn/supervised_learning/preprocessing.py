@@ -14,7 +14,7 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from gnn.supervised_learning.dataset import DatasetLoader
-from gnn.shared.utils.graph_utils import GraphConversionPipeline
+from gnn.shared.utils.graph_utils import GraphConversionPipeline, populate_task_virtual_values, slice_active_features
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.shared.utils.unified_loader import UnifiedDataLoader
 from gnn.supervised_learning.supervised_config import (
@@ -345,6 +345,14 @@ class ProblemRunDataset(Dataset):
         self.mode = mode
         self.enrich = enrich
         self.active_features = active_features
+        
+        self._node_id_indices = {}
+        for pid, graph in self.base_graphs.items():
+            if hasattr(graph, 'node_types') and 'virtual' in graph.node_types:
+                if hasattr(graph['virtual'], 'node_ids') and graph['virtual'].node_ids is not None:
+                    self._node_id_indices[pid] = {nid: i for i, nid in enumerate(graph['virtual'].node_ids)}
+            elif hasattr(graph, 'node_ids') and graph.node_ids is not None:
+                self._node_id_indices[pid] = {nid: i for i, nid in enumerate(graph.node_ids)}
 
     def __len__(self):
         return len(self.df)
@@ -374,8 +382,7 @@ class ProblemRunDataset(Dataset):
         )
         data.pid = pid
 
-        from gnn.shared.utils.graph_utils import populate_task_virtual_values
-
+        # Use the pre-imported populate_task_virtual_values
         populate_task_virtual_values(
             data,
             cx_val=cx_val,
@@ -386,11 +393,11 @@ class ProblemRunDataset(Dataset):
             mode=self.mode,
             enrich=self.enrich,
             set_has_value=not self.enrich,
+            node_id_indices=self._node_id_indices.get(pid),
         )
 
         # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:
-            from gnn.shared.utils.graph_utils import slice_active_features
             data.x = slice_active_features(data.x, self.active_features, enrich=self.enrich)
 
         # Remove laplacian if present to prevent PyG collation mismatch errors

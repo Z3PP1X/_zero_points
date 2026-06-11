@@ -374,6 +374,10 @@ class ExpressionGraphDataset(InMemoryDataset):
         self._data.train_graph_index = torch.tensor(train_idx, dtype=torch.long)
         self._data.val_graph_index = torch.tensor(val_idx, dtype=torch.long)
         self._data.test_graph_index = torch.tensor(test_idx, dtype=torch.long)
+        
+        if torch.cuda.is_available():
+            print("[GraphGym] Moving entire dataset to GPU memory...")
+            self._data = self._data.to('cuda')
 
 
 def set_custom_cfg(cfg):

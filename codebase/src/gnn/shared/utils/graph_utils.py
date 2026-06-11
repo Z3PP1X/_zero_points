@@ -1356,6 +1356,7 @@ def populate_task_virtual_values(
     mode: str = "graph",
     enrich: bool = True,
     set_has_value: bool = False,
+    node_id_indices: dict[str, int] | None = None,
 ) -> None:
     """Write current iterate / function values onto task virtual and aggregator nodes."""
     if isinstance(data, HeteroData):
@@ -1367,7 +1368,11 @@ def populate_task_virtual_values(
         virtual_node_ids = data['virtual'].node_ids
         
         def write_hetero(node_id: str, col_idx: int, value: float) -> None:
-            if node_id in virtual_node_ids:
+            if node_id_indices is not None:
+                if node_id in node_id_indices:
+                    idx = node_id_indices[node_id]
+                    data['virtual'].x[idx, col_idx] = float(signed_log_value(value))
+            elif node_id in virtual_node_ids:
                 idx = virtual_node_ids.index(node_id)
                 data['virtual'].x[idx, col_idx] = float(signed_log_value(value))
                 
@@ -1406,7 +1411,12 @@ def populate_task_virtual_values(
     has_idx = schema.index("has_value") if set_has_value else None
 
     def write(node_id: str, col_idx: int, value: float) -> None:
-        idx = data.node_ids.index(node_id)
+        if node_id_indices is not None:
+            if node_id not in node_id_indices:
+                raise ValueError
+            idx = node_id_indices[node_id]
+        else:
+            idx = data.node_ids.index(node_id)
         data.x[idx, col_idx] = float(signed_log_value(value))
         if has_idx is not None:
             data.x[idx, has_idx] = 1.0
