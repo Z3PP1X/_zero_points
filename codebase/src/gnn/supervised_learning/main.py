@@ -165,6 +165,61 @@ def log_confusion_matrix(y_true, y_pred, epoch: int):
             pass
 
 
+def save_supervised_training_curves(history, output_path: Path):
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    metrics_to_plot = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "ece"]
+    key_mapping = {
+        "pr_auc": "PR_AUC/val",
+        "auc": "AUC/val",
+        "loss": "Loss/val",
+        "f1": "F1",
+        "mean_confidence": "mean_confidence",
+        "ece": "ece",
+    }
+    
+    n_metrics = len(metrics_to_plot)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(11, 3.2 * n_metrics), dpi=150)
+    axes = np.atleast_1d(axes)
+    
+    epochs = history["epoch"]
+    
+    for ax, metric in zip(axes, metrics_to_plot):
+        history_key = key_mapping[metric]
+        if history_key in history:
+            ax.plot(
+                epochs,
+                history[history_key],
+                marker="o",
+                linewidth=2,
+                markersize=4,
+                label=f"Validation {metric.upper()}",
+                color="#E76F51",
+            )
+        if metric == "loss" and "Loss/train" in history:
+            ax.plot(
+                epochs,
+                history["Loss/train"],
+                marker="o",
+                linewidth=2,
+                markersize=4,
+                label="Train Loss",
+                color="#2A9D8F",
+            )
+        ax.set_title(metric.upper(), fontsize=11, fontweight="bold")
+        ax.set_xlabel("Epoch")
+        ax.grid(axis="y", linestyle="--", alpha=0.4)
+        ax.legend(fontsize=8, frameon=False)
+        
+    plt.suptitle("Supervised Learning Training Curves", fontsize=14, fontweight="bold", y=1.01)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved training curves to {output_path}")
+
+
 def main(
     config_path: Path,
     dataset_name: str,
@@ -297,6 +352,19 @@ def main(
         )
 
         best_val_pr_auc = float("-inf")
+        history = {
+            "epoch": [],
+            "Loss/train": [],
+            "Loss/val": [],
+            "Accuracy/val": [],
+            "F1": [],
+            "Precision": [],
+            "Recall": [],
+            "AUC/val": [],
+            "PR_AUC/val": [],
+            "mean_confidence": [],
+            "ece": [],
+        }
 
         for epoch in range(epochs):
             print(f"\n--- Epoch {epoch + 1}/{epochs} ---")
@@ -324,6 +392,18 @@ def main(
                 },
                 step=epoch,
             )
+
+            history["epoch"].append(epoch)
+            history["Loss/train"].append(train_loss)
+            history["Loss/val"].append(val_loss)
+            history["Accuracy/val"].append(metrics["accuracy"])
+            history["F1"].append(metrics["f1"])
+            history["Precision"].append(metrics["precision"])
+            history["Recall"].append(metrics["recall"])
+            history["AUC/val"].append(metrics["auc"])
+            history["PR_AUC/val"].append(metrics["pr_auc"])
+            history["mean_confidence"].append(metrics.get("mean_confidence", 0.0))
+            history["ece"].append(metrics.get("ece", 0.0))
 
             print(
                 f"Epoch {epoch + 1}/{epochs} | "
@@ -395,6 +475,13 @@ def main(
                 f"PR-AUC: {cur_metrics['pr_auc']:.4f}"
             )
             print("-" * 50)
+
+        try:
+            curves_path = save_dir / "training_curves.png"
+            save_supervised_training_curves(history, curves_path)
+            mlflow.log_artifact(str(curves_path))
+        except Exception as exc:
+            print(f"Warning: Failed to generate or log training curves: {exc}")
 
         mlflow.pytorch.log_model(model, "model")
 

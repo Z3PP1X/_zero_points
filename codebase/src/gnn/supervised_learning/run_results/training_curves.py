@@ -170,6 +170,20 @@ class TrainingCurvePlotter:
             slug = run_dir.name.removeprefix("grid-")
             output_path = out_root / slug / "training_curves.png"
             title = f"Training Curves — {slug} — {self.experiment_name}"
+            
+            # Also save inside the run directory itself
+            try:
+                run_output_path = run_dir / "training_curves.png"
+                self._plot_series(
+                    series,
+                    title,
+                    run_output_path,
+                    best_epoch=self._best_val_epoch(series),
+                    verbose=False,
+                )
+            except Exception as e:
+                print(f"    Warning: Failed to save training curves inside run dir {run_dir}: {e}")
+
             if self._plot_series(
                 series,
                 title,

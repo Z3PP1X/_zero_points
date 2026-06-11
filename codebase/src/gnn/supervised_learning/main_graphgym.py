@@ -293,6 +293,28 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     except Exception as exc:
         print(f"[GraphGym] Feature importance analysis failed: {exc}")
 
+    try:
+        from gnn.supervised_learning.run_results.training_curves import TrainingCurvePlotter
+        plotter = TrainingCurvePlotter(
+            results_dir=Path(cfg.out_dir).parent,
+            output_dir=Path(cfg.out_dir).parent / "eval_plots",
+            experiment_name=Path(cfg.out_dir).parent.name
+        )
+        run_dir = Path(cfg.out_dir)
+        series = plotter._load_run_series(run_dir)
+        if series:
+            title = f"Training Curves — {run_dir.name} — {Path(cfg.out_dir).parent.name}"
+            output_path = run_dir / "training_curves.png"
+            plotter._plot_series(
+                series,
+                title,
+                output_path,
+                best_epoch=plotter._best_val_epoch(series),
+                verbose=True
+            )
+    except Exception as exc:
+        print(f"[GraphGym] Failed to generate training curves for configuration: {exc}")
+
     return best_path
 
 
