@@ -253,6 +253,7 @@ def main(
     synthetic_dataset: str | None = None,
     layer_type: str = "gatv2conv",
     edge_direction: str = "top_down",
+    heterogeneous: bool = False,
 ):
     seed = DEFAULT_SEED
     cfg = bootstrap_graphgym_cfg(config_path, seed=seed)
@@ -266,6 +267,7 @@ def main(
         synthetic=synthetic,
         synthetic_dataset=synthetic_dataset,
         edge_direction=edge_direction,
+        heterogeneous=heterogeneous,
     )
     resolved_active_features = (
         None
@@ -292,6 +294,7 @@ def main(
         dataset_name=dataset_name,
         mode=mode,
         enrich=enrich,
+        heterogeneous=heterogeneous,
         edge_direction=edge_direction,
     )
 
@@ -305,6 +308,7 @@ def main(
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
         layer_type=layer_type,
+        heterogeneous=heterogeneous,
     )
 
     train_loader, val_loader, class_weights = pipeline.pipe(
@@ -585,6 +589,11 @@ if __name__ == "__main__":
         default=None,
         help="Synthetic dataset name, optionally including run key (e.g. synthetic_run_key/synthetic_dataset_name)",
     )
+    parser.add_argument(
+        "--heterogeneous",
+        action="store_true",
+        help="Enables heterogeneous graph mode.",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -601,6 +610,7 @@ if __name__ == "__main__":
     layer_type = settings["layer_type"]
     synthetic = args.synthetic or settings["synthetic"]
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
+    heterogeneous = args.heterogeneous or settings["heterogeneous"]
 
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
@@ -609,6 +619,7 @@ if __name__ == "__main__":
             dataset_name=dataset_name,
             mode=mode,
             enrich=enrich,
+            heterogeneous=heterogeneous,
             edge_direction=edge_direction,
         )
         print("Curated dataset loaded successfully!")
@@ -623,6 +634,7 @@ if __name__ == "__main__":
                 dataset_name=synthetic_dataset,
                 mode=mode,
                 enrich=enrich,
+                heterogeneous=heterogeneous,
                 edge_direction=edge_direction,
             )
             print("Synthetic dataset loaded successfully!")
@@ -660,6 +672,7 @@ if __name__ == "__main__":
                 synthetic_dataset=synthetic_dataset,
                 layer_type=layer_type,
                 edge_direction=edge_direction,
+                heterogeneous=heterogeneous,
             )
         except Exception as e:
             print(

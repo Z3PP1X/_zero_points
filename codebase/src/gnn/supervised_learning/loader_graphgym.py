@@ -397,6 +397,7 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.synthetic = False
     cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name
     cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
+    cfg.expression_graph.heterogeneous = False  # heterogeneous or homogeneous graph representation
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
@@ -446,6 +447,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     edge_direction = validate_edge_direction(
         getattr(cfg.expression_graph, "edge_direction", "top_down")
     )
+    heterogeneous = getattr(cfg.expression_graph, "heterogeneous", False)
 
     feature_selection, active_features = resolve_expression_graph_features(
         {
@@ -476,6 +478,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Edge Direction: {edge_direction}")
     if synthetic:
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
+    print(f"  Injected Heterogeneous:  {heterogeneous}")
     print(f"  Injected Feature Groups: {feature_selection.enabled_groups()}")
     print(f"  Injected Positional:     {list(feature_selection.positional_encodings)}")
     print(f"  Injected Features:       {feature_selection.summary(enrich)}")
@@ -487,7 +490,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         name=dataset_name,
         mode=mode,
         enrich=enrich,
-        heterogeneous=False,
+        heterogeneous=heterogeneous,
         edge_direction=edge_direction,
     )
 
@@ -501,6 +504,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
         layer_type=layer_type,
+        heterogeneous=heterogeneous,
     )
 
     pipeline.pipe(

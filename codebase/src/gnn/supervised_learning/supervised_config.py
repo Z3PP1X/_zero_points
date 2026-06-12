@@ -134,6 +134,7 @@ def apply_expression_graph_overrides(
     synthetic: bool | None = None,
     synthetic_dataset: str | None = None,
     edge_direction: str | None = None,
+    heterogeneous: bool | None = None,
 ) -> FeatureSelection:
     """Apply CLI overrides onto a loaded GraphGym cfg."""
     if mode is not None:
@@ -161,6 +162,8 @@ def apply_expression_graph_overrides(
         cfg.expression_graph.synthetic_dataset = synthetic_dataset
     if edge_direction is not None:
         cfg.expression_graph.edge_direction = validate_edge_direction(edge_direction)
+    if heterogeneous is not None:
+        cfg.expression_graph.heterogeneous = heterogeneous
     return selection
 
 
@@ -201,4 +204,5 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
         "synthetic_dataset": expression_graph.get("synthetic_dataset") or None,
         "active_features": active_features,
         "feature_selection": feature_selection,
+        "heterogeneous": bool(expression_graph.get("heterogeneous", False)),
     }

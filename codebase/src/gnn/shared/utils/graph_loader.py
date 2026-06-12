@@ -1,9 +1,12 @@
 import json
 import logging
 from pathlib import Path
-from typing import Union, Any, Dict, Set
+from typing import Union, Any, Set
 from torch_geometric.data import Data, HeteroData
-from gnn.shared.utils.graph_utils import ExpressionGraphConverter, validate_edge_direction
+from gnn.shared.utils.graph_utils import (
+    ExpressionGraphConverter,
+    validate_edge_direction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,7 @@ class GraphDataLoader:
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
+        kappas_dir: Union[Path, str, None] = None,
     ):
         self.name = name
         self.mode = mode
@@ -39,6 +43,23 @@ class GraphDataLoader:
         # Resolve the source path (root graphs vs legacy fallbacks)
         self.source_path = self._resolve_source(name, base_dir)
         print(f"[GraphDataLoader] Resolved graph source for '{name}' to: {self.source_path}")
+
+        # Resolve repo_root for default kappas_dir
+        current = Path(__file__).resolve()
+        repo_root = None
+        for parent in current.parents:
+            if (parent / ".git").exists() or parent.name == "_zero_points":
+                repo_root = parent
+                break
+        if repo_root is None:
+            repo_root = current.parents[5]
+
+        if kappas_dir is not None:
+            self.kappas_dir = Path(kappas_dir)
+            self.kappas_dir_explicit = True
+        else:
+            self.kappas_dir = repo_root / "datasets" / "kappas"
+            self.kappas_dir_explicit = False
 
         # Setup disk cache directory
         if self.source_path.is_file():
@@ -185,10 +206,27 @@ class GraphDataLoader:
         if gid_str in self._converted_cache:
             return self._converted_cache[gid_str].clone()
 
+        # Check if the kappa folder exists and contains json files
+        use_augmented = False
+        if self.kappas_dir.exists() and any(self.kappas_dir.glob("**/*.json")):
+            source_str = str(self.source_path)
+            is_temp = (
+                "/tmp" in source_str
+                or "pytest" in source_str
+                or "temp" in source_str
+            )
+            if self.kappas_dir_explicit or not is_temp:
+                use_augmented = True
+
         # Check disk cache
         # Clean graph_id to prevent path issues
         clean_gid = "".join(c for c in gid_str if c.isalnum() or c in ('_', '-'))
-        cache_file = self.cache_dir / f"{clean_gid}_{self.mode}_{self.enrich}_{self.heterogeneous}_{self.edge_direction}.pt"
+        suffix = "_augmented.pt" if use_augmented else ".pt"
+        cache_file = self.cache_dir / (
+            f"{clean_gid}_{self.mode}_{self.enrich}_"
+            f"{self.heterogeneous}_{self.edge_direction}{suffix}"
+        )
+
         if cache_file.exists():
             try:
                 converted = torch.load(cache_file, weights_only=False)
@@ -197,23 +235,39 @@ class GraphDataLoader:
             except Exception as e:
                 logger.warning(f"Failed to load cached graph {cache_file}: {e}")
 
-        # Retrieve and parse raw data
-        raw_val = self._raw_sources[gid_str]
-        if isinstance(raw_val, Path):
-            with open(raw_val, "r", encoding="utf-8") as f:
-                raw_dict = json.load(f)
+        if use_augmented:
+            # Load the augmented NetworkX DiGraph using LoadAugmentedFunctionGraph
+            from gnn.shared.utils.graph_utils import LoadAugmentedFunctionGraph
+            main_graph = LoadAugmentedFunctionGraph(
+                graphId=gid_str,
+                graphsFolder=self.source_path,
+                kappasFolder=self.kappas_dir
+            )
+            converted = self.converter.convert(
+                main_graph,
+                heterogeneous=self.heterogeneous,
+                enrich=self.enrich,
+                mode=self.mode,
+                edge_direction=self.edge_direction,
+            )
         else:
-            raw_dict = raw_val
+            # Retrieve and parse raw data
+            raw_val = self._raw_sources[gid_str]
+            if isinstance(raw_val, Path):
+                with open(raw_val, "r", encoding="utf-8") as f:
+                    raw_dict = json.load(f)
+            else:
+                raw_dict = raw_val
 
-        # Convert to PyG object
-        converted = self.converter.convert(
-            raw_dict,
-            heterogeneous=self.heterogeneous,
-            enrich=self.enrich,
-            mode=self.mode,
-            edge_direction=self.edge_direction,
-        )
-        
+            # Convert to PyG object
+            converted = self.converter.convert(
+                raw_dict,
+                heterogeneous=self.heterogeneous,
+                enrich=self.enrich,
+                mode=self.mode,
+                edge_direction=self.edge_direction,
+            )
+
         # Save to disk cache
         try:
             torch.save(converted, cache_file)

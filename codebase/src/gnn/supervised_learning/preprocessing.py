@@ -14,7 +14,7 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from gnn.supervised_learning.dataset import DatasetLoader
-from gnn.shared.utils.graph_utils import GraphConversionPipeline, populate_task_virtual_values, slice_active_features
+from gnn.shared.utils.graph_utils import GraphConversionPipeline, populate_task_virtual_values, slice_active_features, filter_active_kappa
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.shared.utils.unified_loader import UnifiedDataLoader
 from gnn.supervised_learning.supervised_config import (
@@ -60,6 +60,7 @@ class GraphPipeline:
         synthetic: bool = False,
         synthetic_dataset_name: str | None = None,
         layer_type: str = "gatv2conv",
+        heterogeneous: bool = False,
     ):
         self.seed = seed
         self.mode = mode
@@ -68,6 +69,7 @@ class GraphPipeline:
         self.synthetic = synthetic
         self.synthetic_dataset_name = synthetic_dataset_name if synthetic_dataset_name else None
         self.layer_type = validate_layer_type(layer_type)
+        self.heterogeneous = heterogeneous
 
         # Use unified_loader or get/create singleton instance
         if unified_loader is not None:
@@ -77,6 +79,7 @@ class GraphPipeline:
                 dataset_name=dataset_name,
                 mode=mode,
                 enrich=enrich,
+                heterogeneous=heterogeneous,
             )
 
         if self.synthetic and self.synthetic_dataset_name is not None:
@@ -84,6 +87,7 @@ class GraphPipeline:
                 dataset_name=self.synthetic_dataset_name,
                 mode=mode,
                 enrich=enrich,
+                heterogeneous=heterogeneous,
                 is_synthetic=True,
             )
         else:
@@ -403,5 +407,9 @@ class ProblemRunDataset(Dataset):
         # Remove laplacian if present to prevent PyG collation mismatch errors
         if hasattr(data, "laplacian"):
             del data.laplacian
+
+        # Filter the graph to keep only the active kappa graph
+        kappa_val = row.get("kappa", None)
+        data = filter_active_kappa(data, kappa_val)
 
         return data

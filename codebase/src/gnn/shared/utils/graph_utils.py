@@ -787,192 +787,299 @@ class ExpressionGraphConverter:
 
     def convert(
         self,
-        source: Union[str, Path, dict],
+        source: Union[str, Path, dict, nx.DiGraph],
         heterogeneous: bool = False,
         enrich: bool = True,
         mode: str = "graph",
         edge_direction: str = "top_down",
     ) -> Union[Data, HeteroData]:
         edge_direction = validate_edge_direction(edge_direction)
-        raw = self._load(source)
         
-        # Make a copy of raw to avoid modifying the original dict in-place if passed as object
-        raw = dict(raw)
-        
-        # Check if the raw data is in the new GraphML string container format
-        if "graphml_f" in raw:
-            nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
+        if isinstance(source, nx.DiGraph):
+            # Extract AST nodes and edges to construct G_ast for topological extraction
+            ast_nodes = [
+                n for n in source.nodes 
+                if n not in ("global", "f_root", "d1_root", "d2_root", "virtual_supernode") 
+                and not str(n).startswith("kappa_")
+            ]
+            G_ast = source.subgraph(ast_nodes).copy()
+            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast, enrich=enrich)
+            ast_node_ids = list(G_ast.nodes)
+            ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
             
-            # If mode is tree, we only compile the function graph f.
-            # If mode is tree_derivatives or graph, we compile all three (f, f', f'').
-            if mode in ["tree_derivatives", "graph"]:
-                nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
-                nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
+            node_ids = list(source.nodes)
+            G_directed = source
+            
+            # Enrich/add features to G_enriched
+            G_enriched = nx.DiGraph()
+            
+            if enrich:
+                for node in node_ids:
+                    attrs = source.nodes[node]
+                    enriched_attrs = attrs.copy()
+                    ast_idx = ast_id_to_idx.get(node)
+
+                    if ast_idx is not None:
+                        enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
+                        enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
+                        enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
+                        enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
+                        enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
+                        enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
+                        enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
+                        enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
+                        enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
+                        enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
+                        enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
+                        enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
+                        enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                    else:
+                        enriched_attrs["depth"] = 0.0
+                        enriched_attrs["height"] = 0.0
+                        enriched_attrs["subtree_size"] = 1.0
+                        enriched_attrs["out_degree"] = 0.0
+                        enriched_attrs["betweenness_centrality"] = 0.0
+                        enriched_attrs["lpe_1"] = 0.0
+                        enriched_attrs["lpe_2"] = 0.0
+                        enriched_attrs["lpe_3"] = 0.0
+                        enriched_attrs["lpe_4"] = 0.0
+                        enriched_attrs["rwpe_1"] = 0.0
+                        enriched_attrs["rwpe_2"] = 0.0
+                        enriched_attrs["rwpe_3"] = 0.0
+                        enriched_attrs["rwpe_4"] = 0.0
+
+                    G_enriched.add_node(node, **enriched_attrs)
+
+                child_counters = {}
+                for u, v, attrs in source.edges(data=True):
+                    if "relation_type" in attrs or "child_index" in attrs or "direction" in attrs:
+                        G_enriched.add_edge(u, v, **attrs)
+                        continue
+                        
+                    parent = u
+                    child = v
+                    etype = attrs.get("type") or attrs.get("etype") or "child_of"
+
+                    child_idx = child_counters.get(parent, 0)
+                    child_counters[parent] = child_idx + 1
+
+                    eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
+                    self._add_enriched_ast_edges(
+                        G_enriched, parent, child, child_idx, etype, eb_val, edge_direction
+                    )
             else:
-                nodes_d1, edges_d1 = [], []
-                nodes_d2, edges_d2 = [], []
-            
-            combined_nodes = nodes_f + nodes_d1 + nodes_d2
-            combined_nodes.insert(0, {
-                "id": "global",
-                "label": "GLOBAL",
-                "type": "global",
-                "value": None
-            })
-            
-            roots_f = find_roots(nodes_f, edges_f)
-            roots_d1 = find_roots(nodes_d1, edges_d1)
-            roots_d2 = find_roots(nodes_d2, edges_d2)
+                ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
+                for node in node_ids:
+                    attrs = source.nodes[node]
+                    enriched_attrs = attrs.copy()
+                    enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
+                    G_enriched.add_node(node, **enriched_attrs)
 
-            combined_edges = edges_f + edges_d1 + edges_d2
-            if roots_f:
-                combined_nodes.append({
-                    "id": "f_root", "label": "f_root", "type": "f_root", "value": None
-                })
-                combined_edges.append({"source": "f_root", "target": "global", "type": "belongs_to_f"})
-                for root in roots_f:
-                    combined_edges.append({"source": root, "target": "f_root", "type": "child_of"})
-            if roots_d1:
-                combined_nodes.append({
-                    "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
-                })
-                combined_edges.append({"source": "d1_root", "target": "global", "type": "belongs_to_d1"})
-                for root in roots_d1:
-                    combined_edges.append({"source": root, "target": "d1_root", "type": "child_of"})
-            if roots_d2:
-                combined_nodes.append({
-                    "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
-                })
-                combined_edges.append({"source": "d2_root", "target": "global", "type": "belongs_to_d2"})
-                for root in roots_d2:
-                    combined_edges.append({"source": root, "target": "d2_root", "type": "child_of"})
+                child_counters = {}
+                for u, v, attrs in source.edges(data=True):
+                    if "edge_type" in attrs or "child_index" in attrs:
+                        G_enriched.add_edge(u, v, **attrs)
+                        continue
+                        
+                    parent = u
+                    child = v
+                    etype = attrs.get("type") or attrs.get("etype") or "child_of"
 
-            raw["nodes"] = combined_nodes
-            raw["edges"] = combined_edges
+                    child_idx = child_counters.get(parent, 0)
+                    child_counters[parent] = child_idx + 1
+
+                    self._add_basic_ast_edges(
+                        G_enriched, parent, child, child_idx, etype, edge_direction
+                    )
+
+            children_dict = {}
+            for u, v, attrs in G_ast.edges(data=True):
+                etype = attrs.get("etype") or attrs.get("type") or "child_of"
+                if etype == "child_of":
+                    children_dict.setdefault(u, []).append(v)
+                    
+            raw = None
         else:
-            raw["nodes"] = list(raw.get("nodes", []))
-            raw["edges"] = list(raw.get("edges", []))
-            _insert_function_aggregators(raw)
-
-        # Topology is computed on the pure AST (before virtual nodes are injected).
-        raw_ast = {"nodes": list(raw["nodes"]), "edges": list(raw["edges"])}
-        belongs_to_f_map = compute_belongs_to_f(raw_ast)
-        belongs_to_d1_map = compute_belongs_to_d1(raw_ast)
-        belongs_to_d2_map = compute_belongs_to_d2(raw_ast)
-        # 1. Build AST graph for structural features (excludes virtual nodes)
-        G_ast = self._build_networkx(
-            raw_ast,
-            belongs_to_f_map=belongs_to_f_map,
-            belongs_to_d1_map=belongs_to_d1_map,
-            belongs_to_d2_map=belongs_to_d2_map,
-        )
-        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast, enrich=enrich)
-        ast_node_ids = list(G_ast.nodes)
-        ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
-
-        # 2. Build full directed graph (includes virtual nodes when mode=graph)
-        G_directed = self._build_networkx(
-            raw,
-            belongs_to_f_map=belongs_to_f_map,
-            belongs_to_d1_map=belongs_to_d1_map,
-            belongs_to_d2_map=belongs_to_d2_map,
-        )
-
-        # 3. Enrich attributes based on mode
-        G_enriched = nx.DiGraph()
-        node_ids = list(G_directed.nodes)
-        
-        if enrich:
-            for node in node_ids:
-                attrs = G_directed.nodes[node]
-                enriched_attrs = attrs.copy()
-                ast_idx = ast_id_to_idx.get(node)
-
-                if ast_idx is not None:
-                    enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
-                    enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
-                    enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
-                    enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
-                    enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+            raw = self._load(source)
+            
+            # Make a copy of raw to avoid modifying the original dict in-place if passed as object
+            raw = dict(raw)
+            
+            # Check if the raw data is in the new GraphML string container format
+            if "graphml_f" in raw:
+                nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
+                
+                # If mode is tree, we only compile the function graph f.
+                # If mode is tree_derivatives or graph, we compile all three (f, f', f'').
+                if mode in ["tree_derivatives", "graph"]:
+                    nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
+                    nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
                 else:
-                    enriched_attrs["depth"] = 0.0
-                    enriched_attrs["height"] = 0.0
-                    enriched_attrs["subtree_size"] = 1.0
-                    enriched_attrs["out_degree"] = 0.0
-                    enriched_attrs["betweenness_centrality"] = 0.0
-                    enriched_attrs["lpe_1"] = 0.0
-                    enriched_attrs["lpe_2"] = 0.0
-                    enriched_attrs["lpe_3"] = 0.0
-                    enriched_attrs["lpe_4"] = 0.0
-                    enriched_attrs["rwpe_1"] = 0.0
-                    enriched_attrs["rwpe_2"] = 0.0
-                    enriched_attrs["rwpe_3"] = 0.0
-                    enriched_attrs["rwpe_4"] = 0.0
+                    nodes_d1, edges_d1 = [], []
+                    nodes_d2, edges_d2 = [], []
+                
+                combined_nodes = nodes_f + nodes_d1 + nodes_d2
+                combined_nodes.insert(0, {
+                    "id": "global",
+                    "label": "GLOBAL",
+                    "type": "global",
+                    "value": None
+                })
+                
+                roots_f = find_roots(nodes_f, edges_f)
+                roots_d1 = find_roots(nodes_d1, edges_d1)
+                roots_d2 = find_roots(nodes_d2, edges_d2)
 
-                G_enriched.add_node(node, **enriched_attrs)
+                combined_edges = edges_f + edges_d1 + edges_d2
+                if roots_f:
+                    combined_nodes.append({
+                        "id": "f_root", "label": "f_root", "type": "f_root", "value": None
+                    })
+                    combined_edges.append({"source": "f_root", "target": "global", "type": "belongs_to_f"})
+                    for root in roots_f:
+                        combined_edges.append({"source": root, "target": "f_root", "type": "child_of"})
+                if roots_d1:
+                    combined_nodes.append({
+                        "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
+                    })
+                    combined_edges.append({"source": "d1_root", "target": "global", "type": "belongs_to_d1"})
+                    for root in roots_d1:
+                        combined_edges.append({"source": root, "target": "d1_root", "type": "child_of"})
+                if roots_d2:
+                    combined_nodes.append({
+                        "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
+                    })
+                    combined_edges.append({"source": "d2_root", "target": "global", "type": "belongs_to_d2"})
+                    for root in roots_d2:
+                        combined_edges.append({"source": root, "target": "d2_root", "type": "child_of"})
 
-            child_counters = {}
-            for edge in raw.get("edges", []):
+                raw["nodes"] = combined_nodes
+                raw["edges"] = combined_edges
+            else:
+                raw["nodes"] = list(raw.get("nodes", []))
+                raw["edges"] = list(raw.get("edges", []))
+                _insert_function_aggregators(raw)
+
+            # Topology is computed on the pure AST (before virtual nodes are injected).
+            raw_ast = {"nodes": list(raw["nodes"]), "edges": list(raw["edges"])}
+            belongs_to_f_map = compute_belongs_to_f(raw_ast)
+            belongs_to_d1_map = compute_belongs_to_d1(raw_ast)
+            belongs_to_d2_map = compute_belongs_to_d2(raw_ast)
+            # 1. Build AST graph for structural features (excludes virtual nodes)
+            G_ast = self._build_networkx(
+                raw_ast,
+                belongs_to_f_map=belongs_to_f_map,
+                belongs_to_d1_map=belongs_to_d1_map,
+                belongs_to_d2_map=belongs_to_d2_map,
+            )
+            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast, enrich=enrich)
+            ast_node_ids = list(G_ast.nodes)
+            ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
+
+            # 2. Build full directed graph (includes virtual nodes when mode=graph)
+            G_directed = self._build_networkx(
+                raw,
+                belongs_to_f_map=belongs_to_f_map,
+                belongs_to_d1_map=belongs_to_d1_map,
+                belongs_to_d2_map=belongs_to_d2_map,
+            )
+
+            # 3. Enrich attributes based on mode
+            G_enriched = nx.DiGraph()
+            node_ids = list(G_directed.nodes)
+            
+            if enrich:
+                for node in node_ids:
+                    attrs = G_directed.nodes[node]
+                    enriched_attrs = attrs.copy()
+                    ast_idx = ast_id_to_idx.get(node)
+
+                    if ast_idx is not None:
+                        enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
+                        enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
+                        enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
+                        enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
+                        enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
+                        enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
+                        enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
+                        enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
+                        enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
+                        enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
+                        enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
+                        enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
+                        enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                    else:
+                        enriched_attrs["depth"] = 0.0
+                        enriched_attrs["height"] = 0.0
+                        enriched_attrs["subtree_size"] = 1.0
+                        enriched_attrs["out_degree"] = 0.0
+                        enriched_attrs["betweenness_centrality"] = 0.0
+                        enriched_attrs["lpe_1"] = 0.0
+                        enriched_attrs["lpe_2"] = 0.0
+                        enriched_attrs["lpe_3"] = 0.0
+                        enriched_attrs["lpe_4"] = 0.0
+                        enriched_attrs["rwpe_1"] = 0.0
+                        enriched_attrs["rwpe_2"] = 0.0
+                        enriched_attrs["rwpe_3"] = 0.0
+                        enriched_attrs["rwpe_4"] = 0.0
+
+                    G_enriched.add_node(node, **enriched_attrs)
+
+                child_counters = {}
+                for edge in raw.get("edges", []):
+                    parent = edge["source"]
+                    child = edge["target"]
+                    etype = edge["type"]
+
+                    child_idx = child_counters.get(parent, 0)
+                    child_counters[parent] = child_idx + 1
+
+                    eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
+                    self._add_enriched_ast_edges(
+                        G_enriched,
+                        parent,
+                        child,
+                        child_idx,
+                        etype,
+                        eb_val,
+                        edge_direction,
+                    )
+
+                self._add_virtual_supernode_edges(G_enriched, node_ids)
+            else:
+                ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
+                for node in node_ids:
+                    attrs = G_directed.nodes[node]
+                    enriched_attrs = attrs.copy()
+                    enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
+                    G_enriched.add_node(node, **enriched_attrs)
+
+                child_counters = {}
+                for edge in raw.get("edges", []):
+                    parent = edge["source"]
+                    child = edge["target"]
+                    etype = edge["type"]
+
+                    child_idx = child_counters.get(parent, 0)
+                    child_counters[parent] = child_idx + 1
+
+                    self._add_basic_ast_edges(
+                        G_enriched,
+                        parent,
+                        child,
+                        child_idx,
+                        etype,
+                        edge_direction,
+                    )
+
+            # Build children_dict from all parent-to-child edges in raw_ast
+            children_dict = {}
+            for edge in raw_ast.get("edges", []):
                 parent = edge["source"]
                 child = edge["target"]
-                etype = edge["type"]
+                children_dict.setdefault(parent, []).append(child)
 
-                child_idx = child_counters.get(parent, 0)
-                child_counters[parent] = child_idx + 1
-
-                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
-                self._add_enriched_ast_edges(
-                    G_enriched,
-                    parent,
-                    child,
-                    child_idx,
-                    etype,
-                    eb_val,
-                    edge_direction,
-                )
-
-            self._add_virtual_supernode_edges(G_enriched, node_ids)
-        else:
-            ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
-            for node in node_ids:
-                attrs = G_directed.nodes[node]
-                enriched_attrs = attrs.copy()
-                enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
-                G_enriched.add_node(node, **enriched_attrs)
-
-            child_counters = {}
-            for edge in raw.get("edges", []):
-                parent = edge["source"]
-                child = edge["target"]
-                etype = edge["type"]
-
-                child_idx = child_counters.get(parent, 0)
-                child_counters[parent] = child_idx + 1
-
-                self._add_basic_ast_edges(
-                    G_enriched,
-                    parent,
-                    child,
-                    child_idx,
-                    etype,
-                    edge_direction,
-                )
-
-        # Build children_dict from all parent-to-child edges in raw_ast
-        children_dict = {}
-        for edge in raw_ast.get("edges", []):
-            parent = edge["source"]
-            child = edge["target"]
-            children_dict.setdefault(parent, []).append(child)
-
+        # Common G_enriched processing (augmented features path)
         last_seen_map = {}
         if "global" in G_enriched:
             build_augmented_math_graph(
@@ -995,14 +1102,47 @@ class ExpressionGraphConverter:
                     enrich,
                 )
 
+        # Gather node_kappas mapping matching node_ids
+        node_kappas = [G_enriched.nodes[nid].get("kappa_value") for nid in node_ids]
+        
+        # Remove kappa_value from node attributes to prevent PyG from_networkx mismatch error
+        for nid in G_enriched.nodes:
+            if "kappa_value" in G_enriched.nodes[nid]:
+                del G_enriched.nodes[nid]["kappa_value"]
+
+        # Ensure all nodes have exactly the same set of attribute keys
+        all_node_keys = set()
+        for nid in G_enriched.nodes:
+            all_node_keys.update(G_enriched.nodes[nid].keys())
+        for nid in G_enriched.nodes:
+            for key in all_node_keys:
+                if key not in G_enriched.nodes[nid]:
+                    G_enriched.nodes[nid][key] = None
+
+        # Ensure all edges have exactly the same set of attribute keys
+        all_edge_keys = set()
+        for u, v in G_enriched.edges:
+            all_edge_keys.update(G_enriched.edges[u, v].keys())
+        for u, v in G_enriched.edges:
+            for key in all_edge_keys:
+                if key not in G_enriched.edges[u, v]:
+                    if key in ("child_index", "direction", "relation_type", "edge_betweenness_centrality", "weight", "edge_type"):
+                        G_enriched.edges[u, v][key] = 0.0
+                    else:
+                        G_enriched.edges[u, v][key] = None
+
         if heterogeneous:
-            data = self._to_hetero(G_enriched, raw, topo, enrich)
+            from gnn.shared.utils.heterogeneous_converter import to_hetero
+            data = to_hetero(G_enriched, raw or {}, topo, enrich)
             data.__class__ = ExpressionHeteroData
             data.node_ids = node_ids
         else:
-            data = self._to_homogeneous(G_enriched, raw, enrich)
+            from gnn.shared.utils.homogeneous_converter import to_homogeneous
+            data = to_homogeneous(G_enriched, raw or {}, enrich)
             data.__class__ = ExpressionGraphData
             data.node_ids = node_ids
+
+        data.node_kappas = node_kappas
 
         node_type_tensor = torch.tensor(
             [G_directed.nodes[n]["node_type"] for n in node_ids], dtype=torch.long
@@ -1108,236 +1248,6 @@ class ExpressionGraphConverter:
             )
         return G
 
-    def _to_homogeneous(self, G: nx.DiGraph, raw: dict, enrich: bool) -> Data:
-        if enrich:
-            group_node_attrs = list(ENRICHED_NODE_FEATURE_SCHEMA)
-            if G.number_of_edges() == 0:
-                data = from_networkx(
-                    G,
-                    group_node_attrs=group_node_attrs,
-                )
-                data.edge_index = torch.empty((2, 0), dtype=torch.long)
-                data.edge_attr = torch.empty((0, 4), dtype=torch.float)
-                return data
-
-            return from_networkx(
-                G,
-                group_node_attrs=group_node_attrs,
-                group_edge_attrs=["child_index", "direction", "relation_type", "edge_betweenness_centrality"],
-            )
-        else:
-            group_node_attrs = list(BASIC_NODE_FEATURE_SCHEMA)
-            if G.number_of_edges() == 0:
-                data = from_networkx(
-                    G,
-                    group_node_attrs=group_node_attrs,
-                )
-                data.edge_index = torch.empty((2, 0), dtype=torch.long)
-                data.edge_attr = torch.empty((0, 1), dtype=torch.float)
-                return data
-
-            return from_networkx(
-                G,
-                group_node_attrs=group_node_attrs,
-                group_edge_attrs=["edge_type"],
-            )
-
-    def _to_hetero(self, G: nx.DiGraph, raw: dict, topo: dict, enrich: bool) -> HeteroData:
-        node_ids = list(G.nodes)
-        
-        # 1. Separate node IDs by their heterogeneous type
-        operators = []
-        variables = []
-        constants = []
-        virtuals = []
-
-        for nid in node_ids:
-            attrs = G.nodes[nid]
-            raw_type = attrs.get("type", "")
-            h_type = get_hetero_node_type(raw_type)
-            if h_type == "operator":
-                operators.append(nid)
-            elif h_type == "variable":
-                variables.append(nid)
-            elif h_type == "constant":
-                constants.append(nid)
-            else:
-                virtuals.append(nid)
-
-        # 2. Local re-indexing mappings
-        op_idx = {nid: i for i, nid in enumerate(operators)}
-        var_idx = {nid: i for i, nid in enumerate(variables)}
-        const_idx = {nid: i for i, nid in enumerate(constants)}
-        virt_idx = {nid: i for i, nid in enumerate(virtuals)}
-
-        type_to_local_idx = {
-            "operator": op_idx,
-            "variable": var_idx,
-            "constant": const_idx,
-            "virtual": virt_idx,
-        }
-
-        # Helper to construct LPE and RWPE
-        def get_lpe_rwpe(nid: str, ast_idx: int | None):
-            if ast_idx is not None:
-                if "lpe" in topo and topo["lpe"] is not None:
-                    lpe_vals = [float(topo["lpe"][ast_idx, j]) for j in range(4)]
-                else:
-                    lpe_vals = [0.0] * 4
-                if "rwpe" in topo and topo["rwpe"] is not None:
-                    rwpe_vals = [float(topo["rwpe"][ast_idx, j]) for j in range(4)]
-                else:
-                    rwpe_vals = [0.0] * 4
-            else:
-                lpe_vals = [0.0] * 4
-                rwpe_vals = [0.0] * 4
-            return lpe_vals, rwpe_vals
-
-        # Helper to construct topology features
-        def get_topology(nid: str):
-            if nid in topo.get("depths", {}):
-                depth = float(topo["depths"].get(nid, 0.0))
-                height = float(topo["heights"].get(nid, 0.0)) if "heights" in topo else 0.0
-                subtree_size = float(topo["subtree_sizes"].get(nid, 1.0)) if "subtree_sizes" in topo else 1.0
-                out_degree = float(topo["out_degrees"].get(nid, 0.0)) if "out_degrees" in topo else 0.0
-                betweenness = float(topo["betweenness"].get(nid, 0.0)) if "betweenness" in topo else 0.0
-            else:
-                depth = 0.0
-                height = 0.0
-                subtree_size = 1.0
-                out_degree = 0.0
-                betweenness = 0.0
-            return [depth, height, subtree_size, out_degree, betweenness]
-
-        # 3. Build features for 'operator'
-        x_ops_list = []
-        ast_node_ids = [nid for nid in node_ids if nid not in ("virtual_current_x", "virtual_y_target", "virtual_supernode")]
-        ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
-
-        for nid in operators:
-            attrs = G.nodes[nid]
-            label_id = attrs["label_id"]
-            # One-hot label encoding
-            label_oh = torch.zeros(len(CANONICAL_LABELS), dtype=torch.float)
-            label_oh[label_id] = 1.0
-            
-            # Topology metrics
-            topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
-            
-            # LPE / RWPE
-            ast_idx = ast_id_to_idx.get(nid)
-            lpe_vals, rwpe_vals = get_lpe_rwpe(nid, ast_idx)
-            struct_feats = torch.tensor(lpe_vals + rwpe_vals, dtype=torch.float)
-            
-            # Combine
-            x_ops_list.append(torch.cat([label_oh, topo_feats, struct_feats]))
-            
-        if x_ops_list:
-            x_ops = torch.stack(x_ops_list, dim=0)
-        else:
-            x_ops = torch.empty((0, 59), dtype=torch.float)
-
-        # 4. Build features for 'variable'
-        x_vars_list = []
-        for nid in variables:
-            attrs = G.nodes[nid]
-            label_id = attrs["label_id"]
-            label_oh = torch.zeros(len(CANONICAL_LABELS), dtype=torch.float)
-            label_oh[label_id] = 1.0
-            
-            topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
-            
-            ast_idx = ast_id_to_idx.get(nid)
-            lpe_vals, rwpe_vals = get_lpe_rwpe(nid, ast_idx)
-            struct_feats = torch.tensor(lpe_vals + rwpe_vals, dtype=torch.float)
-            
-            x_vars_list.append(torch.cat([label_oh, topo_feats, struct_feats]))
-            
-        if x_vars_list:
-            x_vars = torch.stack(x_vars_list, dim=0)
-        else:
-            x_vars = torch.empty((0, 59), dtype=torch.float)
-
-        # 5. Build features for 'constant'
-        x_consts_list = []
-        for nid in constants:
-            attrs = G.nodes[nid]
-            val = attrs["value"]
-            
-            fourier = torch.tensor(fourier_frequency_encoding(val), dtype=torch.float)
-            val_tensor = torch.tensor([val], dtype=torch.float)
-            x_consts_list.append(torch.cat([val_tensor, fourier]))
-            
-        if x_consts_list:
-            x_consts = torch.stack(x_consts_list, dim=0)
-        else:
-            x_consts = torch.empty((0, 9), dtype=torch.float)
-
-        # 6. Build features for 'virtual'
-        x_virts_list = []
-        for nid in virtuals:
-            attrs = G.nodes[nid]
-            v_cx = attrs["virtual_current_x_val"]
-            v_dt = attrs["virtual_delta_target_val"]
-            v_d1x = attrs["virtual_d1_x_val"]
-            v_d2x = attrs["virtual_d2_x_val"]
-            
-            belongs_f = attrs["belongs_to_f"]
-            belongs_d1 = attrs["belongs_to_d1"]
-            belongs_d2 = attrs["belongs_to_d2"]
-            
-            x_virts_list.append(torch.tensor([
-                v_cx, v_dt, v_d1x, v_d2x,
-                belongs_f, belongs_d1, belongs_d2
-            ], dtype=torch.float))
-            
-        if x_virts_list:
-            x_virt = torch.stack(x_virts_list, dim=0)
-        else:
-            x_virt = torch.empty((0, 7), dtype=torch.float)
-
-        # 7. Map edges to metapaths
-        edge_buckets: dict[tuple[str, str, str], list[tuple[int, int]]] = {}
-        for u, v, attrs in G.edges(data=True):
-            src_type = get_hetero_node_type(G.nodes[u].get("type", ""))
-            dst_type = get_hetero_node_type(G.nodes[v].get("type", ""))
-            
-            is_reverse = (attrs.get("direction", 0.0) == 1.0)
-            parent = u if is_reverse else v
-            parent_label = G.nodes[parent].get("label", "")
-            
-            etype = attrs.get("etype", "")
-            if not etype:
-                etype = "child_of"
-                
-            child_idx = attrs.get("child_index", 0.0)
-            relation_type = get_relation_type(parent_label, etype, child_idx)
-            
-            src_local = type_to_local_idx[src_type][u]
-            dst_local = type_to_local_idx[dst_type][v]
-            
-            triplet = (src_type, relation_type, dst_type)
-            edge_buckets.setdefault(triplet, []).append((src_local, dst_local))
-
-        # 8. Construct HeteroData
-        hetero = HeteroData()
-        hetero["operator"].x = x_ops
-        hetero["variable"].x = x_vars
-        hetero["constant"].x = x_consts
-        hetero["virtual"].x = x_virt
-        
-        hetero["operator"].node_ids = operators
-        hetero["variable"].node_ids = variables
-        hetero["constant"].node_ids = constants
-        hetero["virtual"].node_ids = virtuals
-
-        for triplet, pairs in edge_buckets.items():
-            src_ids, dst_ids = zip(*pairs)
-            hetero[triplet].edge_index = torch.tensor(
-                [list(src_ids), list(dst_ids)], dtype=torch.long
-            )
-
-        return hetero
 
 
 class GraphConversionPipeline:
@@ -2245,6 +2155,14 @@ def LoadAugmentedFunctionGraph(
 
                     kappaRootNodeId = mainGraph.MergeDisjointSubgraph(kappaSubgraph)
 
+                    # Tag all nodes in this merged kappa subgraph with their kappa value
+                    prefix_parts = kappaRootNodeId.split("_")
+                    if len(prefix_parts) >= 2:
+                        prefix_str = f"{prefix_parts[0]}_{prefix_parts[1]}"
+                        for node in mainGraph.nodes:
+                            if str(node).startswith(prefix_str + "_"):
+                                mainGraph.nodes[node]["kappa_value"] = kappaValue
+
                     newEdge = KappaEdge(
                         source=globalNode,
                         target=kappaRootNodeId,
@@ -2264,4 +2182,115 @@ def LoadAugmentedFunctionGraph(
             logger.warning(f"Error reading or processing kappa file {file_path}: {e}")
 
     return mainGraph
+
+
+def filter_active_kappa(
+    data: Union[Data, HeteroData], active_kappa: Union[float, int, None]
+) -> Union[Data, HeteroData]:
+    """Filters the PyG Data object to only keep nodes and edges of the active kappa subgraph.
+
+    All base graph nodes, global nodes, and aggregator nodes are kept. Inactive kappa subgraph nodes
+    and their associated edges are removed. If active_kappa is None, 0, or NaN, all kappa subgraphs
+    are deactivated and removed.
+
+    Arguments:
+        data: The PyG Data or HeteroData object containing node_kappas.
+        active_kappa: The kappa value to keep active.
+
+    Returns:
+        The filtered PyG Data or HeteroData object.
+
+    Raises:
+        None
+    """
+    import math
+    import torch
+    from torch_geometric.data import Data
+
+    if not isinstance(data, Data) or not hasattr(data, "node_kappas") or data.node_kappas is None:
+        return data
+
+    node_kappas = data.node_kappas
+    num_nodes = data.x.size(0) if data.x is not None else len(node_kappas)
+
+    # 1. Determine active_kappa validity
+    is_active_kappa_valid = False
+    if active_kappa is not None:
+        try:
+            act_k = float(active_kappa)
+            if not math.isnan(act_k) and act_k != 0.0:
+                is_active_kappa_valid = True
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Identify nodes to keep
+    keep_node_indices = []
+    for i in range(num_nodes):
+        kappa_val = node_kappas[i]
+        if kappa_val is None:
+            # Base node / global node / aggregator node
+            keep_node_indices.append(i)
+        elif is_active_kappa_valid:
+            try:
+                if abs(float(kappa_val) - float(active_kappa)) < 1e-3:
+                    keep_node_indices.append(i)
+            except (ValueError, TypeError):
+                pass
+
+    # 3. Create node mask
+    keep_node_mask = torch.zeros(num_nodes, dtype=torch.bool)
+    keep_node_mask[keep_node_indices] = True
+
+    # If all nodes are kept, return unmodified
+    if keep_node_mask.all():
+        return data
+
+    # 4. Filter node-level attributes
+    if hasattr(data, "node_ids") and data.node_ids is not None:
+        data.node_ids = [data.node_ids[i] for i in keep_node_indices]
+
+    data.node_kappas = [node_kappas[i] for i in keep_node_indices]
+
+    # Map old node indices to new indices
+    map_tensor = torch.empty(num_nodes, dtype=torch.long)
+    map_tensor[keep_node_mask] = torch.arange(len(keep_node_indices))
+
+    # 5. Filter edge-level attributes
+    num_edges = 0
+    keep_edge_mask = None
+    if hasattr(data, "edge_index") and data.edge_index is not None and data.edge_index.numel() > 0:
+        src, dst = data.edge_index[0], data.edge_index[1]
+        keep_edge_mask = keep_node_mask[src] & keep_node_mask[dst]
+        data.edge_index = map_tensor[data.edge_index[:, keep_edge_mask]]
+        num_edges = keep_edge_mask.size(0)
+
+    # 6. Apply masks to all tensors in the data object
+    for key, value in list(data.items()):
+        if isinstance(value, torch.Tensor):
+            if key == "edge_index":
+                continue
+            # Check known key lists first to prevent size collision
+            if key in ("x", "node_type", "label_id", "belongs_to_f", "belongs_to_d1", "belongs_to_d2"):
+                data[key] = value[keep_node_mask]
+            elif key in ("edge_attr", "edge_type"):
+                if keep_edge_mask is not None:
+                    data[key] = value[keep_edge_mask]
+            elif value.dim() > 0 and value.size(0) == num_nodes:
+                data[key] = value[keep_node_mask]
+            elif value.dim() > 0 and value.size(0) == num_edges:
+                if keep_edge_mask is not None:
+                    data[key] = value[keep_edge_mask]
+
+    # Update counts if present
+    if hasattr(data, "nodes"):
+        data.nodes = len(keep_node_indices)
+    if hasattr(data, "num_nodes"):
+        data.num_nodes = len(keep_node_indices)
+    if hasattr(data, "edges") and keep_edge_mask is not None:
+        data.edges = int(keep_edge_mask.sum().item())
+    if hasattr(data, "num_edges") and keep_edge_mask is not None:
+        data.num_edges = int(keep_edge_mask.sum().item())
+
+    return data
+
 

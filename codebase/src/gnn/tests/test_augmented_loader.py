@@ -222,3 +222,70 @@ def test_load_augmented_function_graph(
 
     edge_2_bwd = mainGraph.edges["kappa_2_1", globalNode]
     assert edge_2_bwd["weight"] == -25.0
+
+
+def test_filter_active_kappa_nodes_edges(
+    tmp_path, sample_main_graph_dict, sample_kappa_dict, sample_kappa_graphml
+):
+    """Tests that filter_active_kappa correctly filters out inactive kappa subgraphs."""
+    # Build augmented graph using LoadAugmentedFunctionGraph
+    graphs_dir = tmp_path / "graphs"
+    graphs_dir.mkdir()
+    kappas_dir = tmp_path / "kappas"
+    kappas_dir.mkdir()
+
+    (graphs_dir / "P-mock-1.json").write_text(json.dumps(sample_main_graph_dict), encoding="utf-8")
+    (kappas_dir / "kappa_1.json").write_text(json.dumps(sample_kappa_dict), encoding="utf-8")
+    (kappas_dir / "kappa_2.json").write_text(json.dumps(sample_kappa_graphml), encoding="utf-8")
+
+    mainGraph = LoadAugmentedFunctionGraph(
+        graphId="P-mock-1",
+        graphsFolder=graphs_dir,
+        kappasFolder=kappas_dir
+    )
+
+    # Convert to PyG homogeneous Data
+    from graph_utils import ExpressionGraphConverter, filter_active_kappa
+    converter = ExpressionGraphConverter()
+    data = converter.convert(
+        mainGraph,
+        heterogeneous=False,
+        enrich=True,
+        mode="graph",
+        edge_direction="top_down",
+    )
+
+    # Initial checks:
+    # 3 math nodes + 1 global + 0 aggregators + 2 kappa_1 nodes + 2 kappa_2 nodes = 8 nodes total
+    assert len(data.node_ids) == 8
+    assert data.x.size(0) == 8
+    assert len(data.node_kappas) == 8
+    
+    # We have two kappas: -15.5 and -25.0
+    # Let's filter to activate -15.5
+    data_15 = filter_active_kappa(data.clone(), -15.5)
+    # Filtered graph should keep 3 math + 1 global + 2 nodes from kappa_1 = 6 nodes
+    assert len(data_15.node_ids) == 6
+    assert data_15.x.size(0) == 6
+    assert len(data_15.node_kappas) == 6
+    assert all(k is None or abs(k - (-15.5)) < 1e-3 for k in data_15.node_kappas)
+    
+    # Nodes in data_15 should not contain kappa_2 nodes
+    for nid in data_15.node_ids:
+        assert not nid.startswith("kappa_2_")
+
+    # Let's filter to activate -25.0
+    data_25 = filter_active_kappa(data.clone(), -25.0)
+    assert len(data_25.node_ids) == 6
+    assert data_25.x.size(0) == 6
+    assert len(data_25.node_kappas) == 6
+    for nid in data_25.node_ids:
+        assert not nid.startswith("kappa_1_")
+
+    # Let's filter to activate None / 0.0 (deactivate all)
+    data_none = filter_active_kappa(data.clone(), None)
+    assert len(data_none.node_ids) == 4
+    assert data_none.x.size(0) == 4
+    for nid in data_none.node_ids:
+        assert not nid.startswith("kappa_")
+
