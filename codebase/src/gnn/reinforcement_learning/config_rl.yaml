@@ -10,12 +10,11 @@ experiment:
   edge_direction: top_down  # top_down | bottom_up | bidirectional (virtual nodes always bidirectional)
 
   # Feature classes: node | topology | positional | edge
+  # Each category: true -> all members | false -> none | [a, b] -> only these
   features:
     node: true
     topology: true
-    positional:
-      enabled: true
-      encodings: [lpe, rwpe]
+    positional: [lpe, rwpe]  # true = both encodings, false = none
     edge: true
 
   # Optional explicit override (disables grouped toggles above when non-empty)

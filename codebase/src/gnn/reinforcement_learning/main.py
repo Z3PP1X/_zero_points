@@ -115,7 +115,10 @@ def main() -> None:
     feature_selection, active_features = resolve_rl_features(
         load_yaml_config(config_path).get("experiment") or {},
         feature_groups=args.feature_groups,
+        node_features=args.node_features,
+        topology_features=args.topology_features,
         positional_encoding=args.positional_encoding,
+        edge_features=args.edge_features,
         active_features=args.active_features,
     )
 

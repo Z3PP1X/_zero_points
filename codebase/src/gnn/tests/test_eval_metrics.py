@@ -56,10 +56,7 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     features_dict = {
         "node": True,
         "topology": True,
-        "positional": {
-            "enabled": True,
-            "encodings": ["lpe"]  # lpe only (4 features), no rwpe (4 features)
-        },
+        "positional": ["lpe"],  # lpe only (4 features), no rwpe (4 features)
         "edge": True
     }
     
