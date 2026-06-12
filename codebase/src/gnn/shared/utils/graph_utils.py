@@ -1683,3 +1683,59 @@ def create_virtual_global_node(
     add_aggregator("d2_root", "d2_root", roots_d2, "d2")
 
     return G_combined
+
+
+def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tensor, edge_weight: torch.Tensor | None = None) -> float:
+    """
+    Computes the normalized Dirichlet energy of node features x:
+    E_norm(x) = tr(x^T * L_sym * x) / tr(x^T * x)
+    where L_sym = I - D^{-1/2} * A * D^{-1/2}.
+    """
+    num_nodes = x.size(0)
+    if num_nodes <= 1:
+        return 0.0
+
+    # Ensure x is float
+    x = x.float()
+
+    # Handle multidimensional edge weights (e.g. edge attributes)
+    if edge_weight is not None:
+        if edge_weight.dim() > 1:
+            if edge_weight.size(-1) == 1:
+                edge_weight = edge_weight.squeeze(-1)
+            else:
+                edge_weight = None
+
+    # Calculate degree
+    if edge_weight is None:
+        from torch_geometric.utils import degree
+        deg = degree(edge_index[0], num_nodes=num_nodes, dtype=x.dtype)
+    else:
+        from torch_scatter import scatter
+        deg = scatter(edge_weight.float(), edge_index[0], dim=0, dim_size=num_nodes, reduce='sum')
+
+    deg_inv_sqrt = deg.pow(-0.5)
+    deg_inv_sqrt[torch.isinf(deg_inv_sqrt)] = 0.0
+    deg_inv_sqrt[torch.isnan(deg_inv_sqrt)] = 0.0
+
+    # x_tilde = D^{-1/2} * x
+    x_tilde = x * deg_inv_sqrt.unsqueeze(-1)
+
+    # tr(x^T * D^{-1/2} * A * D^{-1/2} * x) = sum_{u, v} A_{uv} * x_tilde_u^T * x_tilde_v
+    src, dst = edge_index[0], edge_index[1]
+    dot_products = (x_tilde[src] * x_tilde[dst]).sum(dim=-1)
+
+    if edge_weight is not None:
+        edge_sum = (edge_weight.float() * dot_products).sum()
+    else:
+        edge_sum = dot_products.sum()
+
+    tr_x_x = (x * x).sum()
+    if tr_x_x == 0:
+        return 0.0
+
+    tr_x_L_x = tr_x_x - edge_sum
+    normalized_energy = tr_x_L_x / tr_x_x
+
+    return float(normalized_energy.item())
+

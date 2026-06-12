@@ -82,6 +82,13 @@ def evaluate(model, loader):
     all_true = []
     all_pred_score = []
 
+    # Register forward hook to capture embeddings from model.mp
+    mp_embeddings = []
+    def hook_fn(module, inputs, outputs):
+        mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
+        
+    hook_handle = model.mp.register_forward_hook(hook_fn)
+
     with torch.no_grad():
         for batch in loader:
             batch = batch.to(DEVICE)
@@ -93,16 +100,29 @@ def evaluate(model, loader):
             all_true.append(true.detach().cpu())
             all_pred_score.append(pred_score.detach().cpu())
 
+    hook_handle.remove()
+
     if not all_true:
         empty_metrics = compute_binary_metrics(
             torch.tensor([], dtype=torch.long),
             torch.tensor([], dtype=torch.float),
         )
+        empty_metrics["dirichlet_energy"] = 0.0
         return 0.0, empty_metrics, [], [], []
 
     true_cat = torch.cat(all_true)
     pred_cat = torch.cat(all_pred_score)
     metrics = compute_binary_metrics(true_cat, pred_cat)
+
+    # Compute average dirichlet energy
+    from gnn.shared.utils.graph_utils import compute_normalized_dirichlet_energy
+    energies = []
+    for x, edge_index, edge_attr in mp_embeddings:
+        energy = compute_normalized_dirichlet_energy(x, edge_index)
+        energies.append(energy)
+    avg_energy = sum(energies) / len(energies) if energies else 0.0
+    metrics["dirichlet_energy"] = avg_energy
+
     avg_loss = total_loss / max(true_cat.size(0), 1)
 
     pos_label = get_pos_label()
@@ -169,7 +189,7 @@ def save_supervised_training_curves(history, output_path: Path):
     import matplotlib.pyplot as plt
     import numpy as np
 
-    metrics_to_plot = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "ece"]
+    metrics_to_plot = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "ece", "dirichlet_energy"]
     key_mapping = {
         "pr_auc": "PR_AUC/val",
         "auc": "AUC/val",
@@ -177,6 +197,7 @@ def save_supervised_training_curves(history, output_path: Path):
         "f1": "F1",
         "mean_confidence": "mean_confidence",
         "ece": "ece",
+        "dirichlet_energy": "dirichlet_energy/val",
     }
     
     n_metrics = len(metrics_to_plot)
@@ -364,6 +385,7 @@ def main(
             "PR_AUC/val": [],
             "mean_confidence": [],
             "ece": [],
+            "dirichlet_energy/val": [],
         }
 
         for epoch in range(epochs):
@@ -388,6 +410,7 @@ def main(
                     "PR_AUC/val": metrics["pr_auc"],
                     "mean_confidence": metrics.get("mean_confidence", 0.0),
                     "ece": metrics.get("ece", 0.0),
+                    "dirichlet_energy/val": metrics.get("dirichlet_energy", 0.0),
                     "base_lr": float(optimizer.param_groups[0]["lr"]),
                 },
                 step=epoch,
@@ -404,6 +427,7 @@ def main(
             history["PR_AUC/val"].append(metrics["pr_auc"])
             history["mean_confidence"].append(metrics.get("mean_confidence", 0.0))
             history["ece"].append(metrics.get("ece", 0.0))
+            history["dirichlet_energy/val"].append(metrics.get("dirichlet_energy", 0.0))
 
             print(
                 f"Epoch {epoch + 1}/{epochs} | "
@@ -413,6 +437,7 @@ def main(
                 f"F1: {metrics['f1']:.4f} | "
                 f"ROC-AUC: {metrics['auc']:.4f} | "
                 f"PR-AUC: {metrics['pr_auc']:.4f} | "
+                f"Dirichlet Energy: {metrics.get('dirichlet_energy', 0.0):.6f} | "
                 f"Recall: {metrics['recall']:.4f}"
             )
 

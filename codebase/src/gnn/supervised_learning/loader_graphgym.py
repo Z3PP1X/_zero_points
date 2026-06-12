@@ -403,7 +403,9 @@ def set_custom_cfg(cfg):
     cfg.train.epoch_warmup = 5
     cfg.train.curated_eval_period = 5
     cfg.train.curated_eval_on_test_highscore = True
+    cfg.train.num_workers = 0
     cfg.params = 0
+
 
 
 register_config("expression_graph", set_custom_cfg)

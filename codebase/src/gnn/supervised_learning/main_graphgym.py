@@ -84,20 +84,33 @@ class CuratedEvalCallback(pl.callbacks.Callback):
             prog_bar=True,
             sync_dist=True,
         )
+        pl_module.log(
+            "val_dirichlet_energy_curated",
+            metrics.get("dirichlet_energy", 0.0),
+            prog_bar=True,
+            sync_dist=True,
+        )
         self._write_test_logger_stats(trainer, metrics)
         print(
             f"[GraphGym] Curated holdout eval (epoch {trainer.current_epoch + 1}, "
-            f"reason={reason}) | PR-AUC={metrics['pr_auc']:.4f}"
+            f"reason={reason}) | PR-AUC={metrics['pr_auc']:.4f} | Dirichlet Energy={metrics.get('dirichlet_energy', 0.0):.6f}"
         )
 
     def _evaluate_curated(self, pl_module) -> dict[str, float]:
         from gnn.supervised_learning.loader_graphgym import compute_binary_metrics
+        from gnn.shared.utils.graph_utils import compute_normalized_dirichlet_energy
 
         pl_module.eval()
         loss_sum = 0.0
         count = 0
         true_parts = []
         pred_parts = []
+
+        mp_embeddings = []
+        def hook_fn(module, inputs, outputs):
+            mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
+
+        hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
 
         with torch.no_grad():
             for batch in self.curated_loader:
@@ -112,6 +125,8 @@ class CuratedEvalCallback(pl.callbacks.Callback):
                 true_parts.append(outputs["true"].detach().cpu())
                 pred_parts.append(outputs["pred_score"].detach().cpu())
 
+        hook_handle.remove()
+
         if count == 0:
             return {
                 "loss": 0.0,
@@ -119,15 +134,25 @@ class CuratedEvalCallback(pl.callbacks.Callback):
                 "pr_auc": 0.0,
                 "true": None,
                 "pred": None,
+                "dirichlet_energy": 0.0,
             }
 
         true = torch.cat(true_parts)
         pred = torch.cat(pred_parts)
         metric_values = compute_binary_metrics(true, pred)
+
+        # Calculate dirichlet energy
+        energies = []
+        for x, edge_index, edge_attr in mp_embeddings:
+            energy = compute_normalized_dirichlet_energy(x, edge_index)
+            energies.append(energy)
+        avg_energy = sum(energies) / len(energies) if energies else 0.0
+
         return {
             "loss": loss_sum / count,
             "true": true,
             "pred": pred,
+            "dirichlet_energy": avg_energy,
             **metric_values,
         }
 
@@ -152,9 +177,72 @@ class CuratedEvalCallback(pl.callbacks.Callback):
                 lr=0.0,
                 time_used=0.0,
                 params=cfg.params,
+                dirichlet_energy=float(metrics.get("dirichlet_energy", 0.0)),
             )
             test_logger.write_epoch(trainer.current_epoch)
             return
+
+
+class DirichletLoggerCallback(LoggerCallback):
+    """
+    Subclasses GraphGym's standard LoggerCallback to intercept GNN message-passing
+    embeddings, compute normalized Dirichlet energy for each batch, and log it
+    directly to the stats.json outputs as a custom metric.
+    """
+    def __init__(self):
+        super().__init__()
+        self._embeddings = []
+        self._hook_handle = None
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        super().on_train_epoch_start(trainer, pl_module)
+        self._embeddings = []
+        def hook_fn(module, inputs, outputs):
+            self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
+        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+
+    def on_validation_epoch_start(self, trainer, pl_module):
+        super().on_validation_epoch_start(trainer, pl_module)
+        self._embeddings = []
+        def hook_fn(module, inputs, outputs):
+            self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
+        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+
+    def on_test_epoch_start(self, trainer, pl_module):
+        super().on_test_epoch_start(trainer, pl_module)
+        self._embeddings = []
+        def hook_fn(module, inputs, outputs):
+            self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
+        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+
+    def _get_dirichlet_energy_for_batch(self):
+        if not self._embeddings:
+            return 0.0
+        x, edge_index = self._embeddings.pop(0)
+        from gnn.shared.utils.graph_utils import compute_normalized_dirichlet_energy
+        return compute_normalized_dirichlet_energy(x, edge_index)
+
+    def _get_stats(self, epoch_start_time: int, outputs: dict, trainer: 'pl.Trainer') -> dict:
+        stats = super()._get_stats(epoch_start_time, outputs, trainer)
+        stats['dirichlet_energy'] = self._get_dirichlet_energy_for_batch()
+        return stats
+
+    def _remove_hook(self):
+        if self._hook_handle is not None:
+            self._hook_handle.remove()
+            self._hook_handle = None
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        self._remove_hook()
+        super().on_train_epoch_end(trainer, pl_module)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        self._remove_hook()
+        super().on_validation_epoch_end(trainer, pl_module)
+
+    def on_test_epoch_end(self, trainer, pl_module):
+        self._remove_hook()
+        super().on_test_epoch_end(trainer, pl_module)
 
 
 class ValMetricLogger(pl.callbacks.Callback):
@@ -169,6 +257,8 @@ class ValMetricLogger(pl.callbacks.Callback):
     def __init__(self):
         super().__init__()
         self._val_data = {}
+        self._hook_handle = None
+        self._embeddings = []
         
     def _init_data(self, idx):
         if idx not in self._val_data:
@@ -178,6 +268,12 @@ class ValMetricLogger(pl.callbacks.Callback):
                 'true': [],
                 'pred': []
             }
+            
+    def on_validation_epoch_start(self, trainer, pl_module):
+        self._embeddings = []
+        def hook_fn(module, inputs, outputs):
+            self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
+        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
     
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if outputs is None:
@@ -191,6 +287,18 @@ class ValMetricLogger(pl.callbacks.Callback):
         self._val_data[dataloader_idx]['pred'].append(outputs['pred_score'].detach().cpu())
     
     def on_validation_epoch_end(self, trainer, pl_module):
+        if self._hook_handle is not None:
+            self._hook_handle.remove()
+            self._hook_handle = None
+            
+        # Calculate average dirichlet energy
+        from gnn.shared.utils.graph_utils import compute_normalized_dirichlet_energy
+        energies = []
+        for x, edge_index, edge_attr in self._embeddings:
+            energy = compute_normalized_dirichlet_energy(x, edge_index)
+            energies.append(energy)
+        avg_energy = sum(energies) / len(energies) if energies else 0.0
+        
         for idx, data in self._val_data.items():
             if data['count'] == 0:
                 continue
@@ -206,6 +314,8 @@ class ValMetricLogger(pl.callbacks.Callback):
                 pl_module.log('val_loss', avg_loss, prog_bar=True, sync_dist=True)
                 pl_module.log('val_auc', metrics['auc'], prog_bar=True, sync_dist=True)
                 pl_module.log('val_pr_auc', metrics['pr_auc'], prog_bar=True, sync_dist=True)
+                pl_module.log('val_dirichlet_energy', avg_energy, prog_bar=True, sync_dist=True)
+                print(f"[GraphGym] Validation Normalized Dirichlet Energy: {avg_energy:.6f}")
 
         self._val_data = {}
 
@@ -223,9 +333,9 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     
     callbacks = []
     
-    # 1. GraphGym's built-in LoggerCallback (writes stats.json for train/val/test)
+    # 1. GraphGym's built-in LoggerCallback subclass (writes stats.json with dirichlet_energy)
     if logger:
-        callbacks.append(LoggerCallback())
+        callbacks.append(DirichletLoggerCallback())
     
     # 2. Our ValMetricLogger bridge (makes val metrics visible to Lightning)
     callbacks.append(ValMetricLogger())
