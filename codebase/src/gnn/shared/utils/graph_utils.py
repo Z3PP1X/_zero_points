@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import torch
 import networkx as nx
@@ -7,6 +8,9 @@ from typing import Union, Any, Dict
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.utils import from_networkx
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 # Fixed canonical vocabularies (stable across datasets and load order).
@@ -67,7 +71,11 @@ CANONICAL_EDGE_TYPES: tuple[str, ...] = (
     "virtual_reverse",
     "supernode_connection",
     "supernode_connection_reverse",
-)
+    "NextUse",
+    "NextUseBackward",
+    "GlobalToKappa",
+    "KappaToGlobal",
+) + tuple(f"OuterToInner_Arg{i}" for i in range(10)) + tuple(f"InnerToOuter_Arg{i}" for i in range(10))
 CANONICAL_EDGE_TYPE_VOCAB: dict[str, int] = {etype: idx for idx, etype in enumerate(CANONICAL_EDGE_TYPES)}
 
 VIRTUAL_NODE_TYPES = frozenset(
@@ -534,6 +542,119 @@ class TopologicalFeatureExtractor:
         return results
 
 
+def build_augmented_math_graph(
+    G: nx.DiGraph,
+    current_node: str,
+    last_seen_map: dict[str, str],
+    children_dict: dict[str, list[str]],
+    edge_direction: str,
+    enrich: bool,
+    active_outer_function: str | None = None,
+    current_arg_index: int = 0,
+) -> None:
+    """Recursively augments the mathematical expression graph G using DFS.
+    
+    Adds "NextUse"/"NextUseBackward" edges for variable tracking and position-aware
+    functional nesting edges for nested operations based on the active outer function
+    and edge direction configuration.
+    
+    Arguments:
+        G: The NetworkX directed graph to augment with new edges.
+        current_node: The current node ID being visited.
+        last_seen_map: A dictionary mapping variable names to their last visited Node ID.
+        children_dict: A dictionary mapping parent node IDs to list of child node IDs.
+        edge_direction: The direction of the edges ("top_down", "bottom_up", or "bidirectional").
+        enrich: Whether features are enriched (adding all fields) or basic (subset of fields).
+        active_outer_function: The Node ID of the closest ancestor function node.
+        current_arg_index: The argument index of the current node relative to its active outer function parent.
+        
+    Returns:
+        None
+        
+    Exceptions:
+        None
+    """
+    node_attrs = G.nodes[current_node]
+    
+    def add_augmented_edge(u: str, v: str, etype: str) -> None:
+        etype_id = encode_edge_type(etype)
+        if enrich:
+            G.add_edge(
+                u,
+                v,
+                child_index=0.0,
+                direction=0.0,
+                relation_type=float(etype_id),
+                edge_betweenness_centrality=0.0,
+                etype=etype,
+            )
+        else:
+            G.add_edge(
+                u,
+                v,
+                edge_type=etype_id,
+                child_index=0.0,
+                etype=etype,
+            )
+
+    # 1. Variable NextUse Tracking (Algorithm 1)
+    is_variable = (node_attrs.get("type") == "variable")
+    if is_variable:
+        variable_name = node_attrs.get("label")
+        if isinstance(variable_name, str):
+            if variable_name in last_seen_map:
+                previous_variable_node = last_seen_map[variable_name]
+                if edge_direction in ("top_down", "bidirectional"):
+                    add_augmented_edge(previous_variable_node, current_node, "NextUse")
+                if edge_direction in ("bottom_up", "bidirectional"):
+                    add_augmented_edge(current_node, previous_variable_node, "NextUseBackward")
+            last_seen_map[variable_name] = current_node
+
+    # 2. TrackFunctionNestingWithSides (Algorithm 2)
+    ALLOWED_FUNCTIONS = ["log", "exp", "sin", "cos", "Plus", "Times", "CustomFunc"]
+    node_label = node_attrs.get("label")
+    is_function_node = False
+    if isinstance(node_label, str):
+        is_function_node = (node_label.lower() in {f.lower() for f in ALLOWED_FUNCTIONS})
+
+    if is_function_node:
+        if active_outer_function is not None:
+            edge_type_str = f"OuterToInner_Arg{current_arg_index}"
+            backward_edge_type_str = f"InnerToOuter_Arg{current_arg_index}"
+            
+            if edge_direction in ("top_down", "bidirectional"):
+                add_augmented_edge(active_outer_function, current_node, edge_type_str)
+            if edge_direction in ("bottom_up", "bidirectional"):
+                add_augmented_edge(current_node, active_outer_function, backward_edge_type_str)
+        active_outer_function = current_node
+
+    # 3. Recursive DFS traversal down the children (Left to Right)
+    children = children_dict.get(current_node, [])
+    for idx, child in enumerate(children):
+        if is_function_node:
+            build_augmented_math_graph(
+                G,
+                child,
+                last_seen_map,
+                children_dict,
+                edge_direction,
+                enrich,
+                active_outer_function=active_outer_function,
+                current_arg_index=idx,
+            )
+        else:
+            build_augmented_math_graph(
+                G,
+                child,
+                last_seen_map,
+                children_dict,
+                edge_direction,
+                enrich,
+                active_outer_function=active_outer_function,
+                current_arg_index=current_arg_index,
+            )
+
+
 class ExpressionGraphConverter:
     NODE_TYPES = {
         "global": 0,
@@ -738,86 +859,6 @@ class ExpressionGraphConverter:
         belongs_to_f_map = compute_belongs_to_f(raw_ast)
         belongs_to_d1_map = compute_belongs_to_d1(raw_ast)
         belongs_to_d2_map = compute_belongs_to_d2(raw_ast)
-        
-        if mode == "graph":
-            # Find variable nodes and global node
-            variable_node_ids = []
-            global_node_id = None
-            for node in raw["nodes"]:
-                if node.get("type") == "variable":
-                    variable_node_ids.append(node["id"])
-                elif node.get("type") == "global":
-                    global_node_id = node["id"]
-            
-            # Add task virtual nodes (function values live on f_root/d1_root/d2_root aggregators)
-            raw["nodes"].append({
-                "id": "virtual_current_x",
-                "label": "virtual_current_x",
-                "type": "virtual_current_x",
-                "value": None
-            })
-            raw["nodes"].append({
-                "id": "virtual_y_target",
-                "label": "virtual_y_target",
-                "type": "virtual_y_target",
-                "value": None
-            })
-            raw["nodes"].append({
-                "id": "virtual_supernode",
-                "label": "virtual_supernode",
-                "type": "virtual_supernode",
-                "value": None
-            })
-
-            existing_aggregators = [
-                agg_id for agg_id in FUNCTION_AGGREGATOR_IDS
-                if any(node["id"] == agg_id for node in raw["nodes"])
-            ]
-
-            # virtual_current_x -> all variables
-            for var_id in variable_node_ids:
-                raw["edges"].append({
-                    "source": "virtual_current_x",
-                    "target": var_id,
-                    "type": "virtual"
-                })
-            # virtual_current_x <-> per-function aggregators (couple x to f, f', f'')
-            for agg_id in existing_aggregators:
-                raw["edges"].append({
-                    "source": "virtual_current_x",
-                    "target": agg_id,
-                    "type": "virtual"
-                })
-                raw["edges"].append({
-                    "source": agg_id,
-                    "target": "virtual_current_x",
-                    "type": "virtual"
-                })
-            # f_root <-> virtual_y_target (root-finding target applies to f only)
-            if "f_root" in existing_aggregators:
-                raw["edges"].append({
-                    "source": "f_root",
-                    "target": "virtual_y_target",
-                    "type": "virtual"
-                })
-                raw["edges"].append({
-                    "source": "virtual_y_target",
-                    "target": "f_root",
-                    "type": "virtual"
-                })
-            # Newton/Halley coupling between derivative aggregators
-            for src, tgt in (("f_root", "d1_root"), ("d1_root", "d2_root"), ("f_root", "d2_root")):
-                if src in existing_aggregators and tgt in existing_aggregators:
-                    raw["edges"].append({"source": src, "target": tgt, "type": "virtual"})
-                    raw["edges"].append({"source": tgt, "target": src, "type": "virtual"})
-            # global node -> virtual_y_target
-            if global_node_id is not None:
-                raw["edges"].append({
-                    "source": global_node_id,
-                    "target": "virtual_y_target",
-                    "type": "virtual"
-                })
-        
         # 1. Build AST graph for structural features (excludes virtual nodes)
         G_ast = self._build_networkx(
             raw_ast,
@@ -925,7 +966,34 @@ class ExpressionGraphConverter:
                     edge_direction,
                 )
 
-            self._add_virtual_supernode_edges_basic(G_enriched, node_ids)
+        # Build children_dict from all parent-to-child edges in raw_ast
+        children_dict = {}
+        for edge in raw_ast.get("edges", []):
+            parent = edge["source"]
+            child = edge["target"]
+            children_dict.setdefault(parent, []).append(child)
+
+        last_seen_map = {}
+        if "global" in G_enriched:
+            build_augmented_math_graph(
+                G_enriched,
+                "global",
+                last_seen_map,
+                children_dict,
+                edge_direction,
+                enrich,
+            )
+        else:
+            roots = [n for n, d in G_ast.in_degree() if d == 0]
+            for r in roots:
+                build_augmented_math_graph(
+                    G_enriched,
+                    r,
+                    last_seen_map,
+                    children_dict,
+                    edge_direction,
+                    enrich,
+                )
 
         if heterogeneous:
             data = self._to_hetero(G_enriched, raw, topo, enrich)
@@ -1358,7 +1426,26 @@ def populate_task_virtual_values(
     set_has_value: bool = False,
     node_id_indices: dict[str, int] | None = None,
 ) -> None:
-    """Write current iterate / function values onto task virtual and aggregator nodes."""
+    """Write current iterate / function values onto task virtual and aggregator nodes.
+    
+    Arguments:
+        data: The PyG Data or HeteroData object to populate values on.
+        cx_val: The current value of x.
+        fx_val: The value of function f(x).
+        yt_val: The target y value.
+        d1x_val: The value of first derivative f'(x).
+        d2x_val: The value of second derivative f''(x).
+        mode: The graph conversion mode (graph, tree, or tree_derivatives).
+        enrich: Whether features are enriched or basic.
+        set_has_value: Whether to set has_value flag to 1.0.
+        node_id_indices: Optional precomputed node ID to index mapping.
+        
+    Returns:
+        None
+        
+    Exceptions:
+        None
+    """
     if isinstance(data, HeteroData):
         if 'virtual' not in data.node_types or not hasattr(data['virtual'], 'node_ids') or data['virtual'].node_ids is None:
             return
@@ -1378,18 +1465,11 @@ def populate_task_virtual_values(
                 
         try:
             delta_val = yt_val - fx_val
-            if mode == "graph":
-                write_hetero("virtual_current_x", 0, cx_val)
-                write_hetero("virtual_y_target", 1, delta_val)
-                write_hetero("f_root", 1, delta_val)
-                write_hetero("d1_root", 2, d1x_val)
-                write_hetero("d2_root", 3, d2x_val)
-            elif mode in ("tree", "tree_derivatives"):
-                task_target = "f_root" if "f_root" in virtual_node_ids else "global"
-                write_hetero(task_target, 0, cx_val)
-                write_hetero(task_target, 1, delta_val)
-                write_hetero("d1_root", 2, d1x_val)
-                write_hetero("d2_root", 3, d2x_val)
+            task_target = "f_root" if "f_root" in virtual_node_ids else "global"
+            write_hetero(task_target, 0, cx_val)
+            write_hetero(task_target, 1, delta_val)
+            write_hetero("d1_root", 2, d1x_val)
+            write_hetero("d2_root", 3, d2x_val)
         except ValueError:
             pass
         return
@@ -1423,23 +1503,13 @@ def populate_task_virtual_values(
 
     try:
         delta_val = yt_val - fx_val
-        if mode == "graph":
-            write("virtual_current_x", cx_idx, cx_val)
-            write("virtual_y_target", dt_idx, delta_val)
-            if "f_root" in data.node_ids:
-                write("f_root", dt_idx, delta_val)
-            if "d1_root" in data.node_ids:
-                write("d1_root", d1_idx, d1x_val)
-            if "d2_root" in data.node_ids:
-                write("d2_root", d2_idx, d2x_val)
-        elif mode in ("tree", "tree_derivatives"):
-            task_target = "f_root" if "f_root" in data.node_ids else "global"
-            write(task_target, cx_idx, cx_val)
-            write(task_target, dt_idx, delta_val)
-            if "d1_root" in data.node_ids:
-                write("d1_root", d1_idx, d1x_val)
-            if "d2_root" in data.node_ids:
-                write("d2_root", d2_idx, d2x_val)
+        task_target = "f_root" if "f_root" in data.node_ids else "global"
+        write(task_target, cx_idx, cx_val)
+        write(task_target, dt_idx, delta_val)
+        if "d1_root" in data.node_ids:
+            write("d1_root", d1_idx, d1x_val)
+        if "d2_root" in data.node_ids:
+            write("d2_root", d2_idx, d2x_val)
     except ValueError:
         pass
 
@@ -1738,4 +1808,460 @@ def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tenso
     normalized_energy = tr_x_L_x / tr_x_x
 
     return float(normalized_energy.item())
+
+
+# ==============================================================================
+# Augmented Graph Dataloader Enhancement (kappa h-functions integration)
+# ==============================================================================
+
+
+class KappaEdge:
+    """Represents a connection between the global node and a kappa root node.
+
+    Attributes:
+        source (str): The ID of the source node.
+        target (str): The ID of the target node.
+        type (str): The type of the edge ("GlobalToKappa" or "KappaToGlobal").
+        features (dict[str, float]): A dictionary containing edge features (e.g., "weight").
+    """
+
+    def __init__(self, source: str, target: str, type: str):
+        """Initializes a new instance of KappaEdge.
+
+        Arguments:
+            source: The ID of the source node.
+            target: The ID of the target node.
+            type: The type of the edge.
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+        self.source = source
+        self.target = target
+        self.type = type
+        self.features: dict[str, float] = {"weight": 0.0}
+
+
+class AugmentedFunctionGraph(nx.DiGraph):
+    """NetworkX DiGraph wrapper that supports operations required by the LoadAugmentedFunctionGraph algorithm.
+
+    Attributes:
+        subgraph_counter (int): Counter to generate unique node IDs when merging subgraphs.
+    """
+
+    def __init__(self, incoming_graph_data=None, **attr):
+        """Initializes the AugmentedFunctionGraph with optional incoming graph data.
+
+        Arguments:
+            incoming_graph_data: Graph data to initialize the NetworkX DiGraph.
+            attr: Additional graph attributes.
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+        super().__init__(incoming_graph_data, **attr)
+        self.subgraph_counter = 0
+
+    def HasGlobalNode(self) -> bool:
+        """Checks if a node of type 'global' exists in the graph.
+
+        Returns:
+            bool: True if a global node is present, False otherwise.
+
+        Raises:
+            None
+        """
+        for node, attrs in self.nodes(data=True):
+            if attrs.get("type") == "global" or node == "global":
+                return True
+        return False
+
+    def GetGlobalNode(self) -> str:
+        """Retrieves the ID of the global node.
+
+        Returns:
+            str: The ID of the global node.
+
+        Raises:
+            KeyError: If no global node exists in the graph.
+        """
+        for node, attrs in self.nodes(data=True):
+            if attrs.get("type") == "global" or node == "global":
+                return str(node)
+        raise KeyError("Global node not found in graph.")
+
+    def CreateVirtualGlobalNode(self, nodeType: str = "GlobalContext") -> str:
+        """Creates a virtual global node in the graph and returns its ID.
+
+        Arguments:
+            nodeType: The type attribute to assign to the new node.
+
+        Returns:
+            str: The ID of the created global node (always 'global').
+
+        Raises:
+            None
+        """
+        global_id = "global"
+        self.add_node(
+            global_id,
+            node_type=ExpressionGraphConverter.NODE_TYPES.get("global", 0),
+            label_id=encode_label("GLOBAL"),
+            label="GLOBAL",
+            type="global",
+            value=0.0,
+            has_value=0.0,
+            belongs_to_f=0.0,
+            belongs_to_d1=0.0,
+            belongs_to_d2=0.0,
+            virtual_current_x_val=0.0,
+            virtual_delta_target_val=0.0,
+            virtual_d1_x_val=0.0,
+            virtual_d2_x_val=0.0,
+            context_type=nodeType
+        )
+        return global_id
+
+    def MergeDisjointSubgraph(self, kappa_subgraph: Union[nx.DiGraph, str, dict]) -> str:
+        """Merges a disjoint kappa subgraph into the main graph, avoiding ID collisions.
+
+        Arguments:
+            kappa_subgraph: The kappa subgraph to merge. Can be an nx.DiGraph, a GraphML string, or a dict.
+
+        Returns:
+            str: The shifted node ID of the root node of the merged kappa subgraph.
+
+        Raises:
+            TypeError: If the kappa_subgraph has an unsupported type.
+            ValueError: If the kappa_subgraph is empty or invalid.
+        """
+        self.subgraph_counter += 1
+        prefix = f"kappa_{self.subgraph_counter}"
+
+        # 1. Parse/normalize the input subgraph into an nx.DiGraph
+        if isinstance(kappa_subgraph, str):
+            content = kappa_subgraph.replace("attr.type='String'", "attr.type='string'")
+            content = content.replace('attr.type="String"', 'attr.type="string"')
+            g_kappa = nx.parse_graphml(content)
+        elif isinstance(kappa_subgraph, nx.DiGraph):
+            g_kappa = kappa_subgraph
+        elif isinstance(kappa_subgraph, dict):
+            g_kappa = nx.DiGraph()
+            for node in kappa_subgraph.get("nodes", []):
+                g_kappa.add_node(node["id"], **node)
+            for edge in kappa_subgraph.get("edges", []):
+                g_kappa.add_edge(edge["source"], edge["target"], **edge)
+        else:
+            raise TypeError(f"Unsupported subgraph type: {type(kappa_subgraph)}")
+
+        # Normalize nodes in g_kappa so they have all standard attributes
+        normalized_g_kappa = nx.DiGraph()
+        for nid, attrs in g_kappa.nodes(data=True):
+            name_val = attrs.get("Name") or attrs.get("nodeKey1") or attrs.get("label") or str(nid)
+            label = parse_graphml_node_name(name_val) if isinstance(name_val, str) else str(name_val)
+
+            type_str = attrs.get("type") or _determine_node_type_from_label(label)
+            val = 0.0
+            has_val = 0.0
+            if type_str == "constant":
+                val_attr = attrs.get("value")
+                if isinstance(val_attr, (int, float)):
+                    val = float(val_attr)
+                else:
+                    val = _parse_constant_value(label)
+                has_val = 1.0
+
+            ntype_code = ExpressionGraphConverter.NODE_TYPES.get(type_str, 4)
+
+            normalized_g_kappa.add_node(
+                nid,
+                node_type=ntype_code,
+                label_id=encode_label(label),
+                label=label,
+                type=type_str,
+                value=signed_log_value(val),
+                has_value=has_val,
+                belongs_to_f=0.0,
+                belongs_to_d1=0.0,
+                belongs_to_d2=0.0,
+                virtual_current_x_val=0.0,
+                virtual_delta_target_val=0.0,
+                virtual_d1_x_val=0.0,
+                virtual_d2_x_val=0.0
+            )
+
+        for u, v, attrs in g_kappa.edges(data=True):
+            etype = attrs.get("type") or attrs.get("etype") or "child_of"
+            normalized_g_kappa.add_edge(
+                u, v,
+                edge_type=encode_edge_type(etype),
+                etype=etype
+            )
+
+        # 2. Identify the root node in the normalized subgraph
+        roots = [n for n, d in normalized_g_kappa.in_degree() if d == 0]
+        if roots:
+            original_root = roots[0]
+        else:
+            original_root = list(normalized_g_kappa.nodes)[0] if normalized_g_kappa.nodes else None
+
+        if original_root is None:
+            raise ValueError("Cannot merge an empty kappa subgraph.")
+
+        # 3. Add nodes and edges to self, shifting the node IDs
+        shifted_root_id = f"{prefix}_{original_root}"
+
+        for nid, attrs in normalized_g_kappa.nodes(data=True):
+            shifted_id = f"{prefix}_{nid}"
+            self.add_node(shifted_id, **attrs)
+
+        for u, v, attrs in normalized_g_kappa.edges(data=True):
+            self.add_edge(f"{prefix}_{u}", f"{prefix}_{v}", **attrs)
+
+        return shifted_root_id
+
+    def AddEdge(self, edge: KappaEdge) -> None:
+        """Adds a KappaEdge connection between the global node and a kappa root node.
+
+        Arguments:
+            edge: The KappaEdge to add to the graph.
+
+        Returns:
+            None
+
+        Raises:
+            None
+        """
+        weight = edge.features.get("weight", 0.0)
+        edge_type_code = encode_edge_type(edge.type)
+        direction_val = 0.0 if edge.type == "GlobalToKappa" else 1.0
+
+        self.add_edge(
+            edge.source,
+            edge.target,
+            edge_type=edge_type_code,
+            etype=edge.type,
+            weight=weight,
+            child_index=0.0,
+            direction=direction_val,
+            relation_type=float(edge_type_code),
+            edge_betweenness_centrality=0.0,
+        )
+
+
+def LoadGraphFromLocalStructure(folder: Union[Path, str], id: str) -> AugmentedFunctionGraph:
+    """Loads a mathematical basis graph by ID from local graphs folder and returns it as an AugmentedFunctionGraph.
+
+    Arguments:
+        folder: The folder (directory or file) containing the graph data.
+        id: The unique ID of the graph to load.
+
+    Returns:
+        AugmentedFunctionGraph containing the loaded mathematical graph.
+
+    Raises:
+        FileNotFoundError: If the folder does not exist.
+        KeyError: If the graph ID is not found.
+    """
+    folder_path = Path(folder)
+    if not folder_path.exists():
+        raise FileNotFoundError(f"Folder or file not found: {folder}")
+
+    raw_data = None
+    try:
+        if folder_path.is_file():
+            with open(folder_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and item.get("id") == id:
+                        raw_data = item
+                        break
+            elif isinstance(data, dict):
+                if data.get("id") == id:
+                    raw_data = data
+                elif id in data:
+                    raw_data = data[id]
+        else:
+            direct_files = [
+                folder_path / f"{id}.json",
+                folder_path / f"{id}_meta.json"
+            ]
+            for df in direct_files:
+                if df.exists() and df.is_file():
+                    with open(df, "r", encoding="utf-8") as f:
+                        raw_data = json.load(f)
+                    break
+
+            if raw_data is None:
+                for filepath in folder_path.glob("**/*.json"):
+                    if ".pt_cache" in filepath.parts:
+                        continue
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+
+                        if isinstance(data, list):
+                            for item in data:
+                                if isinstance(item, dict) and item.get("id") == id:
+                                    raw_data = item
+                                    break
+                        elif isinstance(data, dict):
+                            if data.get("id") == id:
+                                raw_data = data
+                                break
+                            elif id in data:
+                                raw_data = data[id]
+                                break
+                    except Exception:
+                        continue
+                    if raw_data is not None:
+                        break
+    except Exception as e:
+        logger.error(f"Error reading local graph structure for ID {id}: {e}")
+        raise
+
+    if raw_data is None:
+        raise KeyError(f"Graph ID '{id}' not found in folder '{folder}'")
+
+    if "graphml_f" in raw_data:
+        g_f = raw_data.get("graphml_f", "")
+        g_d1 = raw_data.get("graphml_derivative1", "")
+        g_d2 = raw_data.get("graphml_derivative2", "")
+        nx_graph = create_virtual_global_node(g_f, g_d1, g_d2)
+    else:
+        nx_graph = nx.DiGraph()
+        nodes = raw_data.get("nodes", [])
+        edges = raw_data.get("edges", [])
+
+        belongs_to_f_map = compute_belongs_to_f(raw_data)
+        belongs_to_d1_map = compute_belongs_to_d1(raw_data)
+        belongs_to_d2_map = compute_belongs_to_d2(raw_data)
+
+        for node in nodes:
+            val_dict = node.get("value")
+            if isinstance(val_dict, dict) and val_dict.get("mantissa") is not None:
+                mantissa = val_dict["mantissa"]
+                exponent = val_dict.get("exponent", 0)
+                actual_value = float(mantissa * (10 ** exponent))
+                has_val = 1.0
+            else:
+                if isinstance(val_dict, (int, float)):
+                    actual_value = float(val_dict)
+                    has_val = 1.0
+                else:
+                    actual_value = 0.0
+                    has_val = 0.0
+
+            nx_graph.add_node(
+                node["id"],
+                node_type=ExpressionGraphConverter.NODE_TYPES[node["type"]],
+                label_id=encode_label(node["label"]),
+                value=signed_log_value(actual_value),
+                has_value=has_val,
+                belongs_to_f=float(belongs_to_f_map.get(node["id"], 0.0)),
+                belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),
+                belongs_to_d2=float(belongs_to_d2_map.get(node["id"], 0.0)),
+                virtual_current_x_val=0.0,
+                virtual_delta_target_val=0.0,
+                virtual_d1_x_val=0.0,
+                virtual_d2_x_val=0.0,
+                type=node["type"],
+                label=node["label"],
+            )
+        for edge in edges:
+            nx_graph.add_edge(
+                edge["source"],
+                edge["target"],
+                edge_type=encode_edge_type(edge["type"]),
+                etype=edge["type"]
+            )
+
+    return AugmentedFunctionGraph(nx_graph)
+
+
+def LoadAugmentedFunctionGraph(
+    graphId: str, graphsFolder: Union[str, Path], kappasFolder: Union[str, Path]
+) -> AugmentedFunctionGraph:
+    """Enhances a main function graph by merging matching kappa h-functions.
+
+    Arguments:
+        graphId: The unique ID of the main function graph to load.
+        graphsFolder: Path to the folder containing mathematical basis graphs.
+        kappasFolder: Path to the folder containing kappa h-functions.
+
+    Returns:
+        An AugmentedFunctionGraph that is compatible with PyTorch-Geometric/NetworkX.
+
+    Raises:
+        FileNotFoundError: If the folders do not exist.
+        KeyError: If the graphId is not found.
+    """
+    mainGraph = LoadGraphFromLocalStructure(folder=graphsFolder, id=graphId)
+
+    if not mainGraph.HasGlobalNode():
+        globalNode = mainGraph.CreateVirtualGlobalNode(nodeType="GlobalContext")
+    else:
+        globalNode = mainGraph.GetGlobalNode()
+
+    kappas_path = Path(kappasFolder)
+    if not kappas_path.exists():
+        raise FileNotFoundError(f"Kappas folder not found: {kappasFolder}")
+
+    kappa_files = list(kappas_path.glob("**/*.json"))
+
+    for file_path in kappa_files:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, list):
+                containers = data
+            elif isinstance(data, dict):
+                containers = [data]
+            else:
+                continue
+
+            for kappaContainer in containers:
+                if not isinstance(kappaContainer, dict):
+                    continue
+
+                if kappaContainer.get("id") == "kappa":
+                    kappa_val_raw = kappaContainer.get("value")
+                    try:
+                        kappaValue = float(kappa_val_raw)
+                    except (ValueError, TypeError):
+                        kappaValue = 0.0
+
+                    kappaSubgraph = kappaContainer.get("graphStructure") or kappaContainer.get("graphml_h")
+                    if not kappaSubgraph:
+                        continue
+
+                    kappaRootNodeId = mainGraph.MergeDisjointSubgraph(kappaSubgraph)
+
+                    newEdge = KappaEdge(
+                        source=globalNode,
+                        target=kappaRootNodeId,
+                        type="GlobalToKappa"
+                    )
+                    newEdge.features["weight"] = kappaValue
+                    mainGraph.AddEdge(newEdge)
+
+                    backwardEdge = KappaEdge(
+                        source=kappaRootNodeId,
+                        target=globalNode,
+                        type="KappaToGlobal"
+                    )
+                    backwardEdge.features["weight"] = kappaValue
+                    mainGraph.AddEdge(backwardEdge)
+        except Exception as e:
+            logger.warning(f"Error reading or processing kappa file {file_path}: {e}")
+
+    return mainGraph
 

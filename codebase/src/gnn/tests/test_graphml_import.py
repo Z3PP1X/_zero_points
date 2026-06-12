@@ -119,14 +119,12 @@ def test_expression_graph_converter_with_container_format():
 
     converter = ExpressionGraphConverter()
     
-    # 1. Test "graph" mode (compiles f, d1, d2 + aggregators + virtual nodes + supernode)
-    # Nodes: 3 + 1 + 1 + 1 + 3 aggregators + 2 task virtual + 1 supernode = 12
+    # 1. Test "graph" mode (compiles f, d1, d2 + aggregators, no task virtual nodes)
+    # Nodes: 3 + 1 + 1 + 1 + 3 aggregators = 9
     data_graph = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="graph")
-    assert data_graph.num_nodes == 12
-    assert "virtual_supernode" in data_graph.node_ids
+    assert data_graph.num_nodes == 9
     assert "global" in data_graph.node_ids
     assert "f_1" in data_graph.node_ids
-    assert "virtual_current_x" in data_graph.node_ids
     assert "d1_1" in data_graph.node_ids
     assert "d2_1" in data_graph.node_ids
 

@@ -159,18 +159,15 @@ def test_heterogeneous_state_injection():
     # Verify that virtual node feature values are injected correctly in data['virtual'].x
     v_ids = data["virtual"].node_ids
     
-    idx_cx = v_ids.index("virtual_current_x")
     idx_f_root = v_ids.index("f_root")
     idx_d1_root = v_ids.index("d1_root")
     idx_d2_root = v_ids.index("d2_root")
-    idx_yt = v_ids.index("virtual_y_target")
     
     delta_val = yt - fx
-    assert data["virtual"].x[idx_cx, 0].item() == pytest.approx(signed_log_value(cx))
+    assert data["virtual"].x[idx_f_root, 0].item() == pytest.approx(signed_log_value(cx))
     assert data["virtual"].x[idx_f_root, 1].item() == pytest.approx(signed_log_value(delta_val))
     assert data["virtual"].x[idx_d1_root, 2].item() == pytest.approx(signed_log_value(d1x))
     assert data["virtual"].x[idx_d2_root, 3].item() == pytest.approx(signed_log_value(d2x))
-    assert data["virtual"].x[idx_yt, 1].item() == pytest.approx(signed_log_value(delta_val))
     
     # Ensure static AST nodes are NOT mutated
     assert torch.allclose(data["operator"].x, op_x_orig)
@@ -191,8 +188,8 @@ def test_regression_homogeneous_mode():
     converter = ExpressionGraphConverter()
     data = converter.convert(raw_container, heterogeneous=False, enrich=True, mode="graph")
     
-    # Ensure legacy homogeneous structure is correct and contains 12 nodes
-    assert data.num_nodes == 12
+    # Ensure legacy homogeneous structure is correct and contains 9 nodes (no task virtual nodes)
+    assert data.num_nodes == 9
     assert not isinstance(data, HeteroData)
     assert data.x.shape[1] == 24
     assert hasattr(data, "node_ids")
