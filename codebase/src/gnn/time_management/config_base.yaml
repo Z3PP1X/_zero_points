@@ -19,9 +19,7 @@ expression_graph:
   features:
     node: true
     topology: true
-    positional:
-      enabled: true
-      encodings: [lpe, rwpe]
+    positional: [lpe, rwpe]  # true = both encodings, false = none
     edge: true
   active_features: ""
 

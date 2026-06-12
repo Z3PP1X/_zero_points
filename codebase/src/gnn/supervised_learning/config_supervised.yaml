@@ -25,15 +25,17 @@ expression_graph:
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
 
-  # Node/edge feature classes (CLI: --feature-groups, --positional-encoding)
+  # Node/edge feature classes. Each category takes the same uniform form:
+  #   true  -> load all members (default)   false -> load none   [a, b] -> only these
   # Classes: node | topology | positional | edge
+  # CLI overrides: --feature-groups, --node-features, --topology-features,
+  #                --positional-encoding, --edge-features
   features:
-    node: true        # node_type, label_id, value, has_value, virtual_*, belongs_to_*
-    topology: true    # depth, height, subtree_size, out_degree, betweenness_centrality
-    positional:
-      enabled: true
-      encodings: [lpe, rwpe]  # lpe = Laplacian PE, rwpe = random-walk PE
+    node: true        # or e.g. [node_type, label_id, value, has_value, virtual_current_x_val, ...]
+    topology: true    # or e.g. [depth, height, subtree_size, out_degree, betweenness_centrality]
+    positional: [lpe, rwpe]  # lpe = Laplacian PE, rwpe = random-walk PE (true = both, false = none)
     edge: true        # child_index, direction, relation_type, edge_betweenness_centrality
+                      # (edge: a subset is accepted but currently enables all edge columns)
 
   # Optional explicit override (disables grouped toggles above when non-empty)
   active_features: ""

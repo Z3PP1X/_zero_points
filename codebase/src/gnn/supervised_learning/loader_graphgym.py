@@ -374,12 +374,14 @@ def set_custom_cfg(cfg):
     cfg.expression_graph = CN()
     cfg.expression_graph.mode = "graph"  # "graph", "tree", or "tree_derivatives"
     cfg.expression_graph.features = CN()
-    cfg.expression_graph.features.node = True
-    cfg.expression_graph.features.topology = True
-    cfg.expression_graph.features.positional = CN()
-    cfg.expression_graph.features.positional.enabled = True
-    cfg.expression_graph.features.positional.encodings = ["lpe", "rwpe"]
-    cfg.expression_graph.features.edge = True
+    # Uniform flat per-category form: each leaf defaults to None ("all members").
+    # YAML may override with a bool (true/false) or a list subset, e.g.
+    #   node: [node_type, value]   topology: false   positional: [lpe]
+    # None defaults are required so YACS accepts either a bool or a list override.
+    cfg.expression_graph.features.node = None
+    cfg.expression_graph.features.topology = None
+    cfg.expression_graph.features.positional = None
+    cfg.expression_graph.features.edge = None
     cfg.expression_graph.active_features = ""  # Explicit override list, or empty for grouped toggles
     cfg.expression_graph.synthetic = False
     cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name

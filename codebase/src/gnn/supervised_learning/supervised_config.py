@@ -104,14 +104,20 @@ def resolve_expression_graph_features(
     expression_graph: dict[str, Any] | None,
     *,
     feature_groups: list[str] | None = None,
+    node_features: list[str] | None = None,
+    topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
+    edge_features: list[str] | None = None,
     active_features: list[str] | None = None,
 ) -> tuple[FeatureSelection, list[str] | None]:
     """Resolve grouped feature toggles into an active node-feature list."""
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping(expression_graph),
         feature_groups=feature_groups,
+        node_features=node_features,
+        topology_features=topology_features,
         positional_encoding=positional_encoding,
+        edge_features=edge_features,
         active_features=active_features,
     )
     return selection, resolve_active_node_features(selection)
@@ -123,7 +129,10 @@ def apply_expression_graph_overrides(
     mode: str | None = None,
     active_features: list[str] | None = None,
     feature_groups: list[str] | None = None,
+    node_features: list[str] | None = None,
+    topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
+    edge_features: list[str] | None = None,
     synthetic: bool | None = None,
     synthetic_dataset: str | None = None,
     edge_direction: str | None = None,
@@ -140,7 +149,10 @@ def apply_expression_graph_overrides(
             "active_features": getattr(cfg.expression_graph, "active_features", ""),
         },
         feature_groups=feature_groups,
+        node_features=node_features,
+        topology_features=topology_features,
         positional_encoding=positional_encoding,
+        edge_features=edge_features,
         active_features=active_features,
     )
     cfg.expression_graph.active_features = active_features_to_csv(resolved_features)

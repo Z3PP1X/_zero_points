@@ -102,12 +102,100 @@ def validate_positional_encodings(encodings: Iterable[str]) -> list[str]:
     return encodings_list
 
 
+# Selectable members per feature category. Each category accepts the same uniform
+# flat form in config/CLI: ``true`` (all members), ``false`` (none), or a list subset.
+CATEGORY_MEMBERS: dict[str, tuple[str, ...]] = {
+    "node": NODE_FEATURES,
+    "topology": TOPOLOGY_FEATURES,
+    "positional": POSITIONAL_ENCODING_CHOICES,
+    "edge": EDGE_FEATURES,
+}
+
+
+def _validate_members(
+    values: Iterable[str], members: tuple[str, ...], *, label: str
+) -> tuple[str, ...]:
+    """Validate a member subset and return it in canonical (catalog) order."""
+    lowered = [str(value).lower() for value in values]
+    unknown = sorted({value for value in lowered if value not in members})
+    if unknown:
+        raise ValueError(
+            f"Unknown {label} feature(s) {unknown}; expected subset of {list(members)}"
+        )
+    return tuple(member for member in members if member in lowered)
+
+
+def _resolve_category_value(
+    value: Any, members: tuple[str, ...], *, label: str
+) -> bool | tuple[str, ...]:
+    """Normalize a flat category config value.
+
+    ``True``/``None`` -> all members, ``False`` or empty list -> none,
+    a list/csv-string -> validated ordered subset.
+    """
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict) or hasattr(value, "items"):
+        raise ValueError(
+            f"Nested feature config for '{label}' is no longer supported; "
+            f"use the flat form '{label}: true | false | [members]'."
+        )
+    parsed = parse_csv_list(value)
+    if parsed is None:
+        return False
+    return _validate_members(parsed, members, label=label)
+
+
+def _category_member_list(
+    value: bool | tuple[str, ...] | None, members: tuple[str, ...]
+) -> list[str]:
+    """Expand a normalized category value into its active member names."""
+    if value is True:
+        return list(members)
+    if not value:  # False, None, or empty tuple
+        return []
+    return list(value)
+
+
+def _split_positional(value: bool | tuple[str, ...]) -> tuple[bool, tuple[str, ...]]:
+    """Map a normalized positional value onto (enabled, encodings)."""
+    if value is True:
+        return True, POSITIONAL_ENCODING_CHOICES
+    if not value:
+        return False, ()
+    return True, tuple(value)
+
+
+def _coerce_edge(value: bool | tuple[str, ...]) -> bool:
+    """Edge slicing is deferred; a member list means 'enabled' (all edge columns)."""
+    return bool(value)
+
+
+def _apply_list_override(
+    values: list[str], members: tuple[str, ...], *, label: str
+) -> bool | tuple[str, ...]:
+    """Interpret a per-category CLI list override (supports ``none``/``all`` sentinels)."""
+    if values == ["none"]:
+        return False
+    if values == ["all"]:
+        return True
+    return _validate_members(values, members, label=label)
+
+
 @dataclass
 class FeatureSelection:
-    """Resolved feature toggles for one experiment run."""
+    """Resolved feature toggles for one experiment run.
 
-    node: bool = True
-    topology: bool = True
+    ``node`` and ``topology`` are either a bool (all/none) or a tuple subset of
+    member names. ``positional`` is represented by the derived
+    ``positional_enabled`` + ``positional_encodings`` pair. ``edge`` stays a bool
+    (per-edge-feature slicing is deferred).
+    """
+
+    node: bool | tuple[str, ...] = True
+    topology: bool | tuple[str, ...] = True
     positional_enabled: bool = True
     positional_encodings: tuple[str, ...] = ("lpe", "rwpe")
     edge: bool = True
@@ -141,27 +229,36 @@ def default_feature_selection() -> FeatureSelection:
 def parse_feature_selection_from_mapping(
     expression_graph: dict[str, Any] | None,
 ) -> FeatureSelection:
-    """Read grouped feature toggles from an expression_graph YAML/CFG mapping."""
+    """Read grouped feature toggles from an expression_graph YAML/CFG mapping.
+
+    Every category uses the uniform flat form: ``true``/omitted -> all members,
+    ``false`` -> none, a list -> only the listed members.
+    """
     expression_graph = plain_dict(expression_graph)
     features = plain_dict(expression_graph.get("features"))
 
-    positional_cfg = features.get("positional", True)
-    if isinstance(positional_cfg, bool):
-        positional_enabled = positional_cfg
-        positional_encodings = ("lpe", "rwpe")
-    else:
-        positional_enabled = bool(positional_cfg.get("enabled", True))
-        raw_encodings = positional_cfg.get("encodings", ["lpe", "rwpe"])
-        positional_encodings = tuple(validate_positional_encodings(raw_encodings or []))
+    node = _resolve_category_value(
+        features.get("node", True), NODE_FEATURES, label="node"
+    )
+    topology = _resolve_category_value(
+        features.get("topology", True), TOPOLOGY_FEATURES, label="topology"
+    )
+    positional_value = _resolve_category_value(
+        features.get("positional", True), POSITIONAL_ENCODING_CHOICES, label="positional"
+    )
+    edge_value = _resolve_category_value(
+        features.get("edge", True), EDGE_FEATURES, label="edge"
+    )
 
+    positional_enabled, positional_encodings = _split_positional(positional_value)
     explicit_features = parse_csv_list(expression_graph.get("active_features"))
 
     return FeatureSelection(
-        node=bool(features.get("node", True)),
-        topology=bool(features.get("topology", True)),
+        node=node,
+        topology=topology,
         positional_enabled=positional_enabled,
         positional_encodings=positional_encodings,
-        edge=bool(features.get("edge", True)),
+        edge=_coerce_edge(edge_value),
         explicit_features=explicit_features,
     )
 
@@ -170,10 +267,18 @@ def merge_feature_selection(
     base: FeatureSelection,
     *,
     feature_groups: list[str] | None = None,
+    node_features: list[str] | None = None,
+    topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
+    edge_features: list[str] | None = None,
     active_features: list[str] | None = None,
 ) -> FeatureSelection:
-    """Apply CLI overrides onto a YAML-backed FeatureSelection."""
+    """Apply CLI overrides onto a YAML-backed FeatureSelection.
+
+    ``--feature-groups`` sets coarse category on/off first; the per-category list
+    overrides (``node_features``/``topology_features``/``positional_encoding``/
+    ``edge_features``) then refine individual categories.
+    """
     selection = FeatureSelection(
         node=base.node,
         topology=base.topology,
@@ -189,6 +294,17 @@ def merge_feature_selection(
         selection.topology = "topology" in enabled
         selection.edge = "edge" in enabled
         selection.positional_enabled = "positional" in enabled
+
+    if node_features is not None:
+        selection.node = _apply_list_override(node_features, NODE_FEATURES, label="node")
+    if topology_features is not None:
+        selection.topology = _apply_list_override(
+            topology_features, TOPOLOGY_FEATURES, label="topology"
+        )
+    if edge_features is not None:
+        selection.edge = _coerce_edge(
+            _apply_list_override(edge_features, EDGE_FEATURES, label="edge")
+        )
 
     if positional_encoding is not None:
         if positional_encoding == ["none"]:
@@ -233,10 +349,8 @@ def resolve_active_node_features(
         return list(selection.explicit_features)
 
     enabled: list[str] = []
-    if selection.node:
-        enabled.extend(NODE_FEATURES)
-    if selection.topology:
-        enabled.extend(TOPOLOGY_FEATURES)
+    enabled.extend(_category_member_list(selection.node, NODE_FEATURES))
+    enabled.extend(_category_member_list(selection.topology, TOPOLOGY_FEATURES))
     if selection.positional_enabled:
         for encoding in selection.positional_encodings:
             enabled.extend(POSITIONAL_ENCODING_FEATURES[encoding])
@@ -286,6 +400,30 @@ def add_feature_cli_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--node-features",
+        nargs="+",
+        default=None,
+        metavar="FEATURE",
+        choices=[*NODE_FEATURES, "none", "all"],
+        help=(
+            "Node features to load. Subset of "
+            f"{', '.join(NODE_FEATURES)}, or 'all'/'none'. "
+            "Overrides the config's node category."
+        ),
+    )
+    parser.add_argument(
+        "--topology-features",
+        nargs="+",
+        default=None,
+        metavar="FEATURE",
+        choices=[*TOPOLOGY_FEATURES, "none", "all"],
+        help=(
+            "Topology features to load. Subset of "
+            f"{', '.join(TOPOLOGY_FEATURES)}, or 'all'/'none'. "
+            "Overrides the config's topology category."
+        ),
+    )
+    parser.add_argument(
         "--positional-encoding",
         nargs="+",
         default=None,
@@ -294,6 +432,17 @@ def add_feature_cli_args(parser: argparse.ArgumentParser) -> None:
         help=(
             "Positional encodings to use when the positional group is enabled: "
             "lpe (Laplacian), rwpe (random walk), or none."
+        ),
+    )
+    parser.add_argument(
+        "--edge-features",
+        nargs="+",
+        default=None,
+        metavar="FEATURE",
+        choices=[*EDGE_FEATURES, "none", "all"],
+        help=(
+            "Edge features to load. 'none' disables edge features; any subset "
+            "currently enables all edge columns (per-edge slicing is deferred)."
         ),
     )
     parser.add_argument(

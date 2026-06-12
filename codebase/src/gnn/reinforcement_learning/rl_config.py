@@ -66,13 +66,19 @@ def resolve_rl_features(
     experiment: dict[str, Any],
     *,
     feature_groups: list[str] | None = None,
+    node_features: list[str] | None = None,
+    topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
+    edge_features: list[str] | None = None,
     active_features: list[str] | None = None,
 ) -> tuple[FeatureSelection, list[str] | None]:
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping(experiment),
         feature_groups=feature_groups,
+        node_features=node_features,
+        topology_features=topology_features,
         positional_encoding=positional_encoding,
+        edge_features=edge_features,
         active_features=active_features,
     )
     return selection, resolve_active_node_features(selection)
