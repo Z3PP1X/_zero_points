@@ -199,12 +199,11 @@ class GNNResultEvaluator:
                     f"  Loading dataset for class balance: "
                     f"{dataset_name} / {synthetic_dataset_name}"
                 )
-                loader = GraphDataLoader(name=dataset_name, mode="graph", enrich=True)
+                loader = GraphDataLoader(name=dataset_name, mode="graph")
                 pipeline = GraphPipeline(
                     dataset_name=dataset_name,
                     seed=42001,
                     mode="graph",
-                    enrich=True,
                     graph_loader=loader,
                     synthetic=True,
                     synthetic_dataset_name=synthetic_dataset_name,

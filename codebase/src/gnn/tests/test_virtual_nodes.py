@@ -6,8 +6,8 @@ import pandas as pd
 from pathlib import Path
 import networkx as nx
 
-from graph_utils import ExpressionGraphConverter, signed_log_value, ENRICHED_NODE_FEATURE_SCHEMA, BASIC_NODE_FEATURE_SCHEMA
-from feature_layout import NATIVE_NODE_FEATURE_COUNT, BASIC_NODE_FEATURE_COUNT
+from graph_utils import ExpressionGraphConverter, signed_log_value, NODE_FEATURE_SCHEMA
+from feature_layout import NATIVE_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
 
@@ -31,7 +31,7 @@ def test_augmented_math_graph_edges():
 
     # Test in bidirectional mode
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph", edge_direction="bidirectional")
+    data = converter.convert(raw, heterogeneous=False, mode="graph", edge_direction="bidirectional")
 
     # Verify that NextUse and NextUseBackward edges are created between f2 and f3
     # G_enriched is converted to PyG data. Let's inspect node ids and edge_index.
@@ -75,7 +75,7 @@ def test_augmented_math_graph_nesting_edges():
     converter = ExpressionGraphConverter()
     
     # Test top_down mode
-    data_td = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph", edge_direction="top_down")
+    data_td = converter.convert(raw, heterogeneous=False, mode="graph", edge_direction="top_down")
     f1_idx = data_td.node_ids.index("f1")
     f2_idx = data_td.node_ids.index("f2")
     edges_td = list(zip(data_td.edge_index[0].tolist(), data_td.edge_index[1].tolist()))
@@ -85,7 +85,7 @@ def test_augmented_math_graph_nesting_edges():
     assert (f2_idx, f1_idx) not in edges_td
 
     # Test bottom_up mode
-    data_bu = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph", edge_direction="bottom_up")
+    data_bu = converter.convert(raw, heterogeneous=False, mode="graph", edge_direction="bottom_up")
     edges_bu = list(zip(data_bu.edge_index[0].tolist(), data_bu.edge_index[1].tolist()))
     
     # In bottom_up, we should have InnerToOuter_Arg0: f2 -> f1
@@ -111,11 +111,11 @@ def test_node_counts_and_task_features_on_aggregator():
 
     # Test graph mode conversion
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw, heterogeneous=False, enrich=False, mode="graph")
+    data = converter.convert(raw, heterogeneous=False, mode="graph")
 
     # 4 AST nodes + f_root aggregator = 5 nodes
     assert data.num_nodes == 5
-    assert data.x.shape[1] == BASIC_NODE_FEATURE_COUNT
+    assert data.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
     assert len(data.node_ids) == 5
     assert "f_root" in data.node_ids
     assert "virtual_current_x" not in data.node_ids
@@ -155,8 +155,8 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     assert "f_root" in data_graph.node_ids
     idx_f_root = data_graph.node_ids.index("f_root")
 
-    cx_idx = ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
-    dt_idx = ENRICHED_NODE_FEATURE_SCHEMA.index("virtual_delta_target_val")
+    cx_idx = NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
+    dt_idx = NODE_FEATURE_SCHEMA.index("virtual_delta_target_val")
     
     assert data_graph.x[idx_f_root, cx_idx].item() == pytest.approx(signed_log_value(1.5))
     assert data_graph.x[idx_f_root, dt_idx].item() == pytest.approx(signed_log_value(2.7))
@@ -184,7 +184,7 @@ def test_supervised_learning_preprocessor_static_initialization():
     converter = ExpressionGraphConverter()
     
     # 1. Test Supervised Initialization in Graph Mode
-    base_graph_graph = converter.convert(raw, heterogeneous=False, enrich=False, mode="graph")
+    base_graph_graph = converter.convert(raw, heterogeneous=False, mode="graph")
     base_graphs_graph = {"P-supervised": base_graph_graph}
     
     assert "f_root" in base_graph_graph.node_ids
@@ -200,8 +200,8 @@ def test_supervised_learning_preprocessor_static_initialization():
     dataset_no_fx_graph = ProblemRunDataset(df_no_fx, base_graphs_graph, mode="graph")
     data_no_fx_graph = dataset_no_fx_graph[0]
     
-    cx_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
-    dt_idx = BASIC_NODE_FEATURE_SCHEMA.index("virtual_delta_target_val")
+    cx_idx = NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
+    dt_idx = NODE_FEATURE_SCHEMA.index("virtual_delta_target_val")
     
     assert data_no_fx_graph.x[idx_f_root, cx_idx].item() == pytest.approx(signed_log_value(2.5))
     assert data_no_fx_graph.x[idx_f_root, dt_idx].item() == pytest.approx(signed_log_value(4.0))
@@ -233,12 +233,12 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     
     active_feats = ["node_type", "value", "virtual_current_x_val"]
     
-    data_full = converter.convert(raw, heterogeneous=False, enrich=True, mode="graph")
+    data_full = converter.convert(raw, heterogeneous=False, mode="graph")
     assert data_full.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
     
     from graph_utils import slice_active_features
     data_sliced = data_full.clone()
-    data_sliced.x = slice_active_features(data_full.x, active_feats, enrich=True)
+    data_sliced.x = slice_active_features(data_full.x, active_feats)
     
     assert data_sliced.x.shape[1] == 3
     idx_f_root = data_sliced.node_ids.index("f_root")

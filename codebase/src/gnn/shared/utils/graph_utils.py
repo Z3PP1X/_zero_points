@@ -41,12 +41,9 @@ CANONICAL_LABELS: tuple[str, ...] = (
     "Sinh",
     "Cosh",
     "Tanh",
-    "virtual_current_x",
     "f_root",
     "d1_root",
     "d2_root",
-    "virtual_y_target",
-    "virtual_supernode",
 )
 CANONICAL_LABEL_VOCAB: dict[str, int] = {label: idx for idx, label in enumerate(CANONICAL_LABELS)}
 
@@ -78,9 +75,7 @@ CANONICAL_EDGE_TYPES: tuple[str, ...] = (
 ) + tuple(f"OuterToInner_Arg{i}" for i in range(10)) + tuple(f"InnerToOuter_Arg{i}" for i in range(10))
 CANONICAL_EDGE_TYPE_VOCAB: dict[str, int] = {etype: idx for idx, etype in enumerate(CANONICAL_EDGE_TYPES)}
 
-VIRTUAL_NODE_TYPES = frozenset(
-    {"virtual_current_x", "virtual_y_target", "virtual_supernode"} | FUNCTION_AGGREGATOR_IDS
-)
+VIRTUAL_NODE_TYPES = frozenset(FUNCTION_AGGREGATOR_IDS)
 
 
 def signed_log_value(value: float) -> float:
@@ -125,7 +120,7 @@ def get_hetero_node_type(raw_type: str) -> str:
         return "variable"
     elif raw_type == "constant":
         return "constant"
-    elif raw_type in ("global", "virtual_current_x", "virtual_y_target", "virtual_supernode", "f_root", "d1_root", "d2_root"):
+    elif raw_type in ("global", "f_root", "d1_root", "d2_root"):
         return "virtual"
     else:
         return "virtual"
@@ -146,7 +141,7 @@ def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
     base_etype = etype[:-8] if is_reverse else etype
     
     if base_etype == "child_of":
-        if parent_label in ("Plus", "Times", "GLOBAL", "f_root", "d1_root", "d2_root") or parent_label.startswith("virtual"):
+        if parent_label in ("Plus", "Times", "GLOBAL", "f_root", "d1_root", "d2_root"):
             return "child_of_reverse" if is_reverse else "child_of"
         else:
             if child_index == 0.0:
@@ -244,9 +239,6 @@ EDGE_FEATURE_SCHEMA = [
 ]
 
 EDGE_DIRECTIONS: tuple[str, ...] = ("top_down", "bottom_up", "bidirectional")
-VIRTUAL_TASK_NODE_IDS: frozenset[str] = frozenset(
-    {"virtual_current_x", "virtual_y_target", "virtual_supernode"}
-)
 
 
 def validate_edge_direction(edge_direction: str) -> str:
@@ -256,13 +248,6 @@ def validate_edge_direction(edge_direction: str) -> str:
             f"expected one of {list(EDGE_DIRECTIONS)}"
         )
     return edge_direction
-
-
-def is_virtual_task_edge(parent: str, child: str, etype: str) -> bool:
-    """True for virtual-hub edges that always remain bidirectional."""
-    if etype == "virtual" or "supernode" in etype:
-        return True
-    return parent in VIRTUAL_TASK_NODE_IDS or child in VIRTUAL_TASK_NODE_IDS
 
 
 def _find_global_node_id(raw: dict) -> str | None:
@@ -627,21 +612,13 @@ class ExpressionGraphConverter:
         "constant": 2,
         "variable": 3,
         "function": 4,
-        "virtual_current_x": 5,
         "f_root": 6,
-        "virtual_y_target": 7,
-        "virtual_supernode": 8,
         "d1_root": 9,
         "d2_root": 10,
     }
 
     def __init__(self):
         pass
-
-    def _effective_edge_direction(self, parent: str, child: str, etype: str, edge_direction: str) -> str:
-        if is_virtual_task_edge(parent, child, etype):
-            return "bidirectional"
-        return edge_direction
 
     def _add_ast_edges(
         self,
@@ -653,7 +630,7 @@ class ExpressionGraphConverter:
         eb_val: float,
         edge_direction: str,
     ) -> None:
-        effective = self._effective_edge_direction(parent, child, etype, edge_direction)
+        effective = edge_direction
         if effective in ("top_down", "bidirectional"):
             G_enriched.add_edge(
                 parent,
@@ -675,37 +652,10 @@ class ExpressionGraphConverter:
                 etype=etype + "_reverse",
             )
 
-    def _add_virtual_supernode_edges(self, G_enriched: nx.DiGraph, node_ids: list[str]) -> None:
-        if "virtual_supernode" not in node_ids:
-            return
-        supernode_etype = self._encode_edge_type("virtual")
-        for node in node_ids:
-            if node == "virtual_supernode":
-                continue
-            G_enriched.add_edge(
-                "virtual_supernode",
-                node,
-                child_index=0.0,
-                direction=0.0,
-                relation_type=float(supernode_etype),
-                edge_betweenness_centrality=0.0,
-                etype="supernode_connection",
-            )
-            G_enriched.add_edge(
-                node,
-                "virtual_supernode",
-                child_index=0.0,
-                direction=1.0,
-                relation_type=float(self._encode_edge_type("virtual_reverse")),
-                edge_betweenness_centrality=0.0,
-                etype="supernode_connection_reverse",
-            )
-
     def convert(
         self,
         source: Union[str, Path, dict, nx.DiGraph],
         heterogeneous: bool = False,
-        enrich: bool = True,
         mode: str = "graph",
         edge_direction: str = "top_down",
     ) -> Union[Data, HeteroData]:
@@ -715,11 +665,11 @@ class ExpressionGraphConverter:
             # Extract AST nodes and edges to construct G_ast for topological extraction
             ast_nodes = [
                 n for n in source.nodes 
-                if n not in ("global", "f_root", "d1_root", "d2_root", "virtual_supernode") 
+                if n not in ("global", "f_root", "d1_root", "d2_root")
                 and not str(n).startswith("kappa_")
             ]
             G_ast = source.subgraph(ast_nodes).copy()
-            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast, enrich=enrich)
+            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
             ast_node_ids = list(G_ast.nodes)
             ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
             
@@ -729,84 +679,59 @@ class ExpressionGraphConverter:
             # Enrich/add features to G_enriched
             G_enriched = nx.DiGraph()
             
-            if enrich:
-                for node in node_ids:
-                    attrs = source.nodes[node]
-                    enriched_attrs = attrs.copy()
-                    ast_idx = ast_id_to_idx.get(node)
+            for node in node_ids:
+                attrs = source.nodes[node]
+                enriched_attrs = attrs.copy()
+                ast_idx = ast_id_to_idx.get(node)
 
-                    if ast_idx is not None:
-                        enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
-                        enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
-                        enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
-                        enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
-                        enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                        enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                        enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                        enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                        enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                        enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                        enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                        enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                        enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
-                    else:
-                        enriched_attrs["depth"] = 0.0
-                        enriched_attrs["height"] = 0.0
-                        enriched_attrs["subtree_size"] = 1.0
-                        enriched_attrs["out_degree"] = 0.0
-                        enriched_attrs["betweenness_centrality"] = 0.0
-                        enriched_attrs["lpe_1"] = 0.0
-                        enriched_attrs["lpe_2"] = 0.0
-                        enriched_attrs["lpe_3"] = 0.0
-                        enriched_attrs["lpe_4"] = 0.0
-                        enriched_attrs["rwpe_1"] = 0.0
-                        enriched_attrs["rwpe_2"] = 0.0
-                        enriched_attrs["rwpe_3"] = 0.0
-                        enriched_attrs["rwpe_4"] = 0.0
+                if ast_idx is not None:
+                    enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
+                    enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
+                    enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
+                    enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
+                    enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
+                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
+                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
+                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
+                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
+                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
+                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
+                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
+                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                else:
+                    enriched_attrs["depth"] = 0.0
+                    enriched_attrs["height"] = 0.0
+                    enriched_attrs["subtree_size"] = 1.0
+                    enriched_attrs["out_degree"] = 0.0
+                    enriched_attrs["betweenness_centrality"] = 0.0
+                    enriched_attrs["lpe_1"] = 0.0
+                    enriched_attrs["lpe_2"] = 0.0
+                    enriched_attrs["lpe_3"] = 0.0
+                    enriched_attrs["lpe_4"] = 0.0
+                    enriched_attrs["rwpe_1"] = 0.0
+                    enriched_attrs["rwpe_2"] = 0.0
+                    enriched_attrs["rwpe_3"] = 0.0
+                    enriched_attrs["rwpe_4"] = 0.0
 
-                    G_enriched.add_node(node, **enriched_attrs)
+                G_enriched.add_node(node, **enriched_attrs)
 
-                child_counters = {}
-                for u, v, attrs in source.edges(data=True):
-                    if "relation_type" in attrs or "child_index" in attrs or "direction" in attrs:
-                        G_enriched.add_edge(u, v, **attrs)
-                        continue
-                        
-                    parent = u
-                    child = v
-                    etype = attrs.get("type") or attrs.get("etype") or "child_of"
+            child_counters = {}
+            for u, v, attrs in source.edges(data=True):
+                if "relation_type" in attrs or "child_index" in attrs or "direction" in attrs:
+                    G_enriched.add_edge(u, v, **attrs)
+                    continue
 
-                    child_idx = child_counters.get(parent, 0)
-                    child_counters[parent] = child_idx + 1
+                parent = u
+                child = v
+                etype = attrs.get("type") or attrs.get("etype") or "child_of"
 
-                    eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
-                    self._add_enriched_ast_edges(
-                        G_enriched, parent, child, child_idx, etype, eb_val, edge_direction
-                    )
-            else:
-                ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
-                for node in node_ids:
-                    attrs = source.nodes[node]
-                    enriched_attrs = attrs.copy()
-                    enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
-                    G_enriched.add_node(node, **enriched_attrs)
+                child_idx = child_counters.get(parent, 0)
+                child_counters[parent] = child_idx + 1
 
-                child_counters = {}
-                for u, v, attrs in source.edges(data=True):
-                    if "edge_type" in attrs or "child_index" in attrs:
-                        G_enriched.add_edge(u, v, **attrs)
-                        continue
-                        
-                    parent = u
-                    child = v
-                    etype = attrs.get("type") or attrs.get("etype") or "child_of"
-
-                    child_idx = child_counters.get(parent, 0)
-                    child_counters[parent] = child_idx + 1
-
-                    self._add_basic_ast_edges(
-                        G_enriched, parent, child, child_idx, etype, edge_direction
-                    )
+                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
+                self._add_ast_edges(
+                    G_enriched, parent, child, child_idx, etype, eb_val, edge_direction
+                )
 
             children_dict = {}
             for u, v, attrs in G_ast.edges(data=True):
@@ -888,7 +813,7 @@ class ExpressionGraphConverter:
                 belongs_to_d1_map=belongs_to_d1_map,
                 belongs_to_d2_map=belongs_to_d2_map,
             )
-            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast, enrich=enrich)
+            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
             ast_node_ids = list(G_ast.nodes)
             ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
 
@@ -903,90 +828,62 @@ class ExpressionGraphConverter:
             # 3. Enrich attributes based on mode
             G_enriched = nx.DiGraph()
             node_ids = list(G_directed.nodes)
-            
-            if enrich:
-                for node in node_ids:
-                    attrs = G_directed.nodes[node]
-                    enriched_attrs = attrs.copy()
-                    ast_idx = ast_id_to_idx.get(node)
 
-                    if ast_idx is not None:
-                        enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
-                        enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
-                        enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
-                        enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
-                        enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                        enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                        enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                        enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                        enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                        enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                        enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                        enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                        enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
-                    else:
-                        enriched_attrs["depth"] = 0.0
-                        enriched_attrs["height"] = 0.0
-                        enriched_attrs["subtree_size"] = 1.0
-                        enriched_attrs["out_degree"] = 0.0
-                        enriched_attrs["betweenness_centrality"] = 0.0
-                        enriched_attrs["lpe_1"] = 0.0
-                        enriched_attrs["lpe_2"] = 0.0
-                        enriched_attrs["lpe_3"] = 0.0
-                        enriched_attrs["lpe_4"] = 0.0
-                        enriched_attrs["rwpe_1"] = 0.0
-                        enriched_attrs["rwpe_2"] = 0.0
-                        enriched_attrs["rwpe_3"] = 0.0
-                        enriched_attrs["rwpe_4"] = 0.0
+            for node in node_ids:
+                attrs = G_directed.nodes[node]
+                enriched_attrs = attrs.copy()
+                ast_idx = ast_id_to_idx.get(node)
 
-                    G_enriched.add_node(node, **enriched_attrs)
+                if ast_idx is not None:
+                    enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
+                    enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
+                    enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
+                    enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
+                    enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
+                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
+                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
+                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
+                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
+                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
+                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
+                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
+                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                else:
+                    enriched_attrs["depth"] = 0.0
+                    enriched_attrs["height"] = 0.0
+                    enriched_attrs["subtree_size"] = 1.0
+                    enriched_attrs["out_degree"] = 0.0
+                    enriched_attrs["betweenness_centrality"] = 0.0
+                    enriched_attrs["lpe_1"] = 0.0
+                    enriched_attrs["lpe_2"] = 0.0
+                    enriched_attrs["lpe_3"] = 0.0
+                    enriched_attrs["lpe_4"] = 0.0
+                    enriched_attrs["rwpe_1"] = 0.0
+                    enriched_attrs["rwpe_2"] = 0.0
+                    enriched_attrs["rwpe_3"] = 0.0
+                    enriched_attrs["rwpe_4"] = 0.0
 
-                child_counters = {}
-                for edge in raw.get("edges", []):
-                    parent = edge["source"]
-                    child = edge["target"]
-                    etype = edge["type"]
+                G_enriched.add_node(node, **enriched_attrs)
 
-                    child_idx = child_counters.get(parent, 0)
-                    child_counters[parent] = child_idx + 1
+            child_counters = {}
+            for edge in raw.get("edges", []):
+                parent = edge["source"]
+                child = edge["target"]
+                etype = edge["type"]
 
-                    eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
-                    self._add_enriched_ast_edges(
-                        G_enriched,
-                        parent,
-                        child,
-                        child_idx,
-                        etype,
-                        eb_val,
-                        edge_direction,
-                    )
+                child_idx = child_counters.get(parent, 0)
+                child_counters[parent] = child_idx + 1
 
-                self._add_virtual_supernode_edges(G_enriched, node_ids)
-            else:
-                ast_deg_cent = nx.degree_centrality(G_ast) if G_ast.number_of_nodes() > 0 else {}
-                for node in node_ids:
-                    attrs = G_directed.nodes[node]
-                    enriched_attrs = attrs.copy()
-                    enriched_attrs["degree_centrality"] = float(ast_deg_cent.get(node, 0.0))
-                    G_enriched.add_node(node, **enriched_attrs)
-
-                child_counters = {}
-                for edge in raw.get("edges", []):
-                    parent = edge["source"]
-                    child = edge["target"]
-                    etype = edge["type"]
-
-                    child_idx = child_counters.get(parent, 0)
-                    child_counters[parent] = child_idx + 1
-
-                    self._add_basic_ast_edges(
-                        G_enriched,
-                        parent,
-                        child,
-                        child_idx,
-                        etype,
-                        edge_direction,
-                    )
+                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
+                self._add_ast_edges(
+                    G_enriched,
+                    parent,
+                    child,
+                    child_idx,
+                    etype,
+                    eb_val,
+                    edge_direction,
+                )
 
             # Build children_dict from all parent-to-child edges in raw_ast
             children_dict = {}
@@ -1004,7 +901,6 @@ class ExpressionGraphConverter:
                 last_seen_map,
                 children_dict,
                 edge_direction,
-                enrich,
             )
         else:
             roots = [n for n, d in G_ast.in_degree() if d == 0]
@@ -1015,7 +911,6 @@ class ExpressionGraphConverter:
                     last_seen_map,
                     children_dict,
                     edge_direction,
-                    enrich,
                 )
 
         # Gather node_kappas mapping matching node_ids
@@ -1049,12 +944,12 @@ class ExpressionGraphConverter:
 
         if heterogeneous:
             from gnn.shared.utils.heterogeneous_converter import to_hetero
-            data = to_hetero(G_enriched, raw or {}, topo, enrich)
+            data = to_hetero(G_enriched, raw or {}, topo)
             data.__class__ = ExpressionHeteroData
             data.node_ids = node_ids
         else:
             from gnn.shared.utils.homogeneous_converter import to_homogeneous
-            data = to_homogeneous(G_enriched, raw or {}, enrich)
+            data = to_homogeneous(G_enriched, raw or {})
             data.__class__ = ExpressionGraphData
             data.node_ids = node_ids
 
@@ -1088,13 +983,12 @@ class ExpressionGraphConverter:
         # Add global graph features
         data.tree_depth = topo["tree_depth"]
         data.tree_width = topo["tree_width"]
-        if enrich:
-            data.treewidth = topo["tree_width"]
-            data.nodes = G_directed.number_of_nodes()
-            data.num_nodes = G_directed.number_of_nodes()
-            data.edges = G_directed.number_of_edges()
-            data.num_edges = G_directed.number_of_edges()
-            data.laplacian = torch.tensor(topo["laplace_matrix"], dtype=torch.float)
+        data.treewidth = topo["tree_width"]
+        data.nodes = G_directed.number_of_nodes()
+        data.num_nodes = G_directed.number_of_nodes()
+        data.edges = G_directed.number_of_edges()
+        data.num_edges = G_directed.number_of_edges()
+        data.laplacian = torch.tensor(topo["laplace_matrix"], dtype=torch.float)
 
         return data
 
@@ -1173,13 +1067,11 @@ class GraphConversionPipeline:
         self,
         experiments_dir: Union[str, Path],
         heterogeneous: bool = False,
-        enrich: bool = True,
         mode: str = "graph",
         edge_direction: str = "top_down",
     ):
         self.experiments_dir = Path(experiments_dir)
         self.heterogeneous = heterogeneous
-        self.enrich = enrich
         self.mode = mode
         self.edge_direction = validate_edge_direction(edge_direction)
         self.converter = ExpressionGraphConverter()
@@ -1199,7 +1091,6 @@ class GraphConversionPipeline:
             self.graphs[graph_id] = self.converter.convert(
                 raw,
                 heterogeneous=self.heterogeneous,
-                enrich=self.enrich,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
             )
@@ -1229,14 +1120,10 @@ class GraphConversionPipeline:
             return sample_graph.x.shape[1]
 
     def get_feature_schema(self) -> list[str]:
-        if self.enrich:
-            return list(ENRICHED_NODE_FEATURE_SCHEMA)
-        return list(BASIC_NODE_FEATURE_SCHEMA)
+        return list(NODE_FEATURE_SCHEMA)
 
     def get_edge_feature_schema(self) -> list[str]:
-        if self.enrich:
-            return list(ENRICHED_EDGE_FEATURE_SCHEMA)
-        return list(BASIC_EDGE_FEATURE_SCHEMA)
+        return list(EDGE_FEATURE_SCHEMA)
 
 
 def populate_task_virtual_values(
@@ -1248,7 +1135,6 @@ def populate_task_virtual_values(
     d1x_val: float = 0.0,
     d2x_val: float = 0.0,
     mode: str = "graph",
-    enrich: bool = True,
     set_has_value: bool = False,
     node_id_indices: dict[str, int] | None = None,
 ) -> None:
@@ -1262,7 +1148,6 @@ def populate_task_virtual_values(
         d1x_val: The value of first derivative f'(x).
         d2x_val: The value of second derivative f''(x).
         mode: The graph conversion mode (graph, tree, or tree_derivatives).
-        enrich: Whether features are enriched or basic.
         set_has_value: Whether to set has_value flag to 1.0.
         node_id_indices: Optional precomputed node ID to index mapping.
         
@@ -1305,7 +1190,7 @@ def populate_task_virtual_values(
     if len(data.x.shape) != 2:
         return
 
-    schema = ENRICHED_NODE_FEATURE_SCHEMA if enrich else BASIC_NODE_FEATURE_SCHEMA
+    schema = NODE_FEATURE_SCHEMA
     expected_count = len(schema)
     if data.x.shape[1] != expected_count:
         return
@@ -1340,16 +1225,16 @@ def populate_task_virtual_values(
         pass
 
 
-def slice_active_features(x: torch.Tensor, active_features: list[str] | None, enrich: bool) -> torch.Tensor:
+def slice_active_features(x: torch.Tensor, active_features: list[str] | None) -> torch.Tensor:
     if active_features is None:
         return x
-    full_schema = ENRICHED_NODE_FEATURE_SCHEMA if enrich else BASIC_NODE_FEATURE_SCHEMA
+    full_schema = NODE_FEATURE_SCHEMA
     indices = []
     for f in active_features:
         if f in full_schema:
             indices.append(full_schema.index(f))
         else:
-            raise ValueError(f"Feature '{f}' is not in the schema (enrich={enrich}). Available: {full_schema}")
+            raise ValueError(f"Feature '{f}' is not in the schema. Available: {full_schema}")
     return x[:, indices]
 
 

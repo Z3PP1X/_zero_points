@@ -1,0 +1,486 @@
+<?xml version='1.0' encoding='utf-8'?>
+<gexf xmlns="http://www.gexf.net/1.2draft" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.gexf.net/1.2draft http://www.gexf.net/1.2draft/gexf.xsd" version="1.2">
+  <meta lastmodifieddate="2026-06-10">
+    <creator>NetworkX 3.6.1</creator>
+  </meta>
+  <graph defaultedgetype="directed" mode="static" name="">
+    <attributes mode="static" class="edge">
+      <attribute id="12" title="edge_type" type="long" />
+      <attribute id="13" title="etype" type="string" />
+    </attributes>
+    <attributes mode="static" class="node">
+      <attribute id="0" title="node_type" type="long" />
+      <attribute id="1" title="label_id" type="long" />
+      <attribute id="2" title="value" type="double" />
+      <attribute id="3" title="has_value" type="double" />
+      <attribute id="4" title="belongs_to_f" type="double" />
+      <attribute id="5" title="belongs_to_d1" type="double" />
+      <attribute id="6" title="belongs_to_d2" type="double" />
+      <attribute id="7" title="virtual_current_x_val" type="double" />
+      <attribute id="8" title="virtual_delta_target_val" type="double" />
+      <attribute id="9" title="virtual_d1_x_val" type="double" />
+      <attribute id="10" title="virtual_d2_x_val" type="double" />
+      <attribute id="11" title="type" type="string" />
+    </attributes>
+    <nodes>
+      <node id="global" label="GLOBAL">
+        <attvalues>
+          <attvalue for="0" value="0" />
+          <attvalue for="1" value="2" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="0.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="global" />
+        </attvalues>
+      </node>
+      <node id="f_1" label="5">
+        <attvalues>
+          <attvalue for="0" value="2" />
+          <attvalue for="1" value="1" />
+          <attvalue for="2" value="1.791759469228055" />
+          <attvalue for="3" value="1.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="constant" />
+        </attvalues>
+      </node>
+      <node id="f_2" label="E">
+        <attvalues>
+          <attvalue for="0" value="3" />
+          <attvalue for="1" value="7" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="variable" />
+        </attvalues>
+      </node>
+      <node id="f_3" label="x">
+        <attvalues>
+          <attvalue for="0" value="3" />
+          <attvalue for="1" value="6" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="variable" />
+        </attvalues>
+      </node>
+      <node id="f_4" label="2">
+        <attvalues>
+          <attvalue for="0" value="2" />
+          <attvalue for="1" value="1" />
+          <attvalue for="2" value="1.0986122886681096" />
+          <attvalue for="3" value="1.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="constant" />
+        </attvalues>
+      </node>
+      <node id="f_5" label="Power">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="5" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_6" label="Power">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="5" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_7" label="x">
+        <attvalues>
+          <attvalue for="0" value="3" />
+          <attvalue for="1" value="6" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="variable" />
+        </attvalues>
+      </node>
+      <node id="f_8" label="Times">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="4" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_9" label="3">
+        <attvalues>
+          <attvalue for="0" value="2" />
+          <attvalue for="1" value="1" />
+          <attvalue for="2" value="1.3862943611198906" />
+          <attvalue for="3" value="1.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="constant" />
+        </attvalues>
+      </node>
+      <node id="f_10" label="x">
+        <attvalues>
+          <attvalue for="0" value="3" />
+          <attvalue for="1" value="6" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="variable" />
+        </attvalues>
+      </node>
+      <node id="f_11" label="Cos">
+        <attvalues>
+          <attvalue for="0" value="4" />
+          <attvalue for="1" value="11" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="function" />
+        </attvalues>
+      </node>
+      <node id="f_12" label="Times">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="4" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_13" label="-1">
+        <attvalues>
+          <attvalue for="0" value="2" />
+          <attvalue for="1" value="1" />
+          <attvalue for="2" value="-0.6931471805599453" />
+          <attvalue for="3" value="1.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="constant" />
+        </attvalues>
+      </node>
+      <node id="f_14" label="x">
+        <attvalues>
+          <attvalue for="0" value="3" />
+          <attvalue for="1" value="6" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="variable" />
+        </attvalues>
+      </node>
+      <node id="f_15" label="Sin">
+        <attvalues>
+          <attvalue for="0" value="4" />
+          <attvalue for="1" value="10" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="function" />
+        </attvalues>
+      </node>
+      <node id="f_16" label="2">
+        <attvalues>
+          <attvalue for="0" value="2" />
+          <attvalue for="1" value="1" />
+          <attvalue for="2" value="1.0986122886681096" />
+          <attvalue for="3" value="1.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="constant" />
+        </attvalues>
+      </node>
+      <node id="f_17" label="Power">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="5" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_18" label="Times">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="4" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_19" label="Plus">
+        <attvalues>
+          <attvalue for="0" value="1" />
+          <attvalue for="1" value="3" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="operator" />
+        </attvalues>
+      </node>
+      <node id="f_root" label="f_root">
+        <attvalues>
+          <attvalue for="0" value="6" />
+          <attvalue for="1" value="27" />
+          <attvalue for="2" value="0.0" />
+          <attvalue for="3" value="0.0" />
+          <attvalue for="4" value="1.0" />
+          <attvalue for="5" value="0.0" />
+          <attvalue for="6" value="0.0" />
+          <attvalue for="7" value="0.0" />
+          <attvalue for="8" value="0.0" />
+          <attvalue for="9" value="0.0" />
+          <attvalue for="10" value="0.0" />
+          <attvalue for="11" value="f_root" />
+        </attvalues>
+      </node>
+    </nodes>
+    <edges>
+      <edge source="global" target="f_root" id="0">
+        <attvalues>
+          <attvalue for="12" value="3" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_5" target="f_3" id="1">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_5" target="f_4" id="2">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_6" target="f_2" id="3">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_6" target="f_5" id="4">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_8" target="f_6" id="5">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_8" target="f_7" id="6">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_11" target="f_10" id="7">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_12" target="f_9" id="8">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_12" target="f_11" id="9">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_15" target="f_14" id="10">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_17" target="f_15" id="11">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_17" target="f_16" id="12">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_18" target="f_13" id="13">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_18" target="f_17" id="14">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_19" target="f_1" id="15">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_19" target="f_8" id="16">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_19" target="f_12" id="17">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_19" target="f_18" id="18">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+      <edge source="f_root" target="f_19" id="19">
+        <attvalues>
+          <attvalue for="12" value="1" />
+          <attvalue for="13" value="child_of" />
+        </attvalues>
+      </edge>
+    </edges>
+  </graph>
+</gexf>

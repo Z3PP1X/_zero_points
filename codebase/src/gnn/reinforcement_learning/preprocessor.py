@@ -8,7 +8,6 @@ from torch_geometric.data import Data
 
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.reinforcement_learning.feature_layout import (
-    BASIC_NODE_FEATURE_COUNT,
     NATIVE_NODE_FEATURE_COUNT,
 )
 from gnn.shared.utils.graph_utils import populate_task_virtual_values
@@ -58,7 +57,6 @@ class Preprocessor:
             self.loader = GraphDataLoader(
                 name=Path(graphs_dir).name,
                 mode=mode,
-                enrich=True,
                 heterogeneous=False,
                 base_dir=graphs_dir
             )
@@ -134,7 +132,6 @@ class Preprocessor:
             d1x_val=extracted_features.get("dfx", 0.0),
             d2x_val=extracted_features.get("ddfx", 0.0),
             mode=self.mode,
-            enrich=True,
         )
 
         data.uuid = message.get("uuid")
@@ -144,7 +141,7 @@ class Preprocessor:
         # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:
             from gnn.shared.utils.graph_utils import slice_active_features
-            data.x = slice_active_features(data.x, self.active_features, enrich=True)
+            data.x = slice_active_features(data.x, self.active_features)
 
         if dataloader is not None:
             pass

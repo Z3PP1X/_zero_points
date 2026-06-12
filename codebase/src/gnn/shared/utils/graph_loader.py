@@ -25,7 +25,6 @@ class GraphDataLoader:
         self,
         name: str,
         mode: str = "graph",
-        enrich: bool = True,
         heterogeneous: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
@@ -34,7 +33,6 @@ class GraphDataLoader:
     ):
         self.name = name
         self.mode = mode
-        self.enrich = enrich
         self.heterogeneous = heterogeneous
         self.is_synthetic = is_synthetic
         self.edge_direction = validate_edge_direction(edge_direction)
@@ -223,7 +221,7 @@ class GraphDataLoader:
         clean_gid = "".join(c for c in gid_str if c.isalnum() or c in ('_', '-'))
         suffix = "_augmented.pt" if use_augmented else ".pt"
         cache_file = self.cache_dir / (
-            f"{clean_gid}_{self.mode}_{self.enrich}_"
+            f"{clean_gid}_{self.mode}_"
             f"{self.heterogeneous}_{self.edge_direction}{suffix}"
         )
 
@@ -246,7 +244,6 @@ class GraphDataLoader:
             converted = self.converter.convert(
                 main_graph,
                 heterogeneous=self.heterogeneous,
-                enrich=self.enrich,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
             )
@@ -263,7 +260,6 @@ class GraphDataLoader:
             converted = self.converter.convert(
                 raw_dict,
                 heterogeneous=self.heterogeneous,
-                enrich=self.enrich,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
             )

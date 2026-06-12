@@ -14,12 +14,17 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from gnn.supervised_learning.dataset import DatasetLoader
-from gnn.shared.utils.graph_utils import GraphConversionPipeline, populate_task_virtual_values, slice_active_features, filter_active_kappa
+from gnn.shared.utils.graph_utils import (
+    EDGE_FEATURE_SCHEMA,
+    NODE_FEATURE_SCHEMA,
+    filter_active_kappa,
+    populate_task_virtual_values,
+    slice_active_features,
+)
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.shared.utils.unified_loader import UnifiedDataLoader
 from gnn.supervised_learning.supervised_config import (
     architecture_from_layer_type,
-    edge_dim_for_enrich,
     validate_layer_type,
 )
 
@@ -53,7 +58,6 @@ class GraphPipeline:
         experiments_dir: str = "",
         seed: int = 42,
         mode: str = "graph",
-        enrich: bool = False,
         active_features: list[str] | None = None,
         graph_loader: GraphDataLoader | None = None,
         unified_loader: UnifiedDataLoader | None = None,
@@ -64,7 +68,6 @@ class GraphPipeline:
     ):
         self.seed = seed
         self.mode = mode
-        self.enrich = enrich
         self.active_features = active_features
         self.synthetic = synthetic
         self.synthetic_dataset_name = synthetic_dataset_name if synthetic_dataset_name else None
@@ -78,7 +81,6 @@ class GraphPipeline:
             self.unified_loader = UnifiedDataLoader.get_instance(
                 dataset_name=dataset_name,
                 mode=mode,
-                enrich=enrich,
                 heterogeneous=heterogeneous,
             )
 
@@ -86,7 +88,6 @@ class GraphPipeline:
             self.synthetic_unified_loader = UnifiedDataLoader.get_instance(
                 dataset_name=self.synthetic_dataset_name,
                 mode=mode,
-                enrich=enrich,
                 heterogeneous=heterogeneous,
                 is_synthetic=True,
             )
@@ -191,9 +192,9 @@ class GraphPipeline:
             self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
             
             # Assign datasets
-            self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
-            self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
-            self.curated_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+            self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, active_features=self.active_features)
+            self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, active_features=self.active_features)
+            self.curated_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, active_features=self.active_features)
             
             from torch_geometric.loader import DataLoader
             
@@ -256,8 +257,8 @@ class GraphPipeline:
             weight_1 = total_train / (num_classes * class_counts.get(1, 1))
             self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
 
-            self.train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
-            self.test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, enrich=self.enrich, active_features=self.active_features)
+            self.train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, active_features=self.active_features)
+            self.test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, active_features=self.active_features)
 
             from torch_geometric.loader import DataLoader
 
@@ -294,7 +295,7 @@ class GraphPipeline:
     def input_dim(self) -> int:
         if self.active_features is not None:
             return len(self.active_features)
-        return 24 if self.enrich else 12
+        return len(NODE_FEATURE_SCHEMA)
 
     @property
     def global_dim(self) -> int:
@@ -302,24 +303,21 @@ class GraphPipeline:
 
     @property
     def edge_dim(self) -> int:
-        from gnn.shared.utils.graph_utils import ENRICHED_EDGE_FEATURE_SCHEMA, BASIC_EDGE_FEATURE_SCHEMA
-        if self.active_features is not None:
-            return len(ENRICHED_EDGE_FEATURE_SCHEMA if self.enrich else BASIC_EDGE_FEATURE_SCHEMA)
-        return edge_dim_for_enrich(self.enrich)
+        return len(EDGE_FEATURE_SCHEMA)
 
     def _validate_edge_features(self):
-        if not self.enrich or not self.graphs:
+        if not self.graphs:
             return
         sample = next(iter(self.graphs.values()))
         edge_attr = getattr(sample, "edge_attr", None)
         expected_dim = self.edge_dim
         if edge_attr is None:
             raise ValueError(
-                "enrich=True requires edge_attr on loaded graphs, but edge_attr is missing"
+                "edge_attr is required on loaded graphs, but edge_attr is missing"
             )
         if edge_attr.ndim != 2 or edge_attr.shape[1] != expected_dim:
             raise ValueError(
-                f"enrich=True expects edge_attr with {expected_dim} features, "
+                f"expected edge_attr with {expected_dim} features, "
                 f"got shape {tuple(edge_attr.shape)}"
             )
 
@@ -343,11 +341,10 @@ def parse_float(val) -> float:
 
 
 class ProblemRunDataset(Dataset):
-    def __init__(self, df, base_graphs, mode: str = "graph", enrich: bool = False, active_features: list[str] | None = None):
+    def __init__(self, df, base_graphs, mode: str = "graph", active_features: list[str] | None = None):
         self.df = df.reset_index(drop=True)
         self.base_graphs = base_graphs
         self.mode = mode
-        self.enrich = enrich
         self.active_features = active_features
         
         self._node_id_indices = {}
@@ -395,14 +392,13 @@ class ProblemRunDataset(Dataset):
             d1x_val=d1x_val,
             d2x_val=d2x_val,
             mode=self.mode,
-            enrich=self.enrich,
-            set_has_value=not self.enrich,
+            set_has_value=True,
             node_id_indices=self._node_id_indices.get(pid),
         )
 
         # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:
-            data.x = slice_active_features(data.x, self.active_features, enrich=self.enrich)
+            data.x = slice_active_features(data.x, self.active_features)
 
         # Remove laplacian if present to prevent PyG collation mismatch errors
         if hasattr(data, "laplacian"):

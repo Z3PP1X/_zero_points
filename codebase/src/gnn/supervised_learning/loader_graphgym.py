@@ -25,7 +25,7 @@ if str(src_root) not in sys.path:
 from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa: F401
 from gnn.supervised_learning.run_results.eval_metrics import compute_confidence_metrics
 from gnn.supervised_learning.supervised_config import (
-    edge_dim_for_enrich,
+    resolve_edge_dim,
     validate_layer_type,
 )
 
@@ -287,20 +287,11 @@ class ExpressionNodeEncoder(torch.nn.Module):
         return batch
 
 
-def _resolve_edge_attr(batch, edge_dim: int, enrich: bool):
+def _resolve_edge_attr(batch, edge_dim: int):
     edge_attr = getattr(batch, "edge_attr", None)
-    if enrich:
-        if edge_attr is None:
-            raise ValueError(
-                "enrich=True requires edge_attr on every graph batch, but edge_attr is missing"
-            )
-        return edge_attr
     if edge_attr is None:
-        edge_attr = torch.zeros(
-            batch.edge_index.size(1),
-            edge_dim,
-            device=batch.x.device,
-            dtype=batch.x.dtype,
+        raise ValueError(
+            "edge_attr is required on every graph batch, but edge_attr is missing"
         )
     return edge_attr
 
@@ -318,11 +309,9 @@ class GATv2Conv(torch.nn.Module):
         )
 
     def forward(self, batch):
-        enrich = bool(getattr(cfg.expression_graph, "enrich", False))
         edge_attr = _resolve_edge_attr(
             batch,
             getattr(self.model, "edge_dim", 4),
-            enrich=enrich,
         )
         batch.x = self.model(batch.x, batch.edge_index, edge_attr=edge_attr)
         return batch
@@ -342,8 +331,7 @@ class GINEConvLayer(torch.nn.Module):
         self.model = GINEConv(nn=nn_layer, edge_dim=edge_dim)
 
     def forward(self, batch):
-        enrich = bool(getattr(cfg.expression_graph, "enrich", False))
-        edge_attr = _resolve_edge_attr(batch, self.edge_dim, enrich=enrich)
+        edge_attr = _resolve_edge_attr(batch, self.edge_dim)
         batch.x = self.model(batch.x, batch.edge_index, edge_attr)
         return batch
 
@@ -385,7 +373,6 @@ def set_custom_cfg(cfg):
     print("--- Executing set_custom_cfg ---")
     cfg.expression_graph = CN()
     cfg.expression_graph.mode = "graph"  # "graph", "tree", or "tree_derivatives"
-    cfg.expression_graph.enrich = False
     cfg.expression_graph.features = CN()
     cfg.expression_graph.features.node = True
     cfg.expression_graph.features.topology = True
@@ -423,7 +410,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     - cfg.seed: injects seed (defaults to 42001 if not set)
     - cfg.expression_graph.mode: injects GNN mode ("graph", "tree",
         or "tree_derivatives")
-    - cfg.expression_graph.enrich: injects GNN feature enrichment (True or False)
     - cfg.expression_graph.features: grouped node/edge feature toggles
     - cfg.expression_graph.active_features: optional explicit feature override list
     - cfg.expression_graph.synthetic: injects synthetic mode (True or False)
@@ -437,9 +423,8 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     seed = getattr(cfg, "seed", 42001)
 
     mode = getattr(cfg.expression_graph, "mode", "graph")
-    enrich = getattr(cfg.expression_graph, "enrich", False)
     layer_type = validate_layer_type(cfg.gnn.layer_type)
-    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
+    cfg.dataset.edge_dim = resolve_edge_dim()
     from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
 
     synthetic = getattr(cfg.expression_graph, "synthetic", False)
@@ -454,7 +439,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
             "features": getattr(cfg.expression_graph, "features", {}),
             "active_features": getattr(cfg.expression_graph, "active_features", ""),
         },
-        enrich=enrich,
     )
 
     if "/" in dataset_name:
@@ -471,7 +455,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Batch Size:     {batch_size}")
     print(f"  Injected Random Seed:    {seed}")
     print(f"  Injected Mode:           {mode}")
-    print(f"  Injected Enrich:         {enrich}")
     print(f"  Injected Layer Type:     {layer_type}")
     print(f"  Injected Edge Dim:       {cfg.dataset.edge_dim}")
     print(f"  Injected Synthetic:      {synthetic}")
@@ -481,7 +464,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Heterogeneous:  {heterogeneous}")
     print(f"  Injected Feature Groups: {feature_selection.enabled_groups()}")
     print(f"  Injected Positional:     {list(feature_selection.positional_encodings)}")
-    print(f"  Injected Features:       {feature_selection.summary(enrich)}")
+    print(f"  Injected Features:       {feature_selection.summary()}")
     print("----------------------------------------\n")
 
     from gnn.shared.utils.graph_loader import GraphDataLoader
@@ -489,7 +472,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     loader = GraphDataLoader(
         name=dataset_name,
         mode=mode,
-        enrich=enrich,
         heterogeneous=heterogeneous,
         edge_direction=edge_direction,
     )
@@ -498,7 +480,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         dataset_name=dataset_name,
         seed=seed,
         mode=mode,
-        enrich=enrich,
         active_features=active_features,
         graph_loader=loader,
         synthetic=synthetic,

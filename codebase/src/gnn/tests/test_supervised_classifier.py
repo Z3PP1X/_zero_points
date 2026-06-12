@@ -3,9 +3,8 @@ from torch_geometric.loader import DataLoader
 
 from graph_utils import (
     ExpressionGraphConverter,
-    ENRICHED_NODE_FEATURE_SCHEMA,
-    ENRICHED_EDGE_FEATURE_SCHEMA,
-    BASIC_NODE_FEATURE_SCHEMA,
+    NODE_FEATURE_SCHEMA,
+    EDGE_FEATURE_SCHEMA,
 )
 from classifiers import TestGraphNetwork
 
@@ -29,9 +28,9 @@ def _sample_raw():
     }
 
 
-def _build_batch(enrich: bool):
+def _build_batch():
     converter = ExpressionGraphConverter()
-    data = converter.convert(_sample_raw(), heterogeneous=False, enrich=enrich, mode="graph")
+    data = converter.convert(_sample_raw(), heterogeneous=False, mode="graph")
     if hasattr(data, "laplacian"):
         del data.laplacian
     data.global_features = torch.zeros((1, 2), dtype=torch.float)
@@ -41,9 +40,9 @@ def _build_batch(enrich: bool):
 
 
 def test_classifier_forward_with_feature_encoder():
-    batch = _build_batch(enrich=True)
-    input_dim = len(ENRICHED_NODE_FEATURE_SCHEMA)
-    edge_dim = len(ENRICHED_EDGE_FEATURE_SCHEMA)
+    batch = _build_batch()
+    input_dim = len(NODE_FEATURE_SCHEMA)
+    edge_dim = len(EDGE_FEATURE_SCHEMA)
 
     for arch in ("gatv2_stack", "gine_stack"):
         model = TestGraphNetwork(
@@ -68,12 +67,12 @@ def test_classifier_forward_with_feature_encoder():
 def test_label_id_embedding_breaks_ordinal_assumption():
     """Two graphs differing only in a function label must be separable through the
     label embedding rather than a linear scaling of the raw id."""
-    batch = _build_batch(enrich=True)
+    batch = _build_batch()
     model = TestGraphNetwork(
-        input_dim=len(ENRICHED_NODE_FEATURE_SCHEMA),
+        input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=32,
         global_dim=2,
-        edge_dim=len(ENRICHED_EDGE_FEATURE_SCHEMA),
+        edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
         use_feature_encoder=True,
     )
@@ -82,39 +81,17 @@ def test_label_id_embedding_breaks_ordinal_assumption():
 
 
 def test_classifier_forward_without_feature_encoder():
-    batch = _build_batch(enrich=True)
+    batch = _build_batch()
     model = TestGraphNetwork(
-        input_dim=len(ENRICHED_NODE_FEATURE_SCHEMA),
+        input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=32,
         global_dim=2,
-        edge_dim=len(ENRICHED_EDGE_FEATURE_SCHEMA),
+        edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
         use_feature_encoder=False,
     )
     model.eval()
     assert model.node_encoder is None
-    assert model.edge_encoder is None
-    with torch.no_grad():
-        out = model(
-            batch.x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr
-        )
-    assert out.shape == (1, 2)
-
-
-def test_classifier_basic_schema_skips_edge_encoder():
-    batch = _build_batch(enrich=False)
-    model = TestGraphNetwork(
-        input_dim=len(BASIC_NODE_FEATURE_SCHEMA),
-        hidden_dim=32,
-        global_dim=2,
-        edge_dim=1,
-        architecture="gatv2_stack",
-        use_feature_encoder=True,
-    )
-    model.eval()
-    # Node encoder still applies, but the single-column basic edge schema has no
-    # relation-type column to embed.
-    assert model.node_encoder is not None
     assert model.edge_encoder is None
     with torch.no_grad():
         out = model(

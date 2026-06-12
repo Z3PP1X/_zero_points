@@ -366,14 +366,13 @@ def main() -> None:
 
     feature_selection, active_features = resolve_rl_features(
         load_yaml_config(config_path).get("experiment") or {},
-        enrich=True,
         feature_groups=args.feature_groups,
         positional_encoding=args.positional_encoding,
         active_features=args.active_features,
     )
     print(f"[Pipeline] Feature groups: {feature_selection.enabled_groups()}")
     print(f"[Pipeline] Positional encodings: {list(feature_selection.positional_encodings)}")
-    print(f"[Pipeline] Active node features: {feature_selection.summary(enrich=True)}")
+    print(f"[Pipeline] Active node features: {feature_selection.summary()}")
 
     padded_node_feature_count = len(active_features) if active_features is not None else 25
 
@@ -429,7 +428,6 @@ def main() -> None:
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=experiment,
         mode=mode,
-        enrich=True,
         edge_direction=edge_direction,
     )
     loader = unified_loader.graph_loader

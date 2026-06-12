@@ -12,48 +12,9 @@ import pandas as pd
 import torch
 from torch_geometric.graphgym.loss import compute_loss
 
-logging.getLogger("matplotlib").setLevel(logging.ERROR)
+from gnn.shared.utils.graph_utils import NODE_FEATURE_SCHEMA
 
-BASIC_FEATURE_SCHEMA = [
-    "node_type",
-    "label_id",
-    "value",
-    "has_value",
-    "degree_centrality",
-    "virtual_current_x_val",
-    "virtual_delta_target_val",
-    "virtual_d1_x_val",
-    "virtual_d2_x_val",
-    "belongs_to_f",
-    "belongs_to_d1",
-    "belongs_to_d2",
-]
-ENRICHED_FEATURE_SCHEMA = [
-    "node_type",
-    "label_id",
-    "depth",
-    "height",
-    "subtree_size",
-    "out_degree",
-    "betweenness_centrality",
-    "value",
-    "has_value",
-    "lpe_1",
-    "lpe_2",
-    "lpe_3",
-    "lpe_4",
-    "rwpe_1",
-    "rwpe_2",
-    "rwpe_3",
-    "rwpe_4",
-    "virtual_current_x_val",
-    "virtual_delta_target_val",
-    "virtual_d1_x_val",
-    "virtual_d2_x_val",
-    "belongs_to_f",
-    "belongs_to_d1",
-    "belongs_to_d2",
-]
+logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 
 def resolve_feature_names(cfg) -> list[str]:
@@ -61,20 +22,17 @@ def resolve_feature_names(cfg) -> list[str]:
     from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
     from gnn.shared.utils.feature_config import plain_dict
 
-    enrich = bool(getattr(cfg.expression_graph, "enrich", False))
-
     try:
         expr_graph_dict = plain_dict(cfg.expression_graph)
         _, active_features = resolve_expression_graph_features(
             expr_graph_dict,
-            enrich=enrich,
         )
         if active_features is not None:
             return active_features
     except Exception as e:
         logging.warning(f"Failed to resolve active features dynamically: {e}")
 
-    schema = ENRICHED_FEATURE_SCHEMA if enrich else BASIC_FEATURE_SCHEMA
+    schema = list(NODE_FEATURE_SCHEMA)
     active_features_str = getattr(cfg.expression_graph, "active_features", "") or ""
     if active_features_str.strip():
         return [part.strip() for part in active_features_str.split(",") if part.strip()]

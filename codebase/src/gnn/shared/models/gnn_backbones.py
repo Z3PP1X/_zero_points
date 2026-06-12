@@ -9,17 +9,17 @@ from torch_geometric.nn import GATv2Conv, GCNConv, GINConv, GINEConv, SAGEConv, 
 from gnn.shared.utils.graph_utils import (
     CANONICAL_EDGE_TYPE_VOCAB,
     CANONICAL_LABEL_VOCAB,
-    ENRICHED_NODE_FEATURE_SCHEMA,
+    NODE_FEATURE_SCHEMA,
 )
 
 NUM_NODE_TYPES = 11
 NUM_LABELS = len(CANONICAL_LABEL_VOCAB)
 NUM_EDGE_TYPES = len(CANONICAL_EDGE_TYPE_VOCAB)
-NODE_TYPE_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("node_type")
-LABEL_ID_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("label_id")
-BELONGS_TO_F_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("belongs_to_f")
-BELONGS_TO_D1_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("belongs_to_d1")
-BELONGS_TO_D2_COL = ENRICHED_NODE_FEATURE_SCHEMA.index("belongs_to_d2")
+NODE_TYPE_COL = NODE_FEATURE_SCHEMA.index("node_type")
+LABEL_ID_COL = NODE_FEATURE_SCHEMA.index("label_id")
+BELONGS_TO_F_COL = NODE_FEATURE_SCHEMA.index("belongs_to_f")
+BELONGS_TO_D1_COL = NODE_FEATURE_SCHEMA.index("belongs_to_d1")
+BELONGS_TO_D2_COL = NODE_FEATURE_SCHEMA.index("belongs_to_d2")
 EDGE_RELATION_TYPE_COL = 2
 
 
@@ -559,13 +559,10 @@ class GraphPolicyBackbone(nn.Module):
 
     def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
         x_enc, node_types = self.node_encoder(x)
-        is_cx = (node_types == 5)
         is_f_root = (node_types == 6)
-        is_yt = (node_types == 7)
-        is_super = (node_types == 8)
         is_d1_root = (node_types == 9)
         is_d2_root = (node_types == 10)
-        is_virtual = (node_types >= 5) & (node_types <= 10)
+        is_virtual = is_f_root | is_d1_root | is_d2_root
         is_real = ~is_virtual
         is_func_op = (node_types == 1) | (node_types == 4)
         belongs_to_f = (
@@ -588,18 +585,6 @@ class GraphPolicyBackbone(nn.Module):
             coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
         )
 
-        if global_features is not None:
-            current_x = global_features[:, 0:1]
-            y_target = global_features[:, 1:2]
-
-            cx_proj = self.current_x_proj(current_x)
-            yt_proj = self.y_target_proj(y_target)
-
-            if is_cx.any():
-                x_enc[is_cx] = x_enc[is_cx] + cx_proj[batch_index[is_cx]]
-            if is_yt.any():
-                x_enc[is_yt] = x_enc[is_yt] + yt_proj[batch_index[is_yt]]
-
         num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
 
         aggregator_specs = (
@@ -618,10 +603,6 @@ class GraphPolicyBackbone(nn.Module):
                     )
                     x_enc[is_agg] = x_enc[is_agg] + fo_mean[batch_index[is_agg]]
 
-        if is_super.any() and is_real.any():
-            real_mean = global_mean_pool(x_enc[is_real], batch_index[is_real], size=num_graphs)
-            x_enc[is_super] = x_enc[is_super] + real_mean[batch_index[is_super]]
-
         real_edge_index, real_edge_emb, _ = filter_real_subgraph(edge_index, edge_emb, is_real)
 
         h_real = x_enc[is_real]
@@ -634,10 +615,6 @@ class GraphPolicyBackbone(nn.Module):
 
             if is_virtual.any():
                 h_virt = self.virtual_update_mlps[layer_idx](h_virt)
-
-            if is_super.any() and is_real.any() and is_virtual.any():
-                super_emb = h_virt[is_super[is_virtual]]
-                h_real = h_real + super_emb[batch_index[is_real]]
 
         h_pooled = pool_split_embeddings(
             h_real,
