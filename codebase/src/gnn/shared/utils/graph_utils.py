@@ -209,7 +209,7 @@ def compute_belongs_to_d2(raw: dict) -> dict[str, float]:
     return _compute_belongs_to_subtree(raw, "belongs_to_d2", "d2_")
 
 
-ENRICHED_NODE_FEATURE_SCHEMA = [
+NODE_FEATURE_SCHEMA = [
     "node_type",
     "label_id",
     "depth",
@@ -236,15 +236,11 @@ ENRICHED_NODE_FEATURE_SCHEMA = [
     "belongs_to_d2",
 ]
 
-ENRICHED_EDGE_FEATURE_SCHEMA = [
+EDGE_FEATURE_SCHEMA = [
     "child_index",
     "direction",
     "relation_type",
     "edge_betweenness_centrality",
-]
-
-BASIC_EDGE_FEATURE_SCHEMA = [
-    "edge_type",
 ]
 
 EDGE_DIRECTIONS: tuple[str, ...] = ("top_down", "bottom_up", "bidirectional")
@@ -267,21 +263,6 @@ def is_virtual_task_edge(parent: str, child: str, etype: str) -> bool:
     if etype == "virtual" or "supernode" in etype:
         return True
     return parent in VIRTUAL_TASK_NODE_IDS or child in VIRTUAL_TASK_NODE_IDS
-
-BASIC_NODE_FEATURE_SCHEMA = [
-    "node_type",
-    "label_id",
-    "value",
-    "has_value",
-    "degree_centrality",
-    "virtual_current_x_val",
-    "virtual_delta_target_val",
-    "virtual_d1_x_val",
-    "virtual_d2_x_val",
-    "belongs_to_f",
-    "belongs_to_d1",
-    "belongs_to_d2",
-]
 
 
 def _find_global_node_id(raw: dict) -> str | None:
@@ -389,7 +370,8 @@ class TopologicalFeatureExtractor:
     """Extrahiert topologische Features aus einem NetworkX Graphen."""
 
     @staticmethod
-    def extract_and_annotate(G: nx.DiGraph, enrich: bool = True) -> dict:
+    @staticmethod
+    def extract_and_annotate(G: nx.DiGraph) -> dict:
         deg_cent = nx.degree_centrality(G)
         nx.set_node_attributes(G, deg_cent, "degree_centrality")
 
@@ -422,10 +404,6 @@ class TopologicalFeatureExtractor:
             "tree_width": tree_width,
             "depths": levels,
         }
-
-        # Return early if enrichment is not requested (supervised learning legacy mode)
-        if not enrich:
-            return results
 
         # Heights (Height)
         heights = {}
@@ -548,7 +526,6 @@ def build_augmented_math_graph(
     last_seen_map: dict[str, str],
     children_dict: dict[str, list[str]],
     edge_direction: str,
-    enrich: bool,
     active_outer_function: str | None = None,
     current_arg_index: int = 0,
 ) -> None:
@@ -564,7 +541,6 @@ def build_augmented_math_graph(
         last_seen_map: A dictionary mapping variable names to their last visited Node ID.
         children_dict: A dictionary mapping parent node IDs to list of child node IDs.
         edge_direction: The direction of the edges ("top_down", "bottom_up", or "bidirectional").
-        enrich: Whether features are enriched (adding all fields) or basic (subset of fields).
         active_outer_function: The Node ID of the closest ancestor function node.
         current_arg_index: The argument index of the current node relative to its active outer function parent.
         
@@ -578,24 +554,15 @@ def build_augmented_math_graph(
     
     def add_augmented_edge(u: str, v: str, etype: str) -> None:
         etype_id = encode_edge_type(etype)
-        if enrich:
-            G.add_edge(
-                u,
-                v,
-                child_index=0.0,
-                direction=0.0,
-                relation_type=float(etype_id),
-                edge_betweenness_centrality=0.0,
-                etype=etype,
-            )
-        else:
-            G.add_edge(
-                u,
-                v,
-                edge_type=etype_id,
-                child_index=0.0,
-                etype=etype,
-            )
+        G.add_edge(
+            u,
+            v,
+            child_index=0.0,
+            direction=0.0,
+            relation_type=float(etype_id),
+            edge_betweenness_centrality=0.0,
+            etype=etype,
+        )
 
     # 1. Variable NextUse Tracking (Algorithm 1)
     is_variable = (node_attrs.get("type") == "variable")
@@ -638,7 +605,6 @@ def build_augmented_math_graph(
                 last_seen_map,
                 children_dict,
                 edge_direction,
-                enrich,
                 active_outer_function=active_outer_function,
                 current_arg_index=idx,
             )
@@ -649,7 +615,6 @@ def build_augmented_math_graph(
                 last_seen_map,
                 children_dict,
                 edge_direction,
-                enrich,
                 active_outer_function=active_outer_function,
                 current_arg_index=current_arg_index,
             )
@@ -678,7 +643,7 @@ class ExpressionGraphConverter:
             return "bidirectional"
         return edge_direction
 
-    def _add_enriched_ast_edges(
+    def _add_ast_edges(
         self,
         G_enriched: nx.DiGraph,
         parent: str,
@@ -710,33 +675,6 @@ class ExpressionGraphConverter:
                 etype=etype + "_reverse",
             )
 
-    def _add_basic_ast_edges(
-        self,
-        G_enriched: nx.DiGraph,
-        parent: str,
-        child: str,
-        child_idx: int,
-        etype: str,
-        edge_direction: str,
-    ) -> None:
-        effective = self._effective_edge_direction(parent, child, etype, edge_direction)
-        if effective in ("top_down", "bidirectional"):
-            G_enriched.add_edge(
-                parent,
-                child,
-                edge_type=self._encode_edge_type(etype),
-                child_index=float(child_idx),
-                etype=etype,
-            )
-        if effective in ("bottom_up", "bidirectional"):
-            G_enriched.add_edge(
-                child,
-                parent,
-                edge_type=self._encode_edge_type(etype + "_reverse"),
-                child_index=float(child_idx),
-                etype=etype + "_reverse",
-            )
-
     def _add_virtual_supernode_edges(self, G_enriched: nx.DiGraph, node_ids: list[str]) -> None:
         if "virtual_supernode" not in node_ids:
             return
@@ -760,28 +698,6 @@ class ExpressionGraphConverter:
                 direction=1.0,
                 relation_type=float(self._encode_edge_type("virtual_reverse")),
                 edge_betweenness_centrality=0.0,
-                etype="supernode_connection_reverse",
-            )
-
-    def _add_virtual_supernode_edges_basic(self, G_enriched: nx.DiGraph, node_ids: list[str]) -> None:
-        if "virtual_supernode" not in node_ids:
-            return
-        supernode_etype = self._encode_edge_type("virtual")
-        for node in node_ids:
-            if node == "virtual_supernode":
-                continue
-            G_enriched.add_edge(
-                "virtual_supernode",
-                node,
-                edge_type=supernode_etype,
-                child_index=0.0,
-                etype="supernode_connection",
-            )
-            G_enriched.add_edge(
-                node,
-                "virtual_supernode",
-                edge_type=self._encode_edge_type("virtual_reverse"),
-                child_index=0.0,
                 etype="supernode_connection_reverse",
             )
 
