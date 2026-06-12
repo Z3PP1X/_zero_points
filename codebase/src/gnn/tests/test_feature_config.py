@@ -10,7 +10,7 @@ from gnn.shared.utils.feature_config import (
 
 def test_default_selection_uses_all_enriched_features():
     selection = parse_feature_selection_from_mapping({})
-    active = resolve_active_node_features(selection, enrich=True)
+    active = resolve_active_node_features(selection)
     assert active is None
 
 
@@ -27,7 +27,7 @@ def test_positional_encoding_lpe_only():
             }
         ),
     )
-    active = resolve_active_node_features(selection, enrich=True)
+    active = resolve_active_node_features(selection)
     assert active is not None
     assert "lpe_1" in active
     assert "rwpe_1" not in active
@@ -39,7 +39,7 @@ def test_positional_encoding_none_via_cli():
         parse_feature_selection_from_mapping({}),
         positional_encoding=["none"],
     )
-    active = resolve_active_node_features(selection, enrich=True)
+    active = resolve_active_node_features(selection)
     assert active is not None
     assert not any(feature.startswith(("lpe_", "rwpe_")) for feature in active)
 
@@ -50,7 +50,7 @@ def test_feature_groups_limit_enabled_classes():
         feature_groups=["node", "positional"],
         positional_encoding=["rwpe"],
     )
-    active = resolve_active_node_features(selection, enrich=True)
+    active = resolve_active_node_features(selection)
     assert active is not None
     assert "node_type" in active
     assert "rwpe_1" in active
@@ -64,7 +64,7 @@ def test_explicit_active_features_override_groups():
         feature_groups=["node"],
         active_features=["node_type", "label_id"],
     )
-    active = resolve_active_node_features(selection, enrich=True)
+    active = resolve_active_node_features(selection)
     assert active == ["node_type", "label_id"]
 
 

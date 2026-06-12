@@ -25,9 +25,9 @@ from gnn.supervised_learning.supervised_config import (
     apply_expression_graph_overrides,
     bootstrap_graphgym_cfg,
     create_graphgym_model,
-    edge_dim_for_enrich,
     load_yaml_config,
     read_supervised_settings,
+    resolve_edge_dim,
     validate_layer_type,
 )
 from gnn.supervised_learning.loader_graphgym import (
@@ -245,7 +245,6 @@ def main(
     config_path: Path,
     dataset_name: str,
     mode: str = "graph",
-    enrich: bool = False,
     active_features: list[str] | None = None,
     feature_groups: list[str] | None = None,
     positional_encoding: list[str] | None = None,
@@ -260,7 +259,6 @@ def main(
     feature_selection = apply_expression_graph_overrides(
         cfg,
         mode=mode,
-        enrich=enrich,
         active_features=active_features,
         feature_groups=feature_groups,
         positional_encoding=positional_encoding,
@@ -279,7 +277,7 @@ def main(
         ]
     )
     cfg.gnn.layer_type = validate_layer_type(layer_type)
-    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
+    cfg.dataset.edge_dim = resolve_edge_dim()
 
     epochs = int(cfg.train.epochs)
     batch_size = int(cfg.train.batch_size)
@@ -293,7 +291,6 @@ def main(
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=dataset_name,
         mode=mode,
-        enrich=enrich,
         heterogeneous=heterogeneous,
         edge_direction=edge_direction,
     )
@@ -302,7 +299,6 @@ def main(
         dataset_name=dataset_name,
         seed=seed,
         mode=mode,
-        enrich=enrich,
         active_features=resolved_active_features,
         unified_loader=unified_loader,
         synthetic=synthetic,
@@ -365,7 +361,6 @@ def main(
                 "graph_pooling": str(cfg.model.graph_pooling),
                 "loss_fun": str(cfg.model.loss_fun),
                 "mode": mode,
-                "enrich": enrich,
                 "active_features": resolved_active_features,
                 "feature_groups": feature_selection.enabled_groups(),
                 "positional_encodings": list(feature_selection.positional_encodings),
@@ -559,7 +554,7 @@ if __name__ == "__main__":
         "--config",
         type=str,
         default="config_supervised.yaml",
-        help="GraphGym YAML config (architecture via gnn.layer_type, enrich via expression_graph.enrich).",
+        help="GraphGym YAML config (architecture via gnn.layer_type).",
     )
     parser.add_argument(
         "--mode",
@@ -605,7 +600,6 @@ if __name__ == "__main__":
         parser.error("Dataset name must be set in config (dataset.name) or via --dataset")
 
     mode = args.mode or settings["mode"]
-    enrich = settings["enrich"]
     edge_direction = args.edge_direction or settings["edge_direction"]
     layer_type = settings["layer_type"]
     synthetic = args.synthetic or settings["synthetic"]
@@ -618,7 +612,6 @@ if __name__ == "__main__":
         loader = UnifiedDataLoader.get_instance(
             dataset_name=dataset_name,
             mode=mode,
-            enrich=enrich,
             heterogeneous=heterogeneous,
             edge_direction=edge_direction,
         )
@@ -633,7 +626,6 @@ if __name__ == "__main__":
             synth_loader = UnifiedDataLoader.get_instance(
                 dataset_name=synthetic_dataset,
                 mode=mode,
-                enrich=enrich,
                 heterogeneous=heterogeneous,
                 edge_direction=edge_direction,
             )
@@ -649,22 +641,20 @@ if __name__ == "__main__":
 
             preview_selection, _ = resolve_expression_graph_features(
                 load_yaml_config(config_path).get("expression_graph"),
-                enrich=enrich,
                 feature_groups=args.feature_groups,
                 positional_encoding=args.positional_encoding,
                 active_features=args.active_features,
             )
             print(f"Feature groups: {preview_selection.enabled_groups()}")
             print(f"Positional encodings: {list(preview_selection.positional_encodings)}")
-            print(f"Active node features: {preview_selection.summary(enrich)}")
+            print(f"Active node features: {preview_selection.summary()}")
             print(
-                f"Config: {config_path.name} | layer_type={layer_type} | enrich={enrich} | edge_direction={edge_direction}"
+                f"Config: {config_path.name} | layer_type={layer_type} | edge_direction={edge_direction}"
             )
             main(
                 config_path=config_path,
                 dataset_name=dataset_name,
                 mode=mode,
-                enrich=enrich,
                 feature_groups=args.feature_groups,
                 positional_encoding=args.positional_encoding,
                 active_features=args.active_features,

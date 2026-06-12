@@ -15,8 +15,7 @@ from gnn.shared.models.gnn_backbones import (
 )
 
 # Edge feature dim at which the relation-type column (index 2) is present and the
-# edge encoder can embed it (enriched edge schema). Basic schema has a single
-# column and is left un-encoded.
+# edge encoder can embed it.
 ENRICHED_EDGE_DIM = 4
 
 
@@ -168,7 +167,7 @@ class TestGraphNetwork(nn.Module):
         # Derive virtual/real partition from the raw node_type column before any
         # encoding (the encoder consumes that column).
         node_types = x[:, 0].round().long()
-        is_virtual = (node_types >= 5) & (node_types <= 10)
+        is_virtual = (node_types == 6) | (node_types == 9) | (node_types == 10)
         is_real = ~is_virtual
 
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)

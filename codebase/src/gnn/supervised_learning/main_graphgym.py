@@ -32,7 +32,7 @@ from gnn.supervised_learning.curated_eval_schedule import (
     should_evaluate_curated,
 )
 from gnn.supervised_learning.supervised_config import (
-    edge_dim_for_enrich,
+    resolve_edge_dim,
     validate_layer_type,
 )
 
@@ -440,14 +440,13 @@ def main():
     cfg.optim.max_epoch = cfg.train.epochs
 
     layer_type = validate_layer_type(cfg.gnn.layer_type)
-    enrich = bool(getattr(cfg.expression_graph, "enrich", False))
-    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
+    cfg.dataset.edge_dim = resolve_edge_dim()
 
     set_run_dir(cfg.out_dir)
 
     print("\n[GraphGym Command Center] Launching training run...")
     print(f"[GraphGym] Architecture layer_type={layer_type} (from config YAML)")
-    print(f"[GraphGym] Edge dim={cfg.dataset.edge_dim} (enrich={enrich})")
+    print(f"[GraphGym] Edge dim={cfg.dataset.edge_dim}")
     print(f"[GraphGym] Best-model selection: monitor=val_pr_auc, mode=max")
     print(f"[GraphGym] Final test (curated real data) will use the BEST saved checkpoint.\n")
     datamodule = GraphGymDataModule()

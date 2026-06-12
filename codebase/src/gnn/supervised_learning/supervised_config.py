@@ -17,8 +17,7 @@ from gnn.shared.utils.feature_config import (
     resolve_active_node_features,
 )
 from gnn.shared.utils.graph_utils import (
-    BASIC_EDGE_FEATURE_SCHEMA,
-    ENRICHED_EDGE_FEATURE_SCHEMA,
+    EDGE_FEATURE_SCHEMA,
     validate_edge_direction,
 )
 
@@ -66,20 +65,17 @@ def architecture_from_layer_type(layer_type: str) -> str:
     return LAYER_TYPE_TO_ARCHITECTURE[validate_layer_type(layer_type)]
 
 
-def edge_dim_for_enrich(enrich: bool) -> int:
-    schema = ENRICHED_EDGE_FEATURE_SCHEMA if enrich else BASIC_EDGE_FEATURE_SCHEMA
-    return len(schema)
+def resolve_edge_dim() -> int:
+    return len(EDGE_FEATURE_SCHEMA)
 
 
-def get_batch_edge_attr(batch, enrich: bool):
-    """Return edge attributes for a PyG batch; require them when enrich=True."""
+def get_batch_edge_attr(batch):
+    """Return edge attributes for a PyG batch; edge_attr is always required."""
     edge_attr = getattr(batch, "edge_attr", None)
-    if enrich:
-        if edge_attr is None:
-            raise ValueError(
-                "enrich=True requires edge_attr on every graph batch, but edge_attr is missing"
-            )
-        return edge_attr
+    if edge_attr is None:
+        raise ValueError(
+            "edge_attr is required on every graph batch, but edge_attr is missing"
+        )
     return edge_attr
 
 
@@ -99,8 +95,7 @@ def bootstrap_graphgym_cfg(config_path: Path | str, seed: int | None = None):
     if getattr(cfg, "accelerator", "auto") == "auto":
         cfg.accelerator = "cuda" if torch.cuda.is_available() else "cpu"
 
-    enrich = bool(getattr(cfg.expression_graph, "enrich", False))
-    cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
+    cfg.dataset.edge_dim = resolve_edge_dim()
     validate_layer_type(cfg.gnn.layer_type)
     return cfg
 
@@ -108,7 +103,6 @@ def bootstrap_graphgym_cfg(config_path: Path | str, seed: int | None = None):
 def resolve_expression_graph_features(
     expression_graph: dict[str, Any] | None,
     *,
-    enrich: bool,
     feature_groups: list[str] | None = None,
     positional_encoding: list[str] | None = None,
     active_features: list[str] | None = None,
@@ -120,14 +114,13 @@ def resolve_expression_graph_features(
         positional_encoding=positional_encoding,
         active_features=active_features,
     )
-    return selection, resolve_active_node_features(selection, enrich=enrich)
+    return selection, resolve_active_node_features(selection)
 
 
 def apply_expression_graph_overrides(
     cfg,
     *,
     mode: str | None = None,
-    enrich: bool | None = None,
     active_features: list[str] | None = None,
     feature_groups: list[str] | None = None,
     positional_encoding: list[str] | None = None,
@@ -139,10 +132,6 @@ def apply_expression_graph_overrides(
     """Apply CLI overrides onto a loaded GraphGym cfg."""
     if mode is not None:
         cfg.expression_graph.mode = mode
-    current_enrich = enrich if enrich is not None else bool(cfg.expression_graph.enrich)
-    if enrich is not None:
-        cfg.expression_graph.enrich = enrich
-        cfg.dataset.edge_dim = edge_dim_for_enrich(enrich)
     from gnn.shared.utils.feature_config import plain_dict
 
     selection, resolved_features = resolve_expression_graph_features(
@@ -150,7 +139,6 @@ def apply_expression_graph_overrides(
             "features": plain_dict(getattr(cfg.expression_graph, "features", {})),
             "active_features": getattr(cfg.expression_graph, "active_features", ""),
         },
-        enrich=current_enrich,
         feature_groups=feature_groups,
         positional_encoding=positional_encoding,
         active_features=active_features,
@@ -183,23 +171,20 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
     gnn_cfg = config.get("gnn") or {}
     dataset_cfg = config.get("dataset") or {}
 
-    enrich = bool(expression_graph.get("enrich", False))
     layer_type = validate_layer_type(gnn_cfg.get("layer_type", "gatv2conv"))
     feature_selection, active_features = resolve_expression_graph_features(
         expression_graph,
-        enrich=enrich,
     )
 
     return {
         "dataset_name": dataset_cfg.get("name"),
         "mode": expression_graph.get("mode", "graph"),
-        "enrich": enrich,
         "edge_direction": validate_edge_direction(
             expression_graph.get("edge_direction", "top_down")
         ),
         "layer_type": layer_type,
         "architecture": architecture_from_layer_type(layer_type),
-        "edge_dim": edge_dim_for_enrich(enrich),
+        "edge_dim": resolve_edge_dim(),
         "synthetic": bool(expression_graph.get("synthetic", False)),
         "synthetic_dataset": expression_graph.get("synthetic_dataset") or None,
         "active_features": active_features,

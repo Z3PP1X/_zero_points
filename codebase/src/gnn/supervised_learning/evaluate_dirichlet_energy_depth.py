@@ -21,7 +21,6 @@ from gnn.supervised_learning.supervised_config import (
     bootstrap_graphgym_cfg,
     create_graphgym_model,
     apply_expression_graph_overrides,
-    edge_dim_for_enrich,
     validate_layer_type,
 )
 from gnn.supervised_learning.preprocessing import GraphPipeline
@@ -93,27 +92,23 @@ def main():
     dataset_name = args.dataset or cfg.dataset.name
     layer_type = args.layer_type or cfg.gnn.layer_type
     mode = cfg.expression_graph.mode
-    enrich = cfg.expression_graph.enrich
     edge_direction = cfg.expression_graph.edge_direction
-    
+
     print(f"Dataset: {dataset_name}")
     print(f"Layer Type: {layer_type}")
-    print(f"Feature Enrichment: {enrich}")
     print(f"Edge Direction: {edge_direction}")
-    
+
     # Load dataset pipeline
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=dataset_name,
         mode=mode,
-        enrich=enrich,
         edge_direction=edge_direction,
     )
-    
+
     pipeline = GraphPipeline(
         dataset_name=dataset_name,
         seed=cfg.seed,
         mode=mode,
-        enrich=enrich,
         active_features=None if not cfg.expression_graph.active_features else [
             f.strip() for f in str(cfg.expression_graph.active_features).split(",") if f.strip()
         ],

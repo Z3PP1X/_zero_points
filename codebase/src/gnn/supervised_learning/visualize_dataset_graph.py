@@ -34,13 +34,12 @@ from gnn.shared.utils.graph_utils import (
     compute_belongs_to_f,
     compute_belongs_to_d1,
     compute_belongs_to_d2,
-    FUNCTION_AGGREGATOR_IDS,
     TopologicalFeatureExtractor,
     get_hetero_node_type
 )
 
 
-def build_networkx_graph(raw_dict, mode, enrich=True):
+def build_networkx_graph(raw_dict, mode):
     """
     Constructs a NetworkX graph from raw graph dictionary matching the dataset loader's modes.
     """
@@ -104,85 +103,6 @@ def build_networkx_graph(raw_dict, mode, enrich=True):
     belongs_to_f_map = compute_belongs_to_f(raw)
     belongs_to_d1_map = compute_belongs_to_d1(raw)
     belongs_to_d2_map = compute_belongs_to_d2(raw)
-    
-    if mode == "graph":
-        # Find variable nodes and global node
-        variable_node_ids = []
-        global_node_id = None
-        for node in raw["nodes"]:
-            if node.get("type") == "variable":
-                variable_node_ids.append(node["id"])
-            elif node.get("type") == "global":
-                global_node_id = node["id"]
-        
-        # Add task virtual nodes
-        raw["nodes"].append({
-            "id": "virtual_current_x",
-            "label": "virtual_current_x",
-            "type": "virtual_current_x",
-            "value": None
-        })
-        raw["nodes"].append({
-            "id": "virtual_y_target",
-            "label": "virtual_y_target",
-            "type": "virtual_y_target",
-            "value": None
-        })
-        raw["nodes"].append({
-            "id": "virtual_supernode",
-            "label": "virtual_supernode",
-            "type": "virtual_supernode",
-            "value": None
-        })
-
-        existing_aggregators = [
-            agg_id for agg_id in FUNCTION_AGGREGATOR_IDS
-            if any(node["id"] == agg_id for node in raw["nodes"])
-        ]
-
-        # virtual_current_x -> all variables
-        for var_id in variable_node_ids:
-            raw["edges"].append({
-                "source": "virtual_current_x",
-                "target": var_id,
-                "type": "virtual"
-            })
-        # virtual_current_x <-> per-function aggregators
-        for agg_id in existing_aggregators:
-            raw["edges"].append({
-                "source": "virtual_current_x",
-                "target": agg_id,
-                "type": "virtual"
-            })
-            raw["edges"].append({
-                "source": agg_id,
-                "target": "virtual_current_x",
-                "type": "virtual"
-            })
-        # f_root <-> virtual_y_target
-        if "f_root" in existing_aggregators:
-            raw["edges"].append({
-                "source": "f_root",
-                "target": "virtual_y_target",
-                "type": "virtual"
-            })
-            raw["edges"].append({
-                "source": "virtual_y_target",
-                "target": "f_root",
-                "type": "virtual"
-            })
-        # Newton/Halley coupling between derivative aggregators
-        for src, tgt in (("f_root", "d1_root"), ("d1_root", "d2_root"), ("f_root", "d2_root")):
-            if src in existing_aggregators and tgt in existing_aggregators:
-                raw["edges"].append({"source": src, "target": tgt, "type": "virtual"})
-                raw["edges"].append({"source": tgt, "target": src, "type": "virtual"})
-        # global node -> virtual_y_target
-        if global_node_id is not None:
-            raw["edges"].append({
-                "source": global_node_id,
-                "target": "virtual_y_target",
-                "type": "virtual"
-            })
 
     # Build Directed Graph with node attributes
     G = converter._build_networkx(
@@ -202,19 +122,10 @@ def build_networkx_graph(raw_dict, mode, enrich=True):
                 etype = e.get("type", "child_of")
                 break
         G.edges[u, v]["etype"] = etype
-        
-        # Add reverse edge if enrich is True
-        if enrich:
-            G.add_edge(v, u, etype=etype + "_reverse")
 
-    # Add virtual supernode edges if virtual_supernode is present
-    if "virtual_supernode" in G.nodes:
-        for node in list(G.nodes):
-            if node != "virtual_supernode":
-                G.add_edge("virtual_supernode", node, etype="supernode_connection")
-                if enrich:
-                    G.add_edge(node, "virtual_supernode", etype="supernode_connection_reverse")
-        
+        # Reverse edge (single schema always has bidirectional AST edges)
+        G.add_edge(v, u, etype=etype + "_reverse")
+
     return G
 
 
@@ -239,7 +150,7 @@ def compute_hierarchical_layout(G):
                 G_ast_clean.add_edge(v, u)
     
     if len(G_ast_clean) > 0:
-        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast_clean, enrich=True)
+        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast_clean)
         depths = topo["depths"]
     else:
         depths = {}
@@ -503,30 +414,17 @@ def main():
     args = parser.parse_args()
     
     # Map visualizer modes to loader configurations
-    if args.mode == "tree":
-        loader_mode = "tree"
-        enrich = False
-    elif args.mode == "tree_derivatives":
-        loader_mode = "tree_derivatives"
-        enrich = False
-    elif args.mode == "graph":
+    if args.mode in ("graph", "graph_bidirectional", "graph_hetero"):
         loader_mode = "graph"
-        enrich = False
-    elif args.mode == "graph_bidirectional":
-        loader_mode = "graph"
-        enrich = True
-    elif args.mode == "graph_hetero":
-        loader_mode = "graph"
-        enrich = True
+    elif args.mode in ("tree", "tree_derivatives"):
+        loader_mode = args.mode
     else:
         loader_mode = args.mode
-        enrich = True
 
     # Initialize unified graph loader
     loader = GraphDataLoader(
         name=args.dataset_name,
         mode=loader_mode,
-        enrich=enrich,
         is_synthetic=args.is_synthetic or "synthetic" in args.dataset_name
     )
     
@@ -544,7 +442,7 @@ def main():
         raw_dict = raw_val
         
     # Build the NetworkX graph with mode layout
-    G = build_networkx_graph(raw_dict, loader_mode, enrich=enrich)
+    G = build_networkx_graph(raw_dict, loader_mode)
     G.graph["mode"] = args.mode
     G.graph["id"] = args.graph_id
     

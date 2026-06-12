@@ -20,9 +20,8 @@ dataset:
   node_encoder_bn: True
 
 expression_graph:
-  enrich: True
   mode: graph
-  edge_direction: top_down  # top_down | bottom_up | bidirectional (virtual nodes always bidirectional)
+  edge_direction: top_down  # top_down | bottom_up | bidirectional
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
 

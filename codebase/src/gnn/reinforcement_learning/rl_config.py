@@ -34,7 +34,7 @@ def read_rl_settings(config: dict[str, Any]) -> dict[str, Any]:
     gateway = config.get("gateway") or {}
     train_best = config.get("train_best") or {}
 
-    feature_selection, active_features = resolve_rl_features(experiment, enrich=True)
+    feature_selection, active_features = resolve_rl_features(experiment)
 
     return {
         "experiment": experiment.get("name", "nur_f"),
@@ -65,7 +65,6 @@ def read_rl_settings(config: dict[str, Any]) -> dict[str, Any]:
 def resolve_rl_features(
     experiment: dict[str, Any],
     *,
-    enrich: bool = True,
     feature_groups: list[str] | None = None,
     positional_encoding: list[str] | None = None,
     active_features: list[str] | None = None,
@@ -76,7 +75,7 @@ def resolve_rl_features(
         positional_encoding=positional_encoding,
         active_features=active_features,
     )
-    return selection, resolve_active_node_features(selection, enrich=enrich)
+    return selection, resolve_active_node_features(selection)
 
 
 def resolve_rl_setting(

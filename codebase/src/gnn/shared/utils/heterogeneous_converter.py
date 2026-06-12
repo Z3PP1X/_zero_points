@@ -11,7 +11,7 @@ from gnn.shared.utils.graph_utils import (
 
 
 def to_hetero(
-    G: nx.DiGraph, raw: dict, topo: dict, enrich: bool
+    G: nx.DiGraph, raw: dict, topo: dict
 ) -> HeteroData:
     """Converts a NetworkX DiGraph to a heterogeneous PyG HeteroData object.
 
@@ -19,7 +19,6 @@ def to_hetero(
         G: The NetworkX DiGraph representing the expression graph.
         raw: The raw input dictionary of the graph.
         topo: Pre-computed topological features dictionary of the graph.
-        enrich: Whether to include enriched topological features.
 
     Returns:
         The heterogeneous PyG HeteroData object.
@@ -118,8 +117,7 @@ def to_hetero(
     ast_node_ids = [
         nid
         for nid in node_ids
-        if nid
-        not in ("virtual_current_x", "virtual_y_target", "virtual_supernode")
+        if nid not in ("global", "f_root", "d1_root", "d2_root")
     ]
     ast_id_to_idx = {
         node_id: idx for idx, node_id in enumerate(ast_node_ids)

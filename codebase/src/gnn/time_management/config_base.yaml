@@ -12,7 +12,6 @@ dataset:
   transductive: False
 
 expression_graph:
-  enrich: True
   mode: graph
   edge_direction: top_down
   synthetic: True

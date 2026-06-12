@@ -121,7 +121,7 @@ def test_expression_graph_converter_with_container_format():
     
     # 1. Test "graph" mode (compiles f, d1, d2 + aggregators, no task virtual nodes)
     # Nodes: 3 + 1 + 1 + 1 + 3 aggregators = 9
-    data_graph = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="graph")
+    data_graph = converter.convert(raw_container, heterogeneous=False, mode="graph")
     assert data_graph.num_nodes == 9
     assert "global" in data_graph.node_ids
     assert "f_1" in data_graph.node_ids
@@ -129,7 +129,7 @@ def test_expression_graph_converter_with_container_format():
     assert "d2_1" in data_graph.node_ids
 
     # 2. Test "tree_derivatives" mode (compiles f, d1, d2 + aggregators, no task virtual nodes)
-    data_tree_deriv = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="tree_derivatives")
+    data_tree_deriv = converter.convert(raw_container, heterogeneous=False, mode="tree_derivatives")
     assert data_tree_deriv.num_nodes == 9
     assert "global" in data_tree_deriv.node_ids
     assert "f_1" in data_tree_deriv.node_ids
@@ -138,7 +138,7 @@ def test_expression_graph_converter_with_container_format():
     assert "virtual_current_x" not in data_tree_deriv.node_ids
 
     # 3. Test "tree" mode (compiles only f + f_root aggregator, without task virtual nodes)
-    data_tree = converter.convert(raw_container, heterogeneous=False, enrich=False, mode="tree")
+    data_tree = converter.convert(raw_container, heterogeneous=False, mode="tree")
     assert data_tree.num_nodes == 5
     assert "global" in data_tree.node_ids
     assert "f_1" in data_tree.node_ids

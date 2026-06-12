@@ -47,9 +47,11 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     g_curated_1 = Data(num_nodes=3)
     g_curated_1.x = torch.zeros((3, 8))
     g_curated_1.edge_index = torch.empty((2, 0), dtype=torch.long)
+    g_curated_1.edge_attr = torch.empty((0, 4), dtype=torch.float)
     g_curated_2 = Data(num_nodes=3)
     g_curated_2.x = torch.zeros((3, 8))
     g_curated_2.edge_index = torch.empty((2, 0), dtype=torch.long)
+    g_curated_2.edge_attr = torch.empty((0, 4), dtype=torch.float)
     
     mock_curated_unified.load_all.return_value = {
         "P_curated_1": g_curated_1,
@@ -78,9 +80,11 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     g_synth_1 = Data(num_nodes=3)
     g_synth_1.x = torch.zeros((3, 8))
     g_synth_1.edge_index = torch.empty((2, 0), dtype=torch.long)
+    g_synth_1.edge_attr = torch.empty((0, 4), dtype=torch.float)
     g_synth_2 = Data(num_nodes=3)
     g_synth_2.x = torch.zeros((3, 8))
     g_synth_2.edge_index = torch.empty((2, 0), dtype=torch.long)
+    g_synth_2.edge_attr = torch.empty((0, 4), dtype=torch.float)
     
     mock_synth_unified.load_all.return_value = {
         "P_synth_1": g_synth_1,
@@ -88,7 +92,7 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     }
     
     # Configure multiton behavior
-    def get_instance_side_effect(dataset_name, mode, enrich, **kwargs):
+    def get_instance_side_effect(dataset_name, mode, **kwargs):
         if dataset_name == "curated_dataset":
             return mock_curated_unified
         elif dataset_name == "synthetic_dataset":
@@ -101,7 +105,6 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     pipeline = GraphPipeline(
         dataset_name="curated_dataset",
         mode="graph",
-        enrich=False,
         synthetic=True,
         synthetic_dataset_name="synthetic_dataset",
         unified_loader=mock_curated_unified

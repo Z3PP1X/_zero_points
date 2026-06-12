@@ -250,7 +250,6 @@ def test_filter_active_kappa_nodes_edges(
     data = converter.convert(
         mainGraph,
         heterogeneous=False,
-        enrich=True,
         mode="graph",
         edge_direction="top_down",
     )

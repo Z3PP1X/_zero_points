@@ -61,7 +61,7 @@ def test_heterogeneous_converter_shapes_and_types():
     converter = ExpressionGraphConverter()
     
     # Convert using heterogeneous=True
-    data = converter.convert(raw_container, heterogeneous=True, enrich=True, mode="graph")
+    data = converter.convert(raw_container, heterogeneous=True, mode="graph")
     
     # 1. Integrity Check
     assert isinstance(data, HeteroData)
@@ -71,10 +71,10 @@ def test_heterogeneous_converter_shapes_and_types():
     # Operators: Plus (from f), 1 (d1 is constant, 0 is constant). Wait, Plus is the only operator!
     # Let's count variable: x (1)
     # Constants: 5 (from f), 1 (from d1), 0 (from d2).
-    # Virtuals: global, f_root, d1_root, d2_root, virtual_current_x, virtual_y_target, virtual_supernode (7 nodes)
-    
-    assert data["operator"].x.shape[1] == 45
-    assert data["variable"].x.shape[1] == 45
+    # Virtuals: global, f_root, d1_root, d2_root (4 nodes; task virtual nodes removed)
+    # Operator/variable feature dim = len(CANONICAL_LABELS) one-hot + 5 topology + 8 (lpe/rwpe).
+    assert data["operator"].x.shape[1] == 42
+    assert data["variable"].x.shape[1] == 42
     assert data["constant"].x.shape[1] == 9
     assert data["virtual"].x.shape[1] == 7
     
@@ -104,7 +104,7 @@ def test_heterogeneous_local_index_boundaries():
     }
 
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw_container, heterogeneous=True, enrich=True, mode="graph")
+    data = converter.convert(raw_container, heterogeneous=True, mode="graph")
     
     # Verify index boundaries for all edge index tables
     for triplet in data.edge_types:
@@ -131,7 +131,7 @@ def test_heterogeneous_state_injection():
     }
 
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw_container, heterogeneous=True, enrich=True, mode="graph")
+    data = converter.convert(raw_container, heterogeneous=True, mode="graph")
     
     # Keep copy of variable, constant, and operator feature matrix
     op_x_orig = data["operator"].x.clone()
@@ -153,7 +153,6 @@ def test_heterogeneous_state_injection():
         d1x_val=d1x,
         d2x_val=d2x,
         mode="graph",
-        enrich=True,
     )
     
     # Verify that virtual node feature values are injected correctly in data['virtual'].x
@@ -186,7 +185,7 @@ def test_regression_homogeneous_mode():
     }
 
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw_container, heterogeneous=False, enrich=True, mode="graph")
+    data = converter.convert(raw_container, heterogeneous=False, mode="graph")
     
     # Ensure legacy homogeneous structure is correct and contains 9 nodes (no task virtual nodes)
     assert data.num_nodes == 9

@@ -7,8 +7,8 @@ from pathlib import Path
 from graph_utils import (
     ExpressionGraphConverter,
     TopologicalFeatureExtractor,
-    ENRICHED_NODE_FEATURE_SCHEMA,
-    ENRICHED_EDGE_FEATURE_SCHEMA,
+    NODE_FEATURE_SCHEMA,
+    EDGE_FEATURE_SCHEMA,
     CANONICAL_LABEL_VOCAB,
     signed_log_value,
 )
@@ -36,7 +36,7 @@ def test_convert_ignores_legacy_taylor_coeff_fields(tmp_path):
     data = ExpressionGraphConverter().convert(raw)
 
     assert data.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
-    assert data.x.shape[1] == len(ENRICHED_NODE_FEATURE_SCHEMA)
+    assert data.x.shape[1] == len(NODE_FEATURE_SCHEMA)
     assert not hasattr(data, "taylor_coeffs")
     assert not hasattr(data, "inv_taylor_coeffs")
 
@@ -92,7 +92,7 @@ def test_enriched_graph_features(tmp_path):
 
     assert data.x.shape == (3, NATIVE_NODE_FEATURE_COUNT)
     assert data.edge_attr.shape == (4, NATIVE_EDGE_FEATURE_COUNT)
-    assert data.edge_attr.shape[1] == len(ENRICHED_EDGE_FEATURE_SCHEMA)
+    assert data.edge_attr.shape[1] == len(EDGE_FEATURE_SCHEMA)
 
     root_idx = 0
     child1_idx = 1
@@ -162,7 +162,7 @@ def test_edge_direction_top_down_has_parent_to_child_only():
         "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
     }
     data = ExpressionGraphConverter().convert(
-        raw, heterogeneous=False, enrich=True, mode="tree", edge_direction="top_down"
+        raw, heterogeneous=False, mode="tree", edge_direction="top_down"
     )
     assert data.edge_index.shape == (2, 1)
     src, dst = data.edge_index[:, 0].tolist()
@@ -179,41 +179,31 @@ def test_edge_direction_bottom_up_has_child_to_parent_only():
         "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
     }
     data = ExpressionGraphConverter().convert(
-        raw, heterogeneous=False, enrich=True, mode="tree", edge_direction="bottom_up"
+        raw, heterogeneous=False, mode="tree", edge_direction="bottom_up"
     )
     assert data.edge_index.shape == (2, 1)
     src, dst = data.edge_index[:, 0].tolist()
     assert src == 1 and dst == 0
 
 
-def test_virtual_edges_stay_bidirectional_with_top_down_mode():
+def test_ast_edge_direction_respected_for_belongs_to_edges():
+    """With virtual task nodes removed, AST/aggregator edges follow edge_direction."""
     raw = {
-        "id": "P-virtual-direction-test",
+        "id": "P-direction-aggregator-test",
         "nodes": [
             {"id": "global", "label": "GLOBAL", "type": "global", "value": None},
             {"id": "x1", "label": "x", "type": "variable", "value": None},
-            {"id": "virtual_current_x", "label": "virtual_current_x", "type": "virtual_current_x", "value": None},
         ],
         "edges": [
             {"source": "global", "target": "x1", "type": "child_of"},
-            {"source": "virtual_current_x", "target": "x1", "type": "virtual"},
         ],
     }
     data = ExpressionGraphConverter().convert(
-        raw, heterogeneous=False, enrich=True, mode="graph", edge_direction="top_down"
+        raw, heterogeneous=False, mode="graph", edge_direction="top_down"
     )
-    vcx_idx = data.node_ids.index("virtual_current_x")
+    assert "virtual_current_x" not in data.node_ids
     x1_idx = data.node_ids.index("x1")
     global_idx = data.node_ids.index("global")
-    virtual_edge_count = sum(
-        1
-        for edge_idx in range(data.edge_index.size(1))
-        if {
-            int(data.edge_index[0, edge_idx].item()),
-            int(data.edge_index[1, edge_idx].item()),
-        }
-        == {vcx_idx, x1_idx}
-    )
     ast_edge_count = sum(
         1
         for edge_idx in range(data.edge_index.size(1))
@@ -223,5 +213,4 @@ def test_virtual_edges_stay_bidirectional_with_top_down_mode():
         }
         == {global_idx, x1_idx}
     )
-    assert virtual_edge_count == 2
     assert ast_edge_count == 1

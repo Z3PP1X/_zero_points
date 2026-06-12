@@ -7,16 +7,14 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from gnn.shared.utils.graph_utils import (
-    BASIC_EDGE_FEATURE_SCHEMA,
-    BASIC_NODE_FEATURE_SCHEMA,
-    ENRICHED_EDGE_FEATURE_SCHEMA,
-    ENRICHED_NODE_FEATURE_SCHEMA,
+    EDGE_FEATURE_SCHEMA,
+    NODE_FEATURE_SCHEMA,
 )
 
 FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional", "edge")
 POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ("lpe", "rwpe")
 
-NODE_FEATURES_ENRICHED: tuple[str, ...] = (
+NODE_FEATURES: tuple[str, ...] = (
     "node_type",
     "label_id",
     "value",
@@ -30,21 +28,7 @@ NODE_FEATURES_ENRICHED: tuple[str, ...] = (
     "belongs_to_d2",
 )
 
-NODE_FEATURES_BASIC: tuple[str, ...] = (
-    "node_type",
-    "label_id",
-    "value",
-    "has_value",
-    "virtual_current_x_val",
-    "virtual_delta_target_val",
-    "virtual_d1_x_val",
-    "virtual_d2_x_val",
-    "belongs_to_f",
-    "belongs_to_d1",
-    "belongs_to_d2",
-)
-
-TOPOLOGY_FEATURES_ENRICHED: tuple[str, ...] = (
+TOPOLOGY_FEATURES: tuple[str, ...] = (
     "depth",
     "height",
     "subtree_size",
@@ -52,31 +36,16 @@ TOPOLOGY_FEATURES_ENRICHED: tuple[str, ...] = (
     "betweenness_centrality",
 )
 
-TOPOLOGY_FEATURES_BASIC: tuple[str, ...] = ("degree_centrality",)
-
 POSITIONAL_ENCODING_FEATURES: dict[str, tuple[str, ...]] = {
     "lpe": ("lpe_1", "lpe_2", "lpe_3", "lpe_4"),
     "rwpe": ("rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4"),
 }
 
-EDGE_FEATURES_ENRICHED: tuple[str, ...] = tuple(ENRICHED_EDGE_FEATURE_SCHEMA)
-EDGE_FEATURES_BASIC: tuple[str, ...] = tuple(BASIC_EDGE_FEATURE_SCHEMA)
+EDGE_FEATURES: tuple[str, ...] = tuple(EDGE_FEATURE_SCHEMA)
 
 
-def node_features_for_enrich(enrich: bool) -> tuple[str, ...]:
-    return NODE_FEATURES_ENRICHED if enrich else NODE_FEATURES_BASIC
-
-
-def topology_features_for_enrich(enrich: bool) -> tuple[str, ...]:
-    return TOPOLOGY_FEATURES_ENRICHED if enrich else TOPOLOGY_FEATURES_BASIC
-
-
-def edge_features_for_enrich(enrich: bool) -> tuple[str, ...]:
-    return EDGE_FEATURES_ENRICHED if enrich else EDGE_FEATURES_BASIC
-
-
-def full_node_schema(enrich: bool) -> list[str]:
-    return list(ENRICHED_NODE_FEATURE_SCHEMA if enrich else BASIC_NODE_FEATURE_SCHEMA)
+def full_node_schema() -> list[str]:
+    return list(NODE_FEATURE_SCHEMA)
 
 
 def plain_dict(value: Any) -> dict[str, Any]:
@@ -156,10 +125,10 @@ class FeatureSelection:
             groups.append("edge")
         return groups
 
-    def summary(self, enrich: bool) -> str:
+    def summary(self) -> str:
         if self.explicit_features is not None:
             return f"explicit ({len(self.explicit_features)}): {self.explicit_features}"
-        active = resolve_active_node_features(self, enrich=enrich)
+        active = resolve_active_node_features(self)
         if active is None:
             return "all node features"
         return f"{len(active)} node features: {active}"
@@ -239,15 +208,13 @@ def merge_feature_selection(
 
 def resolve_active_node_features(
     selection: FeatureSelection,
-    *,
-    enrich: bool,
 ) -> list[str] | None:
     """
     Return active node-feature names in schema order.
 
     ``None`` means all native node features (no slicing).
     """
-    schema = full_node_schema(enrich)
+    schema = full_node_schema()
 
     if selection.explicit_features is not None:
         if not selection.explicit_features:
@@ -259,8 +226,7 @@ def resolve_active_node_features(
         ]
         if missing:
             raise ValueError(
-                f"Unknown active feature(s) {missing} for enrich={enrich}; "
-                f"available: {schema}"
+                f"Unknown active feature(s) {missing}; available: {schema}"
             )
         if selection.explicit_features == schema:
             return None
@@ -268,9 +234,9 @@ def resolve_active_node_features(
 
     enabled: list[str] = []
     if selection.node:
-        enabled.extend(node_features_for_enrich(enrich))
+        enabled.extend(NODE_FEATURES)
     if selection.topology:
-        enabled.extend(topology_features_for_enrich(enrich))
+        enabled.extend(TOPOLOGY_FEATURES)
     if selection.positional_enabled:
         for encoding in selection.positional_encodings:
             enabled.extend(POSITIONAL_ENCODING_FEATURES[encoding])
@@ -293,17 +259,17 @@ def active_features_to_csv(active_features: list[str] | None) -> str:
     return ",".join(active_features)
 
 
-def feature_catalog_markdown(enrich: bool = True) -> str:
+def feature_catalog_markdown() -> str:
     """Human-readable overview of feature classes and members."""
     lines = [
         "Feature classes:",
-        f"  node:       {list(node_features_for_enrich(enrich))}",
-        f"  topology:   {list(topology_features_for_enrich(enrich))}",
+        f"  node:       {list(NODE_FEATURES)}",
+        f"  topology:   {list(TOPOLOGY_FEATURES)}",
         "  positional:",
     ]
     for name, members in POSITIONAL_ENCODING_FEATURES.items():
         lines.append(f"    {name}: {list(members)}")
-    lines.append(f"  edge:       {list(edge_features_for_enrich(enrich))}")
+    lines.append(f"  edge:       {list(EDGE_FEATURES)}")
     return "\n".join(lines)
 
 

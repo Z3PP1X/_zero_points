@@ -32,7 +32,8 @@ def test_virtual_nodes_excluded_from_message_passing():
     num_layers = 2
 
     x = torch.randn(4, layout.padded_node_feature_count)
-    x[:, NODE_TYPE_COL] = torch.tensor([1.0, 2.0, 5.0, 8.0])
+    # Node types 6/9 are the structural aggregator (virtual) roots f_root/d1_root.
+    x[:, NODE_TYPE_COL] = torch.tensor([1.0, 2.0, 6.0, 9.0])
     edge_index = torch.tensor([[0, 1, 2, 3, 0], [1, 2, 0, 0, 3]], dtype=torch.long)
     edge_attr = torch.randn(edge_index.size(1), layout.padded_edge_feature_count)
     batch_index = torch.zeros(4, dtype=torch.long)

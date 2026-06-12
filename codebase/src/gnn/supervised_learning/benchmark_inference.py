@@ -51,11 +51,6 @@ def parse_args():
         help="GNN mode for representation",
     )
     parser.add_argument(
-        "--enrich",
-        action="store_true",
-        help="Use enriched (19) node features instead of basic (8) features",
-    )
-    parser.add_argument(
         "--device",
         type=str,
         default="auto",
@@ -193,20 +188,17 @@ def plot_sweep(results, plot_path):
         import matplotlib.pyplot as plt
         modes = ["graph", "tree", "tree_derivatives"]
         
-        # Extract latency values for basic and enriched settings
-        latencies_basic = []
-        latencies_enriched = []
+        # Extract latency values per mode (single feature schema)
+        latencies = []
         for m in modes:
-            latencies_basic.append(next((r["mean"] for r in results if r["mode"] == m and not r["enrich"]), 0.0))
-            latencies_enriched.append(next((r["mean"] for r in results if r["mode"] == m and r["enrich"]), 0.0))
-            
+            latencies.append(next((r["mean"] for r in results if r["mode"] == m), 0.0))
+
         x = np.arange(len(modes))
-        width = 0.35
-        
+        width = 0.5
+
         fig, ax = plt.subplots(figsize=(10, 6))
-        rects1 = ax.bar(x - width/2, latencies_basic, width, label="Basis-Features (8)", color="#4f81bd", edgecolor="gray")
-        rects2 = ax.bar(x + width/2, latencies_enriched, width, label="Angereicherte Features (19)", color="#c0504d", edgecolor="gray")
-        
+        rects1 = ax.bar(x, latencies, width, label="Node-Features", color="#4f81bd", edgecolor="gray")
+
         ax.set_ylabel("Inferenzzeit (ms)", fontsize=12)
         ax.set_title("Vergleich der GNN-Inferenzzeiten nach Modus und Features", fontsize=14, fontweight="bold", pad=15)
         ax.set_xticks(x)
@@ -224,10 +216,9 @@ def plot_sweep(results, plot_path):
                                 xytext=(0, 3),  # 3 points vertical offset
                                 textcoords="offset points",
                                 ha="center", va="bottom", fontsize=9, fontweight="semibold")
-                                
+
         autolabel(rects1)
-        autolabel(rects2)
-        
+
         fig.tight_layout()
         plt.savefig(plot_path, dpi=150)
         plt.close()
@@ -236,11 +227,11 @@ def plot_sweep(results, plot_path):
         print(f"Error generating sweep plot: {e}")
 
 
-def run_single_config(dataset_name, mode, enrich, device, warmup, runs, csv_path=None, plot_path=None, use_mlflow=True):
+def run_single_config(dataset_name, mode, device, warmup, runs, csv_path=None, plot_path=None, use_mlflow=True):
     """Loads dataset and runs inference benchmarks on all graphs."""
-    print(f"\n=== Configuration: dataset={dataset_name}, mode={mode}, enrich={enrich} ===")
-    
-    loader = GraphDataLoader(name=dataset_name, mode=mode, enrich=enrich, heterogeneous=False)
+    print(f"\n=== Configuration: dataset={dataset_name}, mode={mode} ===")
+
+    loader = GraphDataLoader(name=dataset_name, mode=mode, heterogeneous=False)
     graphs = loader.load_all()
     
     if not graphs:
@@ -306,7 +297,7 @@ def run_single_config(dataset_name, mode, enrich, device, warmup, runs, csv_path
     
     # Save CSV
     if csv_path is None:
-        csv_path = Path(__file__).resolve().parent / f"benchmark_graphs_{mode}_enrich{enrich}.csv"
+        csv_path = Path(__file__).resolve().parent / f"benchmark_graphs_{mode}.csv"
     df = pd.DataFrame({
         "graph_id": graph_ids,
         "nodes": nodes,
@@ -320,7 +311,7 @@ def run_single_config(dataset_name, mode, enrich, device, warmup, runs, csv_path
 
     # Generate Plot
     if plot_path is None:
-        plot_path = Path(__file__).resolve().parent / f"benchmark_graphs_{mode}_enrich{enrich}.png"
+        plot_path = Path(__file__).resolve().parent / f"benchmark_graphs_{mode}.png"
     plot_single_config(latencies, nodes, graph_ids, plot_path)
     
     # MLflow Tracking Integration
@@ -328,10 +319,9 @@ def run_single_config(dataset_name, mode, enrich, device, warmup, runs, csv_path
         try:
             mlflow.set_tracking_uri("http://localhost:5000")
             mlflow.set_experiment(f"GNN_Inference_Benchmark_{dataset_name}")
-            with mlflow.start_run(run_name=f"{mode}_enrich{enrich}_{device.type}"):
+            with mlflow.start_run(run_name=f"{mode}_{device.type}"):
                 mlflow.log_params({
                     "mode": mode,
-                    "enrich": str(enrich),
                     "device": device.type,
                     "warmup": warmup,
                     "runs": runs,
@@ -358,7 +348,6 @@ def run_single_config(dataset_name, mode, enrich, device, warmup, runs, csv_path
 
     return {
         "mode": mode,
-        "enrich": enrich,
         "mean": mean_lat,
         "median": median_lat,
         "std": std_lat,
@@ -368,54 +357,45 @@ def run_single_config(dataset_name, mode, enrich, device, warmup, runs, csv_path
 
 
 def run_sweep(dataset_name, device, warmup, runs, csv_path=None, plot_path=None, use_mlflow=True):
-    """Runs a sweep over all combinations of modes and enrichment settings."""
+    """Runs a sweep over all GNN modes (single feature schema)."""
     print(f"\n================ Running Configuration Sweep (Device: {device.type.upper()}) ================")
-    
-    configs = [
-        ("graph", False),
-        ("graph", True),
-        ("tree", False),
-        ("tree", True),
-        ("tree_derivatives", False),
-        ("tree_derivatives", True),
-    ]
-    
+
+    configs = ["graph", "tree", "tree_derivatives"]
+
     results = []
-    for mode, enrich in configs:
+    for mode in configs:
         try:
             # We don't save single CSV/plot files inside sweep mode to avoid clutter
-            res_loader = GraphDataLoader(name=dataset_name, mode=mode, enrich=enrich, heterogeneous=False)
+            res_loader = GraphDataLoader(name=dataset_name, mode=mode, heterogeneous=False)
             graphs = res_loader.load_all()
             if not graphs:
                 continue
             sample_g = next(iter(graphs.values()))
             input_dim = sample_g.x.shape[1]
             model = TestGraphNetwork(input_dim=input_dim, global_dim=2).to(device)
-            
+
             latencies = []
             for gid, graph in graphs.items():
                 mean_t, _, _ = benchmark_single_graph(model, graph, device, warmup, runs)
                 latencies.append(mean_t)
-                
+
             mean_lat = np.mean(latencies)
             results.append({
                 "mode": mode,
-                "enrich": enrich,
+                "input_dim": input_dim,
                 "mean": mean_lat,
                 "throughput": 1000.0 / mean_lat,
                 "params": sum(p.numel() for p in model.parameters())
             })
-            print(f"Finished Mode={mode:<16} | Enrich={str(enrich):<5} | Mean Latency={mean_lat:.4f} ms")
+            print(f"Finished Mode={mode:<16} | Mean Latency={mean_lat:.4f} ms")
         except Exception as e:
-            print(f"Failed to benchmark configuration Mode={mode}, Enrich={enrich}: {e}")
-            
+            print(f"Failed to benchmark configuration Mode={mode}: {e}")
+
     print("\n\n======================= COMPARATIVE SWEEP RESULTS =======================")
-    print("| GNN Mode | Enriched | Input Dim | Parameters | Mean Latency (ms) | Throughput (g/s) |")
-    print("| --- | --- | --- | --- | --- | --- |")
+    print("| GNN Mode | Input Dim | Parameters | Mean Latency (ms) | Throughput (g/s) |")
+    print("| --- | --- | --- | --- | --- |")
     for r in results:
-        enrich_str = "Yes (19)" if r["enrich"] else "No (8)"
-        input_dim = 19 if r["enrich"] else 8
-        print(f"| {r['mode']:<16} | {enrich_str:<8} | {input_dim:<9} | {r['params']:<10} | {r['mean']:<17.4f} | {r['throughput']:<16.2f} |")
+        print(f"| {r['mode']:<16} | {r['input_dim']:<9} | {r['params']:<10} | {r['mean']:<17.4f} | {r['throughput']:<16.2f} |")
     print("=========================================================================\n")
 
     # Save CSV
@@ -445,7 +425,7 @@ def run_sweep(dataset_name, device, warmup, runs, csv_path=None, plot_path=None,
                 })
                 # Log comparative metrics for quick comparison
                 for r in results:
-                    cfg_label = f"{r['mode']}_enrich{r['enrich']}"
+                    cfg_label = f"{r['mode']}"
                     mlflow.log_metric(f"{cfg_label}_latency_mean_ms", r["mean"])
                     mlflow.log_metric(f"{cfg_label}_throughput_gps", r["throughput"])
                     
@@ -471,7 +451,7 @@ def main():
     if args.sweep:
         run_sweep(args.dataset, device, args.warmup, args.runs, args.csv_path, args.plot_path, use_mlflow)
     else:
-        run_single_config(args.dataset, args.mode, args.enrich, device, args.warmup, args.runs, args.csv_path, args.plot_path, use_mlflow)
+        run_single_config(args.dataset, args.mode, device, args.warmup, args.runs, args.csv_path, args.plot_path, use_mlflow)
 
 
 if __name__ == "__main__":

@@ -114,7 +114,6 @@ def main() -> None:
 
     feature_selection, active_features = resolve_rl_features(
         load_yaml_config(config_path).get("experiment") or {},
-        enrich=True,
         feature_groups=args.feature_groups,
         positional_encoding=args.positional_encoding,
         active_features=args.active_features,
@@ -143,14 +142,13 @@ def main() -> None:
     )
     print(f"Feature groups: {feature_selection.enabled_groups()}")
     print(f"Positional encodings: {list(feature_selection.positional_encodings)}")
-    print(f"Active node features: {feature_selection.summary(enrich=True)}")
+    print(f"Active node features: {feature_selection.summary()}")
 
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=experiment,
         mode=mode,
-        enrich=True,
         edge_direction=edge_direction,
     )
     loader = unified_loader.graph_loader

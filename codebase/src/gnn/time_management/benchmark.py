@@ -77,7 +77,6 @@ def main():
     loader = GraphDataLoader(
         name="run_20260603_123013/parallel_benchmark_results",
         mode=cfg.expression_graph.mode,
-        enrich=cfg.expression_graph.enrich,
         heterogeneous=False,
         edge_direction=edge_direction,
     )
@@ -85,7 +84,6 @@ def main():
         dataset_name="run_20260603_123013/parallel_benchmark_results",
         seed=cfg.seed,
         mode=cfg.expression_graph.mode,
-        enrich=cfg.expression_graph.enrich,
         graph_loader=loader,
         synthetic=False,
     )
@@ -99,7 +97,6 @@ def main():
         df_unique,
         graphs,
         mode=cfg.expression_graph.mode,
-        enrich=cfg.expression_graph.enrich,
         active_features=None
     )
     
