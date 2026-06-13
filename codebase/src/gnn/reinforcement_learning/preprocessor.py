@@ -34,7 +34,8 @@ class Preprocessor:
         graphs_dir: str | None = None,
         graph_cache_max: int = 128,
         mode: str = "graph",
-        active_features: list[str] | None = None
+        active_features: list[str] | None = None,
+        add_kappa: bool = False,
     ):
         """
         Initialisiert den Preprocessor.
@@ -59,7 +60,8 @@ class Preprocessor:
                 name=Path(graphs_dir).name,
                 mode=mode,
                 heterogeneous=False,
-                base_dir=graphs_dir
+                base_dir=graphs_dir,
+                add_kappa=add_kappa,
             )
             self.graphs_dir = Path(graphs_dir)
             self.converter = self.loader.converter

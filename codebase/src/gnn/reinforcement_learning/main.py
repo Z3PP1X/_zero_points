@@ -93,6 +93,9 @@ def main() -> None:
     experiment = resolve_rl_setting(args.experiment, settings["experiment"])
     mode = resolve_rl_setting(args.mode, settings["mode"])
     edge_direction = resolve_rl_setting(args.edge_direction, settings["edge_direction"])
+    add_kappa = resolve_rl_setting(
+        None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
+    )
     timesteps = int(resolve_rl_setting(args.timesteps, settings["timesteps"]))
     n_trials = int(resolve_rl_setting(args.n_trials, settings["n_trials"]))
     n_envs = int(resolve_rl_setting(args.n_envs, settings["n_envs"]))
@@ -141,6 +144,7 @@ def main() -> None:
     print(
         f"Optuna: {n_trials} Trials × {timesteps} Schritte | "
         f"Experiment: {experiment} | Mode: {mode} | Edge direction: {edge_direction} | "
+        f"Add kappa: {add_kappa} | "
         f"Parallel-Envs: {n_envs} | Continue Study: {continue_study} | Config: {config_path.name}"
     )
     print(f"Feature groups: {feature_selection.enabled_groups()}")
@@ -153,6 +157,7 @@ def main() -> None:
         dataset_name=experiment,
         mode=mode,
         edge_direction=edge_direction,
+        add_kappa=add_kappa,
     )
     loader = unified_loader.graph_loader
 

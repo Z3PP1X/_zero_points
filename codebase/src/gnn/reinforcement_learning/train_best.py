@@ -345,6 +345,9 @@ def main() -> None:
     experiment = resolve_rl_setting(args.experiment, settings["experiment"])
     mode = resolve_rl_setting(args.mode, settings["mode"])
     edge_direction = resolve_rl_setting(args.edge_direction, settings["edge_direction"])
+    add_kappa = resolve_rl_setting(
+        None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
+    )
     timesteps = int(
         resolve_rl_setting(args.timesteps, settings["train_best_timesteps"])
     )
@@ -400,6 +403,7 @@ def main() -> None:
     print(f"  Experiment:       {experiment}")
     print(f"  Mode:             {mode}")
     print(f"  Edge direction:   {edge_direction}")
+    print(f"  Add kappa:        {add_kappa}")
     print(f"  GNN Architecture: {trial_config.policy.architecture}")
     print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
@@ -440,6 +444,7 @@ def main() -> None:
         dataset_name=experiment,
         mode=mode,
         edge_direction=edge_direction,
+        add_kappa=add_kappa,
     )
     loader = unified_loader.graph_loader
     preprocessor = Preprocessor(loader=loader, mode=mode, active_features=active_features)
@@ -542,6 +547,7 @@ def main() -> None:
             mlflow.log_param("timesteps", timesteps)
             mlflow.log_param("mode", mode)
             mlflow.log_param("edge_direction", edge_direction)
+            mlflow.log_param("add_kappa", add_kappa)
 
             # Log reward parameters
             mlflow.log_param("reward_version", "v2_tolerance")
