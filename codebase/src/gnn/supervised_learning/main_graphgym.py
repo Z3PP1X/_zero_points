@@ -39,6 +39,53 @@ from gnn.supervised_learning.supervised_config import (
 set_cfg(cfg)
 
 
+def dump_summary_cfg(cfg, out_dir: Path) -> None:
+    """Write a human-readable summary of the key hyperparameters to summary_config.yaml."""
+    import yaml
+
+    eg = cfg.expression_graph
+    active = eg.get("active_feature_names", []) or []
+    if not active:
+        # Fall back to the old boolean flags
+        feat = eg.get("features", {})
+        active = [k for k, v in (feat.items() if hasattr(feat, "items") else []) if v]
+
+    summary = {
+        "model": {
+            "layer_type": cfg.gnn.layer_type,
+            "dim_inner": cfg.gnn.dim_inner,
+            "layers_mp": cfg.gnn.layers_mp,
+            "layers_pre_mp": cfg.gnn.layers_pre_mp,
+            "layers_post_mp": cfg.gnn.layers_post_mp,
+            "dropout": cfg.gnn.dropout,
+            "pool_type": cfg.gnn.pool_type,
+        },
+        "graph": {
+            "heterogeneous": eg.heterogeneous,
+            "mode": eg.mode,
+            "edge_direction": eg.edge_direction,
+            "add_kappa": eg.add_kappa,
+            "add_virtual_supernode": eg.add_virtual_supernode,
+        },
+        "features": {
+            "active_feature_names": active,
+            "edge_dim": cfg.dataset.edge_dim,
+        },
+        "training": {
+            "base_lr": cfg.optim.base_lr,
+            "optimizer": cfg.optim.optimizer,
+            "scheduler": cfg.optim.scheduler,
+            "max_epoch": cfg.optim.max_epoch,
+            "batch_size": cfg.train.batch_size,
+            "weight_decay": cfg.optim.weight_decay,
+        },
+    }
+
+    path = out_dir / "summary_config.yaml"
+    with open(path, "w") as f:
+        yaml.dump(summary, f, default_flow_style=False, sort_keys=False)
+
+
 def _register_mp_hook(pl_module, hook_fn):
     """Register a forward hook on the message-passing stage, if the model has one.
 
@@ -544,6 +591,7 @@ def main():
     # recoverable from its own folder, independent of the transient shared configs/ dir
     # (which configs_gen.py overwrites on the next run). Writes <out_dir>/config.yaml.
     dump_cfg(cfg)
+    dump_summary_cfg(cfg, Path(cfg.out_dir))
 
     print("\n[GraphGym Command Center] Launching training run...")
     print(f"[GraphGym] Architecture layer_type={layer_type} (from config YAML)")
