@@ -253,6 +253,38 @@ class DiffPoolBlock(nn.Module):
         return x_new, adj_new, link_loss + ent_loss
 
 
+class _MPCapture:
+    """Lightweight Batch-like carrier exposing what the Dirichlet hooks read.
+
+    The forward hooks in ``main_graphgym`` access ``.x`` / ``.edge_index`` /
+    ``.edge_attr`` on the hooked module's output (the convention of PyG's stock
+    ``GNN.mp`` stage). This wraps the captured tensors in that shape without the cost
+    of a full PyG ``Data`` object.
+    """
+
+    __slots__ = ("x", "edge_index", "edge_attr")
+
+    def __init__(self, x, edge_index, edge_attr=None):
+        self.x = x
+        self.edge_index = edge_index
+        self.edge_attr = edge_attr
+
+
+class DirichletProbe(nn.Module):
+    """Identity probe marking the message-passing output for over-smoothing diagnostics.
+
+    The custom ``expression_classifier`` backbone has no PyG ``GNN.mp`` stage to hook, so
+    Dirichlet energy could not be measured (it was reported NaN). Calling this no-op module
+    on the post-message-passing node embeddings — before any pooling collapses the node set
+    — gives the energy callbacks a stable forward-hook target on the model actually trained.
+    It adds no parameters and does not alter the numerics (its return value is discarded by
+    callers; only the forward hook consumes it).
+    """
+
+    def forward(self, x, edge_index, edge_attr=None):
+        return _MPCapture(x, edge_index, edge_attr)
+
+
 class UniformPoolMixin:
     """Forward logic for the ``pooling`` / ``pooling_skip`` variants.
 
@@ -312,6 +344,16 @@ class UniformPoolMixin:
         else:
             raise ValueError(f"Unknown pool_type {pool_type!r}; expected one of {POOL_TYPE_NAMES}")
 
+    def _dirichlet_capture(self, x, edge_index, edge_attr=None):
+        """Feed the message-passing node embeddings through the probe, if the host has one.
+
+        No-op for stacks that do not attach a ``dirichlet_probe`` (e.g. the standalone
+        backbones), so the energy hook only fires where a probe is present.
+        """
+        probe = getattr(self, "dirichlet_probe", None)
+        if probe is not None:
+            probe(x, edge_index, edge_attr)
+
     def _uniform_pool_forward(
         self,
         x: torch.Tensor,
@@ -331,6 +373,10 @@ class UniformPoolMixin:
         for layer_idx in range(len(self.uniform_convs)):
             x = apply_edge_conv(self.uniform_convs[layer_idx], x, edge_index, edge_attr)
             x = self.uniform_acts[layer_idx](x)
+            # Probe the first message-passing block on the original graph, before TopK
+            # drops nodes — the over-smoothing signal lives in these node embeddings.
+            if layer_idx == 0:
+                self._dirichlet_capture(x, edge_index, edge_attr)
             x, edge_index, edge_attr, batch, _, _ = self.topk_pools[layer_idx](
                 x, edge_index, edge_attr=edge_attr, batch=batch
             )
@@ -348,6 +394,10 @@ class UniformPoolMixin:
         return readouts[-1]
 
     def _diffpool_forward(self, x, edge_index, batch, num_graphs):
+        # DiffPool does its message passing on a dense adjacency; the sparse graph here
+        # still carries the post-encoder node embeddings, so probe them for energy before
+        # densifying. (Shallower than the TopK/legacy probes — no sparse conv precedes it.)
+        self._dirichlet_capture(x, edge_index, None)
         max_nodes = int(batch.bincount().max().item()) if batch.numel() > 0 else 1
         x_dense, mask = to_dense_batch(x, batch, max_num_nodes=max_nodes)
         adj = to_dense_adj(edge_index, batch, max_num_nodes=max_nodes)
