@@ -234,6 +234,8 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
         hidden_dim=int(params["hidden_dim"]),
         num_layers=int(params["num_gnn_layers"]),
         heads=int(params["heads"]),
+        variant=params.get("gnn_variant", "legacy"),
+        pool_type=params.get("gnn_pool_type", "topk"),
         layout=layout,
     )
     
@@ -481,6 +483,8 @@ def main() -> None:
         hidden_dim=trial_config.policy.hidden_dim,
         num_layers=trial_config.policy.num_layers,
         heads=trial_config.policy.heads,
+        variant=trial_config.policy.variant,
+        pool_type=trial_config.policy.pool_type,
     )
 
     # Attempt torch compile if requested

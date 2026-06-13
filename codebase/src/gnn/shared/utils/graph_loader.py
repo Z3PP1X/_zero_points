@@ -30,12 +30,14 @@ class GraphDataLoader:
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
         kappas_dir: Union[Path, str, None] = None,
+        add_kappa: bool = False,
     ):
         self.name = name
         self.mode = mode
         self.heterogeneous = heterogeneous
         self.is_synthetic = is_synthetic
         self.edge_direction = validate_edge_direction(edge_direction)
+        self.add_kappa = add_kappa
         self.converter = ExpressionGraphConverter()
 
         # Resolve the source path (root graphs vs legacy fallbacks)
@@ -204,9 +206,10 @@ class GraphDataLoader:
         if gid_str in self._converted_cache:
             return self._converted_cache[gid_str].clone()
 
-        # Check if the kappa folder exists and contains json files
+        # Kappa augmentation is opt-in (add_kappa); on top of that the kappa folder
+        # must exist and contain json files.
         use_augmented = False
-        if self.kappas_dir.exists() and any(self.kappas_dir.glob("**/*.json")):
+        if self.add_kappa and self.kappas_dir.exists() and any(self.kappas_dir.glob("**/*.json")):
             source_str = str(self.source_path)
             is_temp = (
                 "/tmp" in source_str

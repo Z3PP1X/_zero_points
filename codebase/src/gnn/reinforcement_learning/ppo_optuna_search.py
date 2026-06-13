@@ -9,8 +9,10 @@ from gnn.reinforcement_learning.feature_layout import (
     GNN_ACTIVATION_CHOICES,
     GNN_ARCHITECTURE_CHOICES,
     GNN_LAYER_COUNT_CHOICES,
+    GNN_VARIANT_CHOICES,
     HIDDEN_DIM_CHOICES,
     NODE_INPUT_DIM_CHOICES,
+    POOL_TYPE_CHOICES,
     FeatureLayout,
 )
 from gnn.reinforcement_learning.ppo_trial_config import (
@@ -48,6 +50,15 @@ def sample_trial_configuration(
         time_tolerance=trial.suggest_float("time_tolerance", 0.0, 0.1),
     )
 
+    gnn_variant = trial.suggest_categorical("gnn_variant", GNN_VARIANT_CHOICES)
+    # pool_type only matters for the non-legacy variants; sampling it for legacy
+    # would create a dead search dimension.
+    gnn_pool_type = (
+        trial.suggest_categorical("gnn_pool_type", POOL_TYPE_CHOICES)
+        if gnn_variant != "legacy"
+        else "topk"
+    )
+
     policy = GnnPolicySpec(
         architecture=trial.suggest_categorical(
             "gnn_architecture", GNN_ARCHITECTURE_CHOICES
@@ -56,6 +67,8 @@ def sample_trial_configuration(
         hidden_dim=trial.suggest_categorical("hidden_dim", HIDDEN_DIM_CHOICES),
         num_layers=trial.suggest_categorical("num_gnn_layers", GNN_LAYER_COUNT_CHOICES),
         heads=trial.suggest_categorical("heads", GAT_HEAD_COUNT_CHOICES),
+        variant=gnn_variant,
+        pool_type=gnn_pool_type,
         layout=FeatureLayout(
             node_input_dim=trial.suggest_categorical(
                 "node_input_dim", NODE_INPUT_DIM_CHOICES

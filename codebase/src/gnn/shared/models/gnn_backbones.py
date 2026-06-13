@@ -3,8 +3,19 @@ import warnings
 from typing import Any, List, Callable
 import torch
 import torch.nn as nn
-from torch.nn import LeakyReLU
-from torch_geometric.nn import GATv2Conv, GCNConv, GINConv, GINEConv, SAGEConv, global_mean_pool
+from torch_geometric.nn import (
+    GATv2Conv,
+    GCNConv,
+    GINConv,
+    GINEConv,
+    SAGEConv,
+    TopKPooling,
+    DenseSAGEConv,
+    dense_diff_pool,
+    global_mean_pool,
+    global_max_pool,
+)
+from torch_geometric.utils import to_dense_batch, to_dense_adj
 
 from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
@@ -97,6 +108,10 @@ def apply_edge_conv(
 ) -> torch.Tensor:
     if isinstance(conv, GINEConv):
         return conv(x, edge_index, edge_attr)
+    # Edge-blind convolutions ignore edge attributes entirely; calling them with an
+    # ``edge_attr`` kwarg would raise (GCNConv expects ``edge_weight``, etc.).
+    if isinstance(conv, (GCNConv, SAGEConv, GINConv)):
+        return conv(x, edge_index)
     return conv(x, edge_index, edge_attr=edge_attr)
 
 
@@ -131,11 +146,25 @@ LEGACY_ARCHITECTURE_NAMES: List[str] = [
 
 ARCHITECTURE_NAMES: List[str] = EDGE_AWARE_ARCHITECTURE_NAMES + LEGACY_ARCHITECTURE_NAMES
 
+# Structural variants, orthogonal to the layer-type ``architecture`` string above.
+#   legacy / standard -> the original conv stack + real/virtual split pooling.
+#   pooling           -> conv stack with hierarchical pooling between blocks.
+#   pooling_skip      -> pooling + JK-style skip aggregation of per-block readouts.
+VARIANT_NAMES: List[str] = ["legacy", "standard", "pooling", "pooling_skip"]
+LEGACY_VARIANTS = frozenset({"legacy", "standard"})
+POOL_TYPE_NAMES: List[str] = ["topk", "diffpool"]
+
+# Fixed cluster sizes for the DiffPool path (size-robust, memory-bounded). DiffPool
+# requires a fixed assignment width independent of the input node count.
+DIFFPOOL_CLUSTERS: tuple[int, ...] = (16, 4)
+
 
 def get_activation_module(activation_name: str) -> nn.Module:
     name_lower = activation_name.lower().replace("_", "")
     if name_lower == "leakyrelu":
         return nn.LeakyReLU()
+    elif name_lower == "prelu":
+        return nn.PReLU()
     elif name_lower == "relu":
         return nn.ReLU()
     elif name_lower == "elu":
@@ -148,34 +177,207 @@ def get_activation_module(activation_name: str) -> nn.Module:
         raise ValueError(f"Unknown activation function: {activation_name}")
 
 
+def make_activation(activation_name: str = "prelu") -> nn.Module:
+    """Return a FRESH activation module.
+
+    PReLU carries a learnable slope, so every usage site must own its own instance
+    -- never share a single module across layers/encoders.
+    """
+    return get_activation_module(activation_name)
+
+
 def _graph_mlp_tail(
     hidden_dim: int,
     global_dim: int,
-    activation: nn.Module = LeakyReLU(),
+    activation_name: str = "prelu",
     dropout: float = 0.2,
 ) -> nn.Sequential:
     return nn.Sequential(
         nn.Linear(hidden_dim + global_dim, hidden_dim),
-        nn.LayerNorm(hidden_dim) if isinstance(activation, LeakyReLU) else nn.Identity(),
-        activation,
+        nn.LayerNorm(hidden_dim),
+        make_activation(activation_name),
         nn.Dropout(dropout),
     )
 
 
-def _gin_mlp(in_dim: int, out_dim: int, activation: nn.Module = LeakyReLU()) -> nn.Sequential:
+def _gin_mlp(in_dim: int, out_dim: int, activation_name: str = "prelu") -> nn.Sequential:
     return nn.Sequential(
         nn.Linear(in_dim, out_dim),
-        activation,
+        make_activation(activation_name),
         nn.Linear(out_dim, out_dim),
     )
+
+
+def build_uniform_conv(
+    architecture: str,
+    in_dim: int,
+    hidden_dim: int,
+    heads: int,
+    edge_dim: int,
+    activation_name: str,
+) -> nn.Module:
+    """One message-passing layer that always outputs ``hidden_dim``.
+
+    Used by the uniform-pool variants. GATv2 is forced to ``concat=False`` so the
+    width stays ``hidden_dim`` across pooling boundaries (multi-head attention is
+    kept, head-concat width is not).
+    """
+    if architecture == "gine_stack":
+        return GINEConv(_gin_mlp(in_dim, hidden_dim, activation_name), edge_dim=edge_dim)
+    if architecture == "gcn_stack":
+        return GCNConv(in_dim, hidden_dim)
+    if architecture == "sage_stack":
+        return SAGEConv(in_dim, hidden_dim, aggr="mean")
+    if architecture == "gin_stack":
+        return GINConv(_gin_mlp(in_dim, hidden_dim, activation_name))
+    # default / gatv2_stack
+    return GATv2Conv(in_dim, hidden_dim, heads=heads, concat=False, edge_dim=edge_dim)
+
+
+# ------------------------------------------------------------------ #
+# Hierarchical-pooling building blocks
+# ------------------------------------------------------------------ #
+
+class DiffPoolBlock(nn.Module):
+    """One DiffPool step: dense embed-GNN + assign-GNN + ``dense_diff_pool``.
+
+    Always uses ``DenseSAGEConv`` (the canonical PyG DiffPool reference); it does
+    not consume edge features and is independent of the selected layer type.
+    """
+
+    def __init__(self, in_dim: int, hidden_dim: int, num_clusters: int, activation_name: str = "prelu"):
+        super().__init__()
+        self.embed = DenseSAGEConv(in_dim, hidden_dim)
+        self.assign = DenseSAGEConv(in_dim, num_clusters)
+        self.act = make_activation(activation_name)
+        self.out_dim = hidden_dim
+
+    def forward(self, x, adj, mask=None):
+        s = self.assign(x, adj, mask)
+        z = self.act(self.embed(x, adj, mask))
+        x_new, adj_new, link_loss, ent_loss = dense_diff_pool(z, adj, s, mask)
+        return x_new, adj_new, link_loss + ent_loss
+
+
+class UniformPoolMixin:
+    """Forward logic for the ``pooling`` / ``pooling_skip`` variants.
+
+    The variants pool the WHOLE graph uniformly -- no real/virtual node split. The
+    host class calls :meth:`_init_uniform_pool` in ``__init__`` (after the legacy
+    modules are built) and routes its ``forward`` to :meth:`_uniform_pool_forward`
+    when ``self.variant`` is not legacy. The pooled readout is projected to
+    ``tail_in_dim`` so the host's existing MLP tail is reused unchanged.
+    """
+
+    def _init_uniform_pool(
+        self,
+        *,
+        first_in_dim: int,
+        hidden_dim: int,
+        num_layers: int,
+        heads: int,
+        edge_dim: int,
+        architecture: str,
+        activation_name: str,
+        variant: str,
+        pool_type: str,
+        tail_in_dim: int,
+        pool_ratio: float = 0.5,
+        diffpool_clusters: tuple[int, ...] = DIFFPOOL_CLUSTERS,
+    ) -> None:
+        self.variant = variant
+        self.pool_type = pool_type
+        self._uniform_edge_dim = edge_dim
+        self._last_aux_loss = torch.zeros(())
+
+        if pool_type == "topk":
+            convs: List[nn.Module] = []
+            in_dim = first_in_dim
+            for _ in range(num_layers):
+                convs.append(
+                    build_uniform_conv(architecture, in_dim, hidden_dim, heads, edge_dim, activation_name)
+                )
+                in_dim = hidden_dim
+            self.uniform_convs = nn.ModuleList(convs)
+            self.uniform_acts = nn.ModuleList([make_activation(activation_name) for _ in range(num_layers)])
+            self.topk_pools = nn.ModuleList(
+                [TopKPooling(hidden_dim, ratio=pool_ratio) for _ in range(num_layers)]
+            )
+            block_readout = 2 * hidden_dim  # mean || max
+            jk_in = block_readout * num_layers if variant == "pooling_skip" else block_readout
+            self.jk_proj = nn.Linear(jk_in, tail_in_dim)
+        elif pool_type == "diffpool":
+            blocks: List[nn.Module] = []
+            in_dim = first_in_dim
+            for num_clusters in diffpool_clusters:
+                blocks.append(DiffPoolBlock(in_dim, hidden_dim, num_clusters, activation_name))
+                in_dim = hidden_dim
+            self.diffpool_blocks = nn.ModuleList(blocks)
+            jk_in = hidden_dim * len(diffpool_clusters) if variant == "pooling_skip" else hidden_dim
+            self.jk_proj = nn.Linear(jk_in, tail_in_dim)
+        else:
+            raise ValueError(f"Unknown pool_type {pool_type!r}; expected one of {POOL_TYPE_NAMES}")
+
+    def _uniform_pool_forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor | None,
+        batch_index: torch.Tensor,
+        num_graphs: int,
+    ) -> torch.Tensor:
+        if self.pool_type == "topk":
+            readout = self._topk_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
+        else:
+            readout = self._diffpool_forward(x, edge_index, batch_index, num_graphs)
+        return self.jk_proj(readout)
+
+    def _topk_pool_forward(self, x, edge_index, edge_attr, batch, num_graphs):
+        readouts: List[torch.Tensor] = []
+        for layer_idx in range(len(self.uniform_convs)):
+            x = apply_edge_conv(self.uniform_convs[layer_idx], x, edge_index, edge_attr)
+            x = self.uniform_acts[layer_idx](x)
+            x, edge_index, edge_attr, batch, _, _ = self.topk_pools[layer_idx](
+                x, edge_index, edge_attr=edge_attr, batch=batch
+            )
+            block_readout = torch.cat(
+                [
+                    global_mean_pool(x, batch, size=num_graphs),
+                    global_max_pool(x, batch, size=num_graphs),
+                ],
+                dim=-1,
+            )
+            readouts.append(block_readout)
+        self._last_aux_loss = x.new_zeros(())
+        if self.variant == "pooling_skip":
+            return torch.cat(readouts, dim=-1)
+        return readouts[-1]
+
+    def _diffpool_forward(self, x, edge_index, batch, num_graphs):
+        max_nodes = int(batch.bincount().max().item()) if batch.numel() > 0 else 1
+        x_dense, mask = to_dense_batch(x, batch, max_num_nodes=max_nodes)
+        adj = to_dense_adj(edge_index, batch, max_num_nodes=max_nodes)
+
+        aux = x.new_zeros(())
+        readouts: List[torch.Tensor] = []
+        cur_mask = mask
+        for block in self.diffpool_blocks:
+            x_dense, adj, loss = block(x_dense, adj, cur_mask)
+            aux = aux + loss
+            cur_mask = None  # after the first pool every cluster is populated
+            readouts.append(x_dense.mean(dim=1))
+        self._last_aux_loss = aux
+        if self.variant == "pooling_skip":
+            return torch.cat(readouts, dim=-1)
+        return readouts[-1]
 
 
 # ------------------------------------------------------------------ #
 # Edge-aware stacks
 # ------------------------------------------------------------------ #
 
-class GATv2StackNetwork(nn.Module):
-    """Three GATv2 layers with edge features + graph mean pool + MLP."""
+class GATv2StackNetwork(UniformPoolMixin, nn.Module):
+    """Three GATv2 layers with edge features + graph pooling + MLP."""
 
     def __init__(
         self,
@@ -184,30 +386,55 @@ class GATv2StackNetwork(nn.Module):
         global_dim: int = 8,
         heads: int = 4,
         edge_dim: int = 4,
+        activation: str = "prelu",
+        variant: str = "legacy",
+        pool_type: str = "topk",
     ):
         super().__init__()
         self.edge_dim = edge_dim
+        self.architecture = "gatv2_stack"
+        self.activation_name = activation
+        self.variant = variant
+        self.pool_type = pool_type
         self.conv1 = GATv2Conv(input_dim, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
         self.conv2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
         self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim)
-        self.shared = _graph_mlp_tail(hidden_dim, global_dim)
-        self.activation = LeakyReLU()
+        self.shared = _graph_mlp_tail(hidden_dim, global_dim, activation)
+        self.layer_activations = nn.ModuleList([make_activation(activation) for _ in range(3)])
         self.output_dim = hidden_dim
+        self._last_aux_loss = torch.zeros(())
+        if variant not in LEGACY_VARIANTS:
+            self._init_uniform_pool(
+                first_in_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_layers=3,
+                heads=heads,
+                edge_dim=edge_dim,
+                architecture=self.architecture,
+                activation_name=activation,
+                variant=variant,
+                pool_type=pool_type,
+                tail_in_dim=hidden_dim,
+            )
 
     def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
-        x = self.activation(apply_edge_conv(self.conv1, x, edge_index, edge_attr))
-        x = self.activation(apply_edge_conv(self.conv2, x, edge_index, edge_attr))
-        x = self.activation(apply_edge_conv(self.conv3, x, edge_index, edge_attr))
-        x = global_mean_pool(x, batch_index)
+        if self.variant in LEGACY_VARIANTS:
+            x = self.layer_activations[0](apply_edge_conv(self.conv1, x, edge_index, edge_attr))
+            x = self.layer_activations[1](apply_edge_conv(self.conv2, x, edge_index, edge_attr))
+            x = self.layer_activations[2](apply_edge_conv(self.conv3, x, edge_index, edge_attr))
+            x = global_mean_pool(x, batch_index)
+        else:
+            num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+            x = self._uniform_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
         if global_features is not None:
             global_features = global_features.view(x.size(0), -1)
             x = torch.cat([x, global_features], dim=-1)
         return self.shared(x)
 
 
-class GINEStackNetwork(nn.Module):
-    """Three GINE layers with edge features + graph mean pool + MLP."""
+class GINEStackNetwork(UniformPoolMixin, nn.Module):
+    """Three GINE layers with edge features + graph pooling + MLP."""
 
     def __init__(
         self,
@@ -216,24 +443,48 @@ class GINEStackNetwork(nn.Module):
         global_dim: int = 8,
         heads: int = 4,
         edge_dim: int = 4,
-        activation: nn.Module = LeakyReLU(),
+        activation: str = "prelu",
+        variant: str = "legacy",
+        pool_type: str = "topk",
     ):
         super().__init__()
         _ = heads
         self.edge_dim = edge_dim
+        self.architecture = "gine_stack"
+        self.activation_name = activation
+        self.variant = variant
+        self.pool_type = pool_type
         self.conv1 = GINEConv(_gin_mlp(input_dim, hidden_dim, activation), edge_dim=edge_dim)
         self.conv2 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
         self.conv3 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
         self.shared = _graph_mlp_tail(hidden_dim, global_dim, activation)
-        self.activation = activation
+        self.layer_activations = nn.ModuleList([make_activation(activation) for _ in range(3)])
         self.output_dim = hidden_dim
+        self._last_aux_loss = torch.zeros(())
+        if variant not in LEGACY_VARIANTS:
+            self._init_uniform_pool(
+                first_in_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_layers=3,
+                heads=heads,
+                edge_dim=edge_dim,
+                architecture=self.architecture,
+                activation_name=activation,
+                variant=variant,
+                pool_type=pool_type,
+                tail_in_dim=hidden_dim,
+            )
 
     def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
-        x = self.activation(apply_edge_conv(self.conv1, x, edge_index, edge_attr))
-        x = self.activation(apply_edge_conv(self.conv2, x, edge_index, edge_attr))
-        x = self.activation(apply_edge_conv(self.conv3, x, edge_index, edge_attr))
-        x = global_mean_pool(x, batch_index)
+        if self.variant in LEGACY_VARIANTS:
+            x = self.layer_activations[0](apply_edge_conv(self.conv1, x, edge_index, edge_attr))
+            x = self.layer_activations[1](apply_edge_conv(self.conv2, x, edge_index, edge_attr))
+            x = self.layer_activations[2](apply_edge_conv(self.conv3, x, edge_index, edge_attr))
+            x = global_mean_pool(x, batch_index)
+        else:
+            num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+            x = self._uniform_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
         if global_features is not None:
             global_features = global_features.view(x.size(0), -1)
             x = torch.cat([x, global_features], dim=-1)
@@ -244,79 +495,102 @@ class GINEStackNetwork(nn.Module):
 # Legacy stacks (edge-blind)
 # ------------------------------------------------------------------ #
 
-class GCNStackNetwork(nn.Module):
+class _EdgeBlindStack(UniformPoolMixin, nn.Module):
+    """Shared body for the three edge-blind simple stacks (GCN/SAGE/GIN)."""
+
+    architecture = "gcn_stack"
+
+    def _build_convs(self, input_dim: int, hidden_dim: int, activation: str) -> List[nn.Module]:
+        raise NotImplementedError
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 128,
+        global_dim: int = 8,
+        heads: int = 4,
+        edge_dim: int = 4,
+        activation: str = "prelu",
+        variant: str = "legacy",
+        pool_type: str = "topk",
+    ):
+        super().__init__()
+        _ = heads
+        self.edge_dim = edge_dim
+        self.activation_name = activation
+        self.variant = variant
+        self.pool_type = pool_type
+        convs = self._build_convs(input_dim, hidden_dim, activation)
+        self.conv1, self.conv2, self.conv3 = convs
+        self.shared = _graph_mlp_tail(hidden_dim, global_dim, activation)
+        self.layer_activations = nn.ModuleList([make_activation(activation) for _ in range(3)])
+        self.output_dim = hidden_dim
+        self._last_aux_loss = torch.zeros(())
+        if variant not in LEGACY_VARIANTS:
+            self._init_uniform_pool(
+                first_in_dim=input_dim,
+                hidden_dim=hidden_dim,
+                num_layers=3,
+                heads=heads,
+                edge_dim=edge_dim,
+                architecture=self.architecture,
+                activation_name=activation,
+                variant=variant,
+                pool_type=pool_type,
+                tail_in_dim=hidden_dim,
+            )
+
+    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
+        if self.variant in LEGACY_VARIANTS:
+            x = self.layer_activations[0](self.conv1(x, edge_index))
+            x = self.layer_activations[1](self.conv2(x, edge_index))
+            x = self.layer_activations[2](self.conv3(x, edge_index))
+            x = global_mean_pool(x, batch_index)
+        else:
+            num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+            # Edge-blind convs ignore edge_attr; the pooling layer still carries it
+            # harmlessly. Coalesce so TopKPooling has a real tensor to filter.
+            edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
+            x = self._uniform_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
+        if global_features is not None:
+            global_features = global_features.view(x.size(0), -1)
+            x = torch.cat([x, global_features], dim=-1)
+        return self.shared(x)
+
+
+class GCNStackNetwork(_EdgeBlindStack):
     """Three GCN layers + pool + MLP."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 8, heads: int = 4, edge_dim: int = 4):
-        super().__init__()
-        _ = heads, edge_dim
-        self.conv1 = GCNConv(input_dim, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        self.conv3 = GCNConv(hidden_dim, hidden_dim)
-        self.shared = _graph_mlp_tail(hidden_dim, global_dim)
-        self.activation = LeakyReLU()
-        self.output_dim = hidden_dim
+    architecture = "gcn_stack"
 
-    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        _ = edge_attr
-        x = self.activation(self.conv1(x, edge_index))
-        x = self.activation(self.conv2(x, edge_index))
-        x = self.activation(self.conv3(x, edge_index))
-        x = global_mean_pool(x, batch_index)
-        if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
-            x = torch.cat([x, global_features], dim=-1)
-        return self.shared(x)
+    def _build_convs(self, input_dim, hidden_dim, activation):
+        return [GCNConv(input_dim, hidden_dim), GCNConv(hidden_dim, hidden_dim), GCNConv(hidden_dim, hidden_dim)]
 
 
-class SAGEStackNetwork(nn.Module):
+class SAGEStackNetwork(_EdgeBlindStack):
     """Three GraphSAGE (mean) layers + pool + MLP."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 8, heads: int = 4, edge_dim: int = 4):
-        super().__init__()
-        _ = heads, edge_dim
-        self.conv1 = SAGEConv(input_dim, hidden_dim, aggr="mean")
-        self.conv2 = SAGEConv(hidden_dim, hidden_dim, aggr="mean")
-        self.conv3 = SAGEConv(hidden_dim, hidden_dim, aggr="mean")
-        self.shared = _graph_mlp_tail(hidden_dim, global_dim)
-        self.activation = LeakyReLU()
-        self.output_dim = hidden_dim
+    architecture = "sage_stack"
 
-    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        _ = edge_attr
-        x = self.activation(self.conv1(x, edge_index))
-        x = self.activation(self.conv2(x, edge_index))
-        x = self.activation(self.conv3(x, edge_index))
-        x = global_mean_pool(x, batch_index)
-        if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
-            x = torch.cat([x, global_features], dim=-1)
-        return self.shared(x)
+    def _build_convs(self, input_dim, hidden_dim, activation):
+        return [
+            SAGEConv(input_dim, hidden_dim, aggr="mean"),
+            SAGEConv(hidden_dim, hidden_dim, aggr="mean"),
+            SAGEConv(hidden_dim, hidden_dim, aggr="mean"),
+        ]
 
 
-class GINStackNetwork(nn.Module):
+class GINStackNetwork(_EdgeBlindStack):
     """Three GIN layers + pool + MLP."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 8, heads: int = 4, edge_dim: int = 4):
-        super().__init__()
-        _ = heads, edge_dim
-        self.conv1 = GINConv(_gin_mlp(input_dim, hidden_dim))
-        self.conv2 = GINConv(_gin_mlp(hidden_dim, hidden_dim))
-        self.conv3 = GINConv(_gin_mlp(hidden_dim, hidden_dim))
-        self.shared = _graph_mlp_tail(hidden_dim, global_dim)
-        self.activation = LeakyReLU()
-        self.output_dim = hidden_dim
+    architecture = "gin_stack"
 
-    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        _ = edge_attr
-        x = self.activation(self.conv1(x, edge_index))
-        x = self.activation(self.conv2(x, edge_index))
-        x = self.activation(self.conv3(x, edge_index))
-        x = global_mean_pool(x, batch_index)
-        if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
-            x = torch.cat([x, global_features], dim=-1)
-        return self.shared(x)
+    def _build_convs(self, input_dim, hidden_dim, activation):
+        return [
+            GINConv(_gin_mlp(input_dim, hidden_dim, activation)),
+            GINConv(_gin_mlp(hidden_dim, hidden_dim, activation)),
+            GINConv(_gin_mlp(hidden_dim, hidden_dim, activation)),
+        ]
 
 
 def build_gnn(
@@ -326,6 +600,9 @@ def build_gnn(
     global_dim: int = 8,
     heads: int = 4,
     edge_dim: int = 4,
+    activation: str = "prelu",
+    variant: str = "legacy",
+    pool_type: str = "topk",
 ) -> nn.Module:
     """Instantiate one of the registered GNN graph stacks."""
     builders = {
@@ -337,23 +614,34 @@ def build_gnn(
     }
     if architecture not in builders:
         raise ValueError(f"Unknown architecture {architecture!r}; expected one of {ARCHITECTURE_NAMES}")
-    return builders[architecture](input_dim, hidden_dim, global_dim, heads, edge_dim)
+    return builders[architecture](
+        input_dim,
+        hidden_dim,
+        global_dim,
+        heads,
+        edge_dim,
+        activation=activation,
+        variant=variant,
+        pool_type=pool_type,
+    )
 
 
 # ------------------------------------------------------------------ #
 # Flexible Backbone (PPO / Optuna Search Search space compatible)
 # ------------------------------------------------------------------ #
 
-class GraphPolicyBackbone(nn.Module):
+class GraphPolicyBackbone(UniformPoolMixin, nn.Module):
     def __init__(
         self,
         layout: Any,  # FeatureLayout
         architecture: str,
-        activation: str = "leaky_relu",
+        activation: str = "prelu",
         hidden_dim: int = 128,
         num_layers: int = 3,
         heads: int = 4,
         dropout: float = 0.2,
+        variant: str = "legacy",
+        pool_type: str = "topk",
     ):
         super().__init__()
 
@@ -364,7 +652,10 @@ class GraphPolicyBackbone(nn.Module):
         self.heads = heads
         self.output_dim = hidden_dim
         self.edge_dim = layout.edge_input_dim
-        self.activation = get_activation_module(activation)
+        self.activation_name = activation
+        self.variant = variant
+        self.pool_type = pool_type
+        self._last_aux_loss = torch.zeros(())
 
         self.node_feature_names = resolve_node_feature_names(
             getattr(layout, "active_feature_names", None)
@@ -375,13 +666,13 @@ class GraphPolicyBackbone(nn.Module):
             self.node_feature_names,
             layout.node_input_dim,
             NODE_CATEGORICAL_REGISTRY,
-            activation=self.activation,
+            activation=make_activation(activation),
         )
         self.edge_encoder = TwoWayFeatureEncoder(
             list(EDGE_FEATURE_SCHEMA),
             layout.edge_input_dim,
             EDGE_CATEGORICAL_REGISTRY,
-            activation=self.activation,
+            activation=make_activation(activation),
         )
         # Globals lost their hand-crafted sign-log; a learnable LayerNorm tames scale.
         self.global_norm = nn.LayerNorm(layout.padded_global_feature_count)
@@ -389,8 +680,13 @@ class GraphPolicyBackbone(nn.Module):
             layout.padded_global_feature_count,
             layout.global_input_dim,
         )
+        self.global_activation = make_activation(activation)
         self.convs = nn.ModuleList(
-            self._build_convs(architecture, layout, hidden_dim, heads, self.activation)
+            self._build_convs(architecture, layout, hidden_dim, heads, activation)
+        )
+        # One activation per conv layer so PReLU slopes are independent per layer.
+        self.layer_activations = nn.ModuleList(
+            [make_activation(activation) for _ in range(num_layers)]
         )
 
         self.current_x_proj = nn.Linear(1, layout.node_input_dim)
@@ -401,7 +697,7 @@ class GraphPolicyBackbone(nn.Module):
                 nn.Sequential(
                     nn.Linear(self._virtual_mlp_input_dim(layer_idx), self._layer_output_dim(layer_idx)),
                     nn.BatchNorm1d(self._layer_output_dim(layer_idx)),
-                    nn.ReLU(),
+                    make_activation(activation),
                 )
                 for layer_idx in range(num_layers)
             ]
@@ -410,9 +706,24 @@ class GraphPolicyBackbone(nn.Module):
         self.shared = nn.Sequential(
             nn.Linear(2 * hidden_dim + layout.global_input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            self.activation,
+            make_activation(activation),
             nn.Dropout(dropout),
         )
+
+        # Uniform-pool variants reuse the same self.shared tail (2*hidden_dim + global).
+        if variant not in LEGACY_VARIANTS:
+            self._init_uniform_pool(
+                first_in_dim=layout.node_input_dim,
+                hidden_dim=hidden_dim,
+                num_layers=num_layers,
+                heads=heads,
+                edge_dim=layout.edge_input_dim,
+                architecture=architecture,
+                activation_name=activation,
+                variant=variant,
+                pool_type=pool_type,
+                tail_in_dim=2 * hidden_dim,
+            )
 
     def _layer_output_dim(self, layer_idx: int) -> int:
         is_last = layer_idx == self.num_layers - 1
@@ -433,7 +744,7 @@ class GraphPolicyBackbone(nn.Module):
         layout: Any,
         hidden_dim: int,
         heads: int,
-        activation: nn.Module,
+        activation: str,
     ) -> List[nn.Module]:
         builders: dict[str, Callable[[], List[nn.Module]]] = {
             "gatv2_stack": lambda: self._gatv2_layers(layout, hidden_dim, heads),
@@ -473,7 +784,7 @@ class GraphPolicyBackbone(nn.Module):
             in_dim = hidden_dim * out_heads if concat else hidden_dim
         return layers
 
-    def _gine_layers(self, layout: Any, hidden_dim: int, activation: nn.Module) -> List[nn.Module]:
+    def _gine_layers(self, layout: Any, hidden_dim: int, activation: str) -> List[nn.Module]:
         layers: List[nn.Module] = []
         in_dim = layout.node_input_dim
         edge_dim = layout.edge_input_dim
@@ -498,7 +809,7 @@ class GraphPolicyBackbone(nn.Module):
             in_dim = hidden_dim
         return layers
 
-    def _gin_layers(self, layout: Any, hidden_dim: int, activation: nn.Module) -> List[nn.Module]:
+    def _gin_layers(self, layout: Any, hidden_dim: int, activation: str) -> List[nn.Module]:
         layers: List[nn.Module] = []
         in_dim = layout.node_input_dim
         for _ in range(self.num_layers):
@@ -507,6 +818,11 @@ class GraphPolicyBackbone(nn.Module):
         return layers
 
     def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
+        if self.variant in LEGACY_VARIANTS:
+            return self._legacy_forward(x, edge_index, batch_index, global_features, edge_attr)
+        return self._uniform_forward(x, edge_index, batch_index, global_features, edge_attr)
+
+    def _legacy_forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
         x_enc, node_types = self.node_encoder(x)
         is_f_root = (node_types == 6)
         is_d1_root = (node_types == 9)
@@ -557,7 +873,7 @@ class GraphPolicyBackbone(nn.Module):
         batch_virt = batch_index[is_virtual] if is_virtual.any() else None
 
         for layer_idx, conv in enumerate(self.convs):
-            h_real = self.activation(apply_edge_conv(conv, h_real, real_edge_index, real_edge_emb))
+            h_real = self.layer_activations[layer_idx](apply_edge_conv(conv, h_real, real_edge_index, real_edge_emb))
 
             if is_virtual.any():
                 h_virt = self.virtual_update_mlps[layer_idx](h_virt)
@@ -571,9 +887,21 @@ class GraphPolicyBackbone(nn.Module):
             self.hidden_dim,
         )
 
+        return self._apply_tail(h_pooled, global_features)
+
+    def _uniform_forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
+        x_enc, _ = self.node_encoder(x)
+        edge_emb, _ = self.edge_encoder(
+            coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
+        )
+        num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+        h_pooled = self._uniform_pool_forward(x_enc, edge_index, edge_emb, batch_index, num_graphs)
+        return self._apply_tail(h_pooled, global_features)
+
+    def _apply_tail(self, h_pooled, global_features):
         if global_features is not None:
             global_features = global_features.view(h_pooled.size(0), -1)
-            global_features = self.activation(
+            global_features = self.global_activation(
                 self.global_encoder(self.global_norm(global_features))
             )
             h_pooled = torch.cat([h_pooled, global_features], dim=-1)
@@ -589,10 +917,12 @@ class GraphPolicyBackbone(nn.Module):
 def build_graph_policy_backbone(
     layout: Any,
     architecture: str,
-    activation: str = "leaky_relu",
+    activation: str = "prelu",
     hidden_dim: int = 128,
     num_layers: int = 3,
     heads: int = 4,
+    variant: str = "legacy",
+    pool_type: str = "topk",
 ) -> GraphPolicyBackbone:
     return GraphPolicyBackbone(
         layout=layout,
@@ -601,6 +931,8 @@ def build_graph_policy_backbone(
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         heads=heads,
+        variant=variant,
+        pool_type=pool_type,
     )
 
 
