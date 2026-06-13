@@ -423,7 +423,13 @@ class GNNResultEvaluator:
         ax.set_yticklabels(pivot_grid.index)
         ax.set_xlabel(self._format_axis_label(column_col), fontsize=9, fontweight="bold")
         ax.set_ylabel(self._format_axis_label(index_col), fontsize=9, fontweight="bold")
-        ax.set_title(f"{metric.upper()} ({agg.upper()})", fontsize=11, fontweight="bold", pad=8)
+        # In "max" mode every metric in a cell is read from the single best-pr_auc
+        # configuration's row (one coherent row, NOT an independent per-metric max),
+        # so label it as such to avoid that misreading.
+        metric_title = (
+            f"{metric.upper()} @ BEST PR-AUC" if agg == "max" else f"{metric.upper()} (MEAN)"
+        )
+        ax.set_title(metric_title, fontsize=11, fontweight="bold", pad=8)
         ax.tick_params(left=False, bottom=False)
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
@@ -508,7 +514,12 @@ class GNNResultEvaluator:
             f"Axes: {self._format_axis_label(index_col)} × "
             f"{self._format_axis_label(column_col)}"
         )
-        full_title = f"{title}\n{axis_note} — {agg.upper()} aggregation"
+        agg_note = (
+            "best-pr_auc configuration per cell (all metrics from that one row)"
+            if agg == "max"
+            else "mean across configurations per cell"
+        )
+        full_title = f"{title}\n{axis_note} — {agg_note}"
         self._save_figure(fig, output_path, full_title, subtitle_y=0.92)
         print(f"    Saved heatmap: {output_path}")
         return True
@@ -972,6 +983,121 @@ class GNNResultEvaluator:
         )
         print(f"    Saved leaderboard PNG: {output_dir / 'leaderboard.png'}")
 
+    def _pareto_front(self, points: np.ndarray) -> np.ndarray:
+        """Boolean mask of non-dominated points (both axes maximize).
+
+        Point i is on the front when no other point is >= on both axes and
+        strictly greater on at least one.
+        """
+        n = len(points)
+        on_front = np.ones(n, dtype=bool)
+        for i in range(n):
+            if not on_front[i]:
+                continue
+            for j in range(n):
+                if i == j:
+                    continue
+                dominates = (
+                    points[j, 0] >= points[i, 0]
+                    and points[j, 1] >= points[i, 1]
+                    and (points[j, 0] > points[i, 0] or points[j, 1] > points[i, 1])
+                )
+                if dominates:
+                    on_front[i] = False
+                    break
+        return on_front
+
+    def _plot_pareto_panel(self, ax, df, x_col, y_col, x_label, y_label, maximize_x):
+        """Scatter configs and outline the Pareto-optimal trade-off frontier."""
+        sub = df[[x_col, y_col]].apply(pd.to_numeric, errors="coerce").dropna()
+        if sub.empty:
+            ax.set_visible(False)
+            return False
+
+        x_raw = sub[x_col].to_numpy(dtype=float)
+        y = sub[y_col].to_numpy(dtype=float)
+        # Internally both axes maximize; flip x when smaller-is-better (params, ece).
+        x_obj = x_raw if maximize_x else -x_raw
+        mask = self._pareto_front(np.column_stack([x_obj, y]))
+
+        ax.scatter(
+            x_raw[~mask], y[~mask], s=35, color="#B0B0B0",
+            alpha=0.7, label="Dominated", zorder=2,
+        )
+        ax.scatter(
+            x_raw[mask], y[mask], s=70, color="#E76F51",
+            edgecolor="#264653", linewidth=1.2, label="Pareto front", zorder=3,
+        )
+        order = np.argsort(x_raw[mask])
+        ax.plot(
+            x_raw[mask][order], y[mask][order],
+            color="#E76F51", linewidth=1.5, alpha=0.6, zorder=1,
+        )
+        ax.set_xlabel(x_label, fontsize=11, fontweight="bold")
+        ax.set_ylabel(y_label, fontsize=11, fontweight="bold")
+        ax.grid(linestyle="--", alpha=0.4)
+        ax.legend(frameon=False, fontsize=9)
+        for spine in ("top", "right"):
+            ax.spines[spine].set_visible(False)
+        return True
+
+    def generate_pareto(self, output_path: Path):
+        """Multi-metric Pareto fronts over val-synthetic best-epoch configs.
+
+        Left: PR-AUC vs model size (params, smaller better). Right: accuracy vs
+        calibration error (ece, smaller better) — only when ece was logged.
+        """
+        try:
+            df = self.load_data("val_bestepoch")
+        except FileNotFoundError:
+            print("    Skipping Pareto (val_bestepoch.csv not found)")
+            return
+        if "pr_auc" not in df.columns:
+            print("    Skipping Pareto (pr_auc column missing)")
+            return
+
+        panels = []
+        has_params = (
+            "params" in df.columns
+            and pd.to_numeric(df["params"], errors="coerce").gt(0).any()
+        )
+        if has_params:
+            panels.append(("params", "pr_auc", "Params", "PR-AUC", False))
+        if "ece" in df.columns and "accuracy" in df.columns:
+            panels.append(
+                ("ece", "accuracy", "ECE (calibration error)", "Accuracy", False)
+            )
+        if not panels:
+            # Fall back to a PR-AUC vs MP-layers trade-off when params/ece absent.
+            if "layers_mp" in df.columns:
+                panels.append(("layers_mp", "pr_auc", "MP Layers", "PR-AUC", False))
+            else:
+                print("    Skipping Pareto (no cost axis available)")
+                return
+
+        fig, axes = plt.subplots(
+            1, len(panels), figsize=(7 * len(panels), 5.5), dpi=150
+        )
+        axes = np.atleast_1d(axes)
+        plotted = False
+        for ax, (x_col, y_col, x_label, y_label, max_x) in zip(axes, panels):
+            plotted |= self._plot_pareto_panel(
+                ax, df, x_col, y_col, x_label, y_label, max_x
+            )
+
+        if not plotted:
+            plt.close(fig)
+            print("    Skipping Pareto (no plottable panels)")
+            return
+
+        self._save_figure(
+            fig,
+            output_path,
+            f"Pareto Fronts (Val Synthetic, Best Epoch) — {self.naming_var}",
+            subtitle_y=0.92,
+        )
+        print(f"    Saved Pareto plot: {output_path}")
+
     def _evaluate_run_slices(self, run: str, df: pd.DataFrame):
         label = self.run_labels.get(run, run)
         run_out_dir = self.output_dir / run
@@ -1073,6 +1199,7 @@ class GNNResultEvaluator:
         self.generate_summary_comparison(self.output_dir / "split_comparison.png")
         self.generate_generalization_gap(self.output_dir / "generalization_gap.png")
         self.generate_leaderboard(self.output_dir)
+        self.generate_pareto(self.output_dir / "pareto.png")
 
         print(f"Evaluation complete! Plots saved to {self.output_dir}")
 

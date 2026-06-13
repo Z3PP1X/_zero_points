@@ -18,6 +18,12 @@ from sklearn.metrics import (
 
 logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
+from gnn.supervised_learning.run_results.eval_metrics import (
+    expected_calibration_error,
+    prediction_probabilities,
+)
+from gnn.supervised_learning.run_results.significance import save_predictions
+
 CONFIG_COLS = (
     "layer_type",
     "layers_mp",
@@ -220,6 +226,63 @@ class DiagnosticPlotter:
         plt.savefig(output_path, bbox_inches="tight")
         plt.close(fig)
 
+    def _plot_reliability(
+        self,
+        y_true,
+        y_score,
+        title: str,
+        output_path: Path,
+        pos_label: int,
+        n_bins: int = 10,
+    ):
+        """Reliability diagram: per-bin accuracy vs mean confidence (+ ECE)."""
+        probs = prediction_probabilities(y_score)
+        probs_pos = probs[:, int(pos_label)].detach().cpu().numpy()
+        y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
+        y_pos = (y_np == pos_label).astype(float)
+
+        bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+        centers, accs, confs, weights = [], [], [], []
+        for idx in range(n_bins):
+            lo, hi = bin_edges[idx], bin_edges[idx + 1]
+            if idx < n_bins - 1:
+                mask = (probs_pos > lo) & (probs_pos <= hi)
+            else:
+                mask = (probs_pos >= lo) & (probs_pos <= hi)
+            if not np.any(mask):
+                continue
+            centers.append((lo + hi) / 2.0)
+            accs.append(float(y_pos[mask].mean()))
+            confs.append(float(probs_pos[mask].mean()))
+            weights.append(float(mask.mean()))
+        ece = expected_calibration_error(probs_pos, y_pos, n_bins=n_bins)
+
+        fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
+        ax.plot(
+            [0, 1], [0, 1], linestyle="--", color="#999999",
+            label="Perfect calibration",
+        )
+        if centers:
+            ax.bar(
+                centers, accs, width=1.0 / n_bins, color="#2A9D8F",
+                edgecolor="#264653", alpha=0.8, label="Accuracy",
+            )
+            ax.plot(
+                confs, accs, marker="o", color="#E76F51", linewidth=1.5,
+                label="Confidence",
+            )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("Predicted probability (positive class)")
+        ax.set_ylabel("Observed accuracy")
+        ax.set_title(f"{title}\nECE = {ece:.4f}", fontsize=12, fontweight="bold")
+        ax.legend(loc="upper left", frameon=False, fontsize=9)
+        ax.grid(linestyle="--", alpha=0.4)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(output_path, bbox_inches="tight")
+        plt.close(fig)
+
     def run_top_configs(self, leaderboard_csv: Path | None = None):
         csv_path = leaderboard_csv or (self.results_dir / "agg" / "val_bestepoch.csv")
         if not csv_path.exists():
@@ -323,6 +386,27 @@ class DiagnosticPlotter:
                         f"PR Curve — {split_title}",
                         out_dir / f"pr_{prefix}.png",
                         pos_label,
+                    )
+                    self._plot_reliability(
+                        y_true,
+                        y_score,
+                        f"Reliability — {split_title}",
+                        out_dir / f"reliability_{prefix}.png",
+                        pos_label,
+                    )
+                    # Dump per-prediction positive-class probabilities so the
+                    # report can bootstrap CIs / paired tests without reloading.
+                    probs_pos = (
+                        prediction_probabilities(y_score)[:, int(pos_label)]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
+                    save_predictions(
+                        out_dir / f"predictions_{prefix}.npz",
+                        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+                        probs_pos,
+                        pos_label=pos_label,
                     )
                 print(f"    [{rank}] Saved diagnostics to {out_dir}")
             except Exception as exc:

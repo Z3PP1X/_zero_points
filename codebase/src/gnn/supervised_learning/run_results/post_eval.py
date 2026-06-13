@@ -49,6 +49,7 @@ def run_post_evaluation(
     skip_diagnostics: bool = False,
     skip_training_curves: bool = False,
     skip_aggregation: bool = False,
+    skip_report: bool = False,
 ):
     """
     Run the full post-training pipeline on a completed GraphGym experiment.
@@ -130,6 +131,15 @@ def run_post_evaluation(
             split=split_name,
         )
 
+    if not skip_report:
+        print("  Generating auto summary report (summary.md / summary.json)...")
+        from gnn.supervised_learning.run_results.report import generate_report
+
+        try:
+            generate_report(results_dir, output_dir=eval_output_dir, top_k=top_k)
+        except Exception as exc:
+            print(f"  Warning: summary report generation failed: {exc}")
+
     print(f"\n[PostEval] Complete. Outputs in: {eval_output_dir}")
     return eval_output_dir
 
@@ -167,6 +177,11 @@ def main(argv=None):
         action="store_true",
         help="Skip training curve plots",
     )
+    parser.add_argument(
+        "--skip-report",
+        action="store_true",
+        help="Skip the auto summary report (summary.md / summary.json)",
+    )
     args = parser.parse_args(argv)
 
     script_dir = Path(__file__).resolve().parent
@@ -185,6 +200,7 @@ def main(argv=None):
         top_k=args.top_k,
         skip_diagnostics=args.skip_diagnostics,
         skip_training_curves=args.skip_training_curves,
+        skip_report=args.skip_report,
     )
 
 
