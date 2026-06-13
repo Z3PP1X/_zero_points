@@ -1,0 +1,19 @@
+# grid.yaml — STUFE 1 (Tree, Basisfeatures)
+# Einstellbare Parameter dieser Stufe. configs_gen.py bildet das kartesische Produkt.
+# 2 x 2 x 2 x 2 = 16 Konfigurationen.
+
+gnn.layer_type:        # edge-blinder Baseline-Backbone
+  - gcnconv
+  - ginconv
+
+gnn.dim_inner:         # Netzwerkbreite
+  - 128
+  - 256
+
+gnn.dropout:
+  - 0.0
+  - 0.2
+
+gnn.layers_mp:         # Anzahl Message-Passing-Layer
+  - 2
+  - 3

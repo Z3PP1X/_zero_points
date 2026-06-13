@@ -3,6 +3,7 @@ import yaml
 
 from gnn.supervised_learning.configs_gen import (
     _canonical_signature,
+    _is_valid_config,
     generate_configs,
     get_nested_value,
     path_exists,
@@ -110,6 +111,69 @@ def test_canonical_signature_nullifies_inert_axes():
     }
     # diffpool actually uses aux_loss_weight → signatures differ.
     assert _canonical_signature(diff_a, swept) != _canonical_signature(diff_b, swept)
+
+
+def test_is_valid_config_rejects_supernode_with_positional():
+    """Anchor positional encoding and the virtual supernode are mutually exclusive."""
+    def cfg(supernode, positional):
+        return {
+            "expression_graph": {
+                "add_virtual_supernode": supernode,
+                "features": {"positional": positional},
+            }
+        }
+
+    # The one invalid quadrant: supernode on AND positional enabled.
+    assert _is_valid_config(cfg(True, True)) is False
+    # A non-empty list counts as "positional enabled" too.
+    assert _is_valid_config(cfg(True, ["anchor_periodic"])) is False
+    # None and a missing key both mean "all anchors ON" at runtime -> still invalid with
+    # the supernode (mirrors feature_config._resolve_category_value, which treats None as all).
+    assert _is_valid_config(cfg(True, None)) is False
+    assert _is_valid_config(
+        {"expression_graph": {"add_virtual_supernode": True, "features": {}}}
+    ) is False
+    # Every other combination is valid.
+    assert _is_valid_config(cfg(True, False)) is True
+    assert _is_valid_config(cfg(False, True)) is True
+    assert _is_valid_config(cfg(False, False)) is True
+    assert _is_valid_config(cfg(True, [])) is True  # empty list = positional off
+    assert _is_valid_config(cfg(False, None)) is True  # positional on, no supernode
+
+
+def test_generate_configs_skips_supernode_positional(tmp_path):
+    """The grid sweeps both axes; the 2 invalid (on, on) points must be dropped."""
+    base = tmp_path / "base.yaml"
+    grid = tmp_path / "grid.yaml"
+    base.write_text(
+        yaml.safe_dump(
+            {
+                "out_dir": "results",
+                "gnn": {"layer_type": "ginconv"},
+                "expression_graph": {
+                    "mode": "graph",
+                    "add_virtual_supernode": False,
+                    "features": {"positional": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    grid.write_text(
+        yaml.safe_dump(
+            {
+                "expression_graph.add_virtual_supernode": [False, True],
+                "expression_graph.features.positional": [False, True],
+            }
+        ),
+        encoding="utf-8",
+    )
+    created = generate_configs(base, grid, tmp_path / "configs", run_timestamp="t")
+    # 4 grid points -> 3 valid (the (supernode=true, positional=true) point is skipped).
+    assert len(created) == 3
+    for p in created:
+        eg = yaml.safe_load(p.read_text())["expression_graph"]
+        assert not (eg["add_virtual_supernode"] and eg["features"]["positional"])
 
 
 def test_get_nested_value():
