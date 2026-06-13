@@ -4,6 +4,43 @@ This document outlines modifications to GNN graph construction, edge-aware backb
 
 ---
 
+## 0. Anchor positional encoding (replaces LPE / RWPE)
+
+The Laplacian (`lpe_1..4`) and random-walk (`rwpe_1..4`) positional encodings — 8 node
+columns — were removed and replaced by a **5-column anchor positional encoding** (net node
+schema 24 → 21).
+
+Each AST node is encoded by its proximity to the nearest *anchor* (an operator/function
+node) of each semantic group, as `1/(1 + d)` where `d` is the undirected shortest-path hop
+count. An anchor scores `1.0` for its own group; a group absent from the node's function
+scores `0.0`. Distances are measured **per function**: the structural connectors
+(`global`/`f_root`/`d1_root`/`d2_root`) are dropped first so f, f' and f'' form independent
+components and a node never sees a sibling function's anchors.
+
+The five groups (columns `anchor_additive`, `anchor_scaling`, `anchor_periodic`,
+`anchor_exponential`, `anchor_transcendental`):
+
+| Group | Members |
+|---|---|
+| additive | `Plus` |
+| scaling | `Times`, `Power`, `Sqrt` |
+| periodic | `Sin`, `Cos`, `Tan`, `Cot`, `Sec`, `Csc` |
+| exponential | `Exp`, `Log` |
+| transcendental | `Sinh`, `Cosh`, `Tanh`, `Abs`, `ArcSin`, `ArcCos`, `ArcTan` + any other operator/function |
+
+Definitions live in `graph_utils.py` (`ANCHOR_GROUP_FEATURES`, `ANCHOR_GROUP_BY_LABEL`,
+`anchor_group_for_node`, `_compute_anchor_positional_encoding`). The `positional` feature
+class now exposes the five groups as independently selectable members (config:
+`features.positional: true | false | [anchor_periodic, ...]`; CLI: `--positional-encoding`).
+
+**Incompatible with the virtual supernode.** A fully-connected supernode collapses every
+pairwise distance to ≤2 hops during message passing, destroying the anchor-distance signal.
+Enabling `add_virtual_supernode` together with the positional group now raises
+`PositionalSupernodeConflictError` (a hard error) at the training entry points — see
+`validate_positional_supernode_compatibility` in `feature_config.py`.
+
+---
+
 ## 1. Native Edge Features (replacing node-projected edge features)
 
 Edge semantics are now consumed directly by edge-aware conv layers instead of being flattened onto node features.
@@ -470,3 +507,96 @@ epoch.
 - `supervised_learning/loader_graphgym.py` (`set_custom_cfg` early-stopping cfg fields)
 - `supervised_learning/config_supervised.yaml`
 
+
+---
+
+## 18. Position-Aware GNN — Identity-Aware Root Coloring & Subtree Histograms
+
+Reworks the node representation to give the GNN direct structural awareness of
+(a) which function subgraph a node belongs to and (b) what kind of sub-expression
+it roots, without virtual aggregator nodes.
+
+### 18.1 Removal of virtual aggregator nodes
+
+The intermediate virtual nodes `f_root`, `d1_root`, `d2_root` between `global` and the
+AST roots of each function tree have been removed. `global` now connects directly to the
+actual root node of each function tree via `child_of` edges.
+
+| Before | After |
+|---|---|
+| global → f_root → f_1 | global → f_1 |
+| global → d1_root → d1_1 | global → d1_1 |
+| global → d2_root → d2_1 | global → d2_1 |
+
+### 18.2 Identity-aware root coloring
+
+The root node of each function tree (the node with in-degree 0 in its subgraph) gets
+`node_type = 2` (root) and a new `root_color` feature:
+
+| Source | root_color |
+|---|---|
+| none (non-root) | 0 |
+| f | 1 |
+| f' (d1) | 2 |
+| f'' (d2) | 3 |
+| kappa (h-function) | 4 |
+
+The GNN embeds `root_color` with a learnable `nn.Embedding(5, 4)`, enabling it to learn
+distinct initial representations for each function's root without needing separate node
+types or aggregator nodes.
+
+### 18.3 Simplified node type vocabulary
+
+All expression-tree nodes collapse to a single **`operator`** type (`node_type=1`). The
+old distinct types `function`, `variable`, and `constant` are kept only as internal
+metadata (for NextUse edge detection) but are no longer exposed as separate node_type
+codes. Heterogeneous graph types are now `global` / `operator` / `root`.
+
+### 18.4 New node features: subtree histograms
+
+Each operator node now carries:
+- **`subtree_size`**: number of nodes in its subtree (including itself).
+- **`subtree_depth`**: height of its subtree (max depth to any leaf).
+- **7-bin operator histogram** (`hist_additive`, `hist_multiplicative`, `hist_trigonometric`,
+  `hist_exponential`, `hist_transcendental`, `hist_variables`, `hist_constants`):
+  counts of each operator/symbol type in the subtree, computed bottom-up from a
+  topological sort.
+
+### 18.5 Updated NODE_FEATURE_SCHEMA (16 features)
+
+| Index | Name | Description |
+|---|---|---|
+| 0 | `node_type` | 0=global, 1=operator, 2=root, 5=supernode |
+| 1 | `root_color` | 0=none, 1=f, 2=d1, 3=d2, 4=kappa |
+| 2 | `subtree_size` | nodes in subtree |
+| 3 | `subtree_depth` | height of subtree |
+| 4–10 | `hist_*` | 7-bin operator type histogram |
+| 11–15 | `anchor_*` | 5 anchor positional encoding columns |
+
+Removed: `label_id`, `value`, `has_value`, `virtual_current_x_val`,
+`virtual_delta_target_val`, `virtual_d1_x_val`, `virtual_d2_x_val`,
+`belongs_to_f/d1/d2`, `depth`, `height`, `out_degree`, `betweenness_centrality`.
+
+`populate_task_virtual_values` is now a **no-op** (task-value slots removed). RL
+workflows that relied on writing `currentX` / `yTarget` into node features need a
+separate redesign.
+
+### 18.6 DFS fix: children_dict now includes global→root edges
+
+The NextUse edge DFS previously used only `raw_ast` (AST-only) edges when building
+`children_dict`, so DFS from `global` could not traverse into any function subtree.
+`children_dict` now includes all `child_of` edges from the full raw graph (including
+global→root), restoring correct variable reuse tracking across all function trees.
+
+### 18.7 Modified files
+- `shared/utils/graph_utils.py`: new constants, `_mark_function_roots`,
+  `_histogram_bin_for_node`, `_compute_subtree_histograms`, updated schema,
+  `CreateVirtualGlobalNode`, `MergeDisjointSubgraph`, `LoadGraphFromLocalStructure`,
+  `create_virtual_global_node`, `children_dict` fix.
+- `shared/utils/feature_config.py`: `NODE_FEATURES`, `TOPOLOGY_FEATURES`,
+  `NODE_CATEGORICAL_REGISTRY` updated to new schema.
+- `shared/utils/heterogeneous_converter.py`: rewritten for `global/operator/root` types
+  with uniform 16-feature vectors.
+- All affected tests updated.
+
+**Retraining required:** node input dim changed (21→16), node type vocabulary changed.

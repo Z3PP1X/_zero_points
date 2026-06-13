@@ -41,7 +41,12 @@ from gnn.reinforcement_learning.reward import RewardCalculator
 from gnn.reinforcement_learning.mathematica_vec_env import build_mathematica_training_env, MathematicaVecEnv
 from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
 from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
-from gnn.reinforcement_learning.feature_layout import FeatureLayout, EDGE_INPUT_DIM_CHOICES
+from gnn.reinforcement_learning.feature_layout import (
+    FeatureLayout,
+    EDGE_INPUT_DIM_CHOICES,
+    NATIVE_NODE_FEATURE_COUNT,
+)
+from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
 from gnn.reinforcement_learning.rl_config import (
     RL_EXPERIMENT_CHOICES,
@@ -348,6 +353,12 @@ def main() -> None:
     add_kappa = resolve_rl_setting(
         None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
     )
+    add_virtual_supernode = resolve_rl_setting(
+        None,
+        settings["add_virtual_supernode"],
+        is_flag=True,
+        flag_set=args.add_virtual_supernode,
+    )
     timesteps = int(
         resolve_rl_setting(args.timesteps, settings["train_best_timesteps"])
     )
@@ -379,11 +390,16 @@ def main() -> None:
         edge_features=args.edge_features,
         active_features=args.active_features,
     )
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
+
     print(f"[Pipeline] Feature groups: {feature_selection.enabled_groups()}")
     print(f"[Pipeline] Positional encodings: {list(feature_selection.positional_encodings)}")
     print(f"[Pipeline] Active node features: {feature_selection.summary()}")
 
-    padded_node_feature_count = len(active_features) if active_features is not None else 25
+    padded_node_feature_count = (
+        len(active_features) if active_features is not None else NATIVE_NODE_FEATURE_COUNT
+    )
 
     # 1. Load and parse hyperparameter configuration
     try:
@@ -404,6 +420,7 @@ def main() -> None:
     print(f"  Mode:             {mode}")
     print(f"  Edge direction:   {edge_direction}")
     print(f"  Add kappa:        {add_kappa}")
+    print(f"  Add supernode:    {add_virtual_supernode}")
     print(f"  GNN Architecture: {trial_config.policy.architecture}")
     print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
@@ -445,6 +462,7 @@ def main() -> None:
         mode=mode,
         edge_direction=edge_direction,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
     loader = unified_loader.graph_loader
     preprocessor = Preprocessor(loader=loader, mode=mode, active_features=active_features)
@@ -548,6 +566,7 @@ def main() -> None:
             mlflow.log_param("mode", mode)
             mlflow.log_param("edge_direction", edge_direction)
             mlflow.log_param("add_kappa", add_kappa)
+            mlflow.log_param("add_virtual_supernode", add_virtual_supernode)
 
             # Log reward parameters
             mlflow.log_param("reward_version", "v2_tolerance")

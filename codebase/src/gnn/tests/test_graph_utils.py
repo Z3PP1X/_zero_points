@@ -8,10 +8,8 @@ from graph_utils import (
     ExpressionGraphConverter,
     TopologicalFeatureExtractor,
     NODE_FEATURE_SCHEMA,
-    EDGE_FEATURE_SCHEMA,
-    CANONICAL_LABEL_VOCAB,
 )
-from feature_layout import NATIVE_NODE_FEATURE_COUNT, NATIVE_EDGE_FEATURE_COUNT
+from feature_layout import NATIVE_NODE_FEATURE_COUNT
 
 
 def test_convert_ignores_legacy_taylor_coeff_fields(tmp_path):
@@ -90,47 +88,53 @@ def test_enriched_graph_features(tmp_path):
     assert data.tree_width == 2
 
     assert data.x.shape == (3, NATIVE_NODE_FEATURE_COUNT)
-    assert data.edge_attr.shape == (4, NATIVE_EDGE_FEATURE_COUNT)
-    assert data.edge_attr.shape[1] == len(EDGE_FEATURE_SCHEMA)
+    assert getattr(data, "edge_attr", None) is None
 
     root_idx = 0
     child1_idx = 1
     child2_idx = 2
 
+    st_size = NODE_FEATURE_SCHEMA.index("subtree_size")
+    st_depth = NODE_FEATURE_SCHEMA.index("subtree_depth")
+    hist_add = NODE_FEATURE_SCHEMA.index("hist_additive")
+    hist_var = NODE_FEATURE_SCHEMA.index("hist_variables")
+    hist_const = NODE_FEATURE_SCHEMA.index("hist_constants")
+
     root_features = data.x[root_idx].tolist()
-    assert root_features[0] == 1.0
-    assert root_features[1] == float(CANONICAL_LABEL_VOCAB["Plus"])
-    assert root_features[2] == 0.0
-    assert root_features[3] == 1.0
-    assert root_features[4] == 3.0
-    assert root_features[5] == 2.0
-    assert root_features[6] > 0.0
-    assert root_features[7] == 0.0
-    assert root_features[8] == 0.0
+    assert root_features[0] == 1.0           # node_type=1 (operator; no global → Plus not marked root)
+    assert root_features[1] == 0.0           # root_color=0 (none)
+    assert root_features[st_size] == 3.0     # subtree_size: Plus + x + 2
+    assert root_features[st_depth] == 1.0    # subtree_depth=1 (height)
+    assert root_features[hist_add] == 1.0    # hist_additive: Plus
+    assert root_features[hist_var] == 1.0    # hist_variables: x
+    assert root_features[hist_const] == 1.0  # hist_constants: 2
 
     child2_features = data.x[child2_idx].tolist()
-    assert child2_features[0] == 2.0
-    assert child2_features[1] == float(CANONICAL_LABEL_VOCAB["<CONSTANT>"])
-    assert child2_features[2] == 1.0
-    assert child2_features[3] == 0.0
-    assert child2_features[4] == 1.0
-    assert child2_features[5] == 0.0
-    assert child2_features[6] == 0.0
-    # value is now emitted RAW (signed_log normalization removed; the model's
-    # learnable linear embedding handles scaling).
-    assert child2_features[7] == pytest.approx(2.0)
-    assert child2_features[8] == 1.0
+    assert child2_features[0] == 1.0         # node_type=1 (all non-global/non-root → operator)
+    assert child2_features[1] == 0.0         # root_color=0
+    assert child2_features[st_size] == 1.0   # subtree_size=1 (leaf)
+    assert child2_features[st_depth] == 0.0  # subtree_depth=0
+    assert child2_features[hist_const] == 1.0  # hist_constants: constant leaf
 
-    for idx in range(3):
-        node_features = data.x[idx].tolist()
-        lpe = node_features[9:13]
-        rwpe = node_features[13:17]
-        assert len(lpe) == 4
-        assert len(rwpe) == 4
-        # Lazy random-walk return probability (step 2) is strictly positive for
-        # every node, including on bipartite trees. This guards against the
-        # earlier regression where odd-step RWPE dims were identically zero.
-        assert rwpe[0] > 0.0
+    # Anchor positional encoding (the 5 anchor_* columns): proximity 1/(1+hops) to the
+    # nearest operator anchor of each semantic group, within the node's own function.
+    # f1 is Plus -> an additive anchor, so it scores 1.0 on anchor_additive and its two
+    # children (1 hop away) score 0.5; all other anchor groups are absent here.
+    child1_features = data.x[child1_idx].tolist()
+    add_col = NODE_FEATURE_SCHEMA.index("anchor_additive")
+    assert root_features[add_col] == pytest.approx(1.0)
+    assert child1_features[add_col] == pytest.approx(0.5)
+    assert child2_features[add_col] == pytest.approx(0.5)
+    for name in (
+        "anchor_scaling",
+        "anchor_periodic",
+        "anchor_exponential",
+        "anchor_transcendental",
+    ):
+        col = NODE_FEATURE_SCHEMA.index(name)
+        assert root_features[col] == 0.0
+        assert child1_features[col] == 0.0
+        assert child2_features[col] == 0.0
 
     assert hasattr(data, "laplacian")
     assert data.laplacian.shape == (3, 3)
@@ -139,18 +143,6 @@ def test_enriched_graph_features(tmp_path):
     assert diag == [2.0, 1.0, 1.0]
 
     assert data.edge_index.shape == (2, 4)
-    assert data.edge_attr.shape == (4, len(EDGE_FEATURE_SCHEMA))
-
-    directions = data.edge_attr[:, 1].tolist()
-    assert directions.count(0.0) == 2
-    assert directions.count(1.0) == 2
-
-    child_indices = data.edge_attr[:, 0].tolist()
-    assert child_indices.count(0.0) == 2
-    assert child_indices.count(1.0) == 2
-
-    eb = data.edge_attr[:, 3].tolist()
-    assert all(val > 0.0 for val in eb)
 
 
 def test_edge_direction_top_down_has_parent_to_child_only():

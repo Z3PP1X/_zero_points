@@ -18,6 +18,7 @@ from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway
 from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
 from gnn.reinforcement_learning.ppo_optuna_workflow import PpoOptunaWorkflow
 from gnn.reinforcement_learning.preprocessor import Preprocessor
+from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.rl_config import (
     RL_EXPERIMENT_CHOICES,
     add_shared_graph_args,
@@ -96,6 +97,12 @@ def main() -> None:
     add_kappa = resolve_rl_setting(
         None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
     )
+    add_virtual_supernode = resolve_rl_setting(
+        None,
+        settings["add_virtual_supernode"],
+        is_flag=True,
+        flag_set=args.add_virtual_supernode,
+    )
     timesteps = int(resolve_rl_setting(args.timesteps, settings["timesteps"]))
     n_trials = int(resolve_rl_setting(args.n_trials, settings["n_trials"]))
     n_envs = int(resolve_rl_setting(args.n_envs, settings["n_envs"]))
@@ -125,6 +132,9 @@ def main() -> None:
         active_features=args.active_features,
     )
 
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
+
     mlflow.set_experiment(f"GNN_RL_Optuna_{experiment}")
 
     traffic_monitor = GatewayTrafficMonitor(
@@ -144,7 +154,7 @@ def main() -> None:
     print(
         f"Optuna: {n_trials} Trials × {timesteps} Schritte | "
         f"Experiment: {experiment} | Mode: {mode} | Edge direction: {edge_direction} | "
-        f"Add kappa: {add_kappa} | "
+        f"Add kappa: {add_kappa} | Add supernode: {add_virtual_supernode} | "
         f"Parallel-Envs: {n_envs} | Continue Study: {continue_study} | Config: {config_path.name}"
     )
     print(f"Feature groups: {feature_selection.enabled_groups()}")
@@ -158,6 +168,7 @@ def main() -> None:
         mode=mode,
         edge_direction=edge_direction,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
     loader = unified_loader.graph_loader
 

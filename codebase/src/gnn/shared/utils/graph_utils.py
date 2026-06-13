@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+from collections import deque
 import torch
 import networkx as nx
 from pathlib import Path
@@ -41,29 +42,74 @@ CANONICAL_LABELS: tuple[str, ...] = (
     "Sinh",
     "Cosh",
     "Tanh",
-    "f_root",
-    "d1_root",
-    "d2_root",
 )
 CANONICAL_LABEL_VOCAB: dict[str, int] = {label: idx for idx, label in enumerate(CANONICAL_LABELS)}
 
-FUNCTION_AGGREGATOR_CONFIG: tuple[tuple[str, str], ...] = (
-    ("belongs_to_f", "f_root"),
-    ("belongs_to_d1", "d1_root"),
-    ("belongs_to_d2", "d2_root"),
+# Anchor-based positional encoding. Each AST node is encoded by its proximity to the
+# nearest "anchor" — an operator/function node — of each semantic group. The distance is
+# the shortest-path hop count on the undirected AST, measured *within the node's own
+# function subgraph*: the structural connector nodes (global / f_root / d1_root / d2_root)
+# are removed before measuring, so f, f' and f'' fall into independent components and a
+# node never sees anchors from a sibling function (there is no message passing across them
+# anyway). The distance d is encoded as 1/(1+d) in (0, 1]: an anchor node scores 1.0 for
+# its own group, and a group absent from the node's function scores 0.0. This replaces the
+# former Laplacian / random-walk positional encodings (lpe_*/rwpe_*).
+ANCHOR_GROUP_FEATURES: tuple[str, ...] = (
+    "anchor_additive",        # G1: Plus (addition / subtraction)
+    "anchor_scaling",         # G2: Times, Power, Sqrt (multiplicative / algebraic scaling)
+    "anchor_periodic",        # G3: Sin, Cos, Tan, Cot, Sec, Csc (trigonometric)
+    "anchor_exponential",     # G4: Exp, Log
+    "anchor_transcendental",  # G5: Sinh, Cosh, Tanh, Abs, ArcSin/Cos/Tan + any other op/fn
 )
-FUNCTION_AGGREGATOR_IDS: frozenset[str] = frozenset(agg for _, agg in FUNCTION_AGGREGATOR_CONFIG)
+NUM_ANCHOR_GROUPS: int = len(ANCHOR_GROUP_FEATURES)
+
+# Operator/function label -> 1-based anchor group index. An operator/function whose label
+# is not listed here falls through to the transcendental group (5); variables, constants
+# and structural nodes are never anchors.
+ANCHOR_GROUP_BY_LABEL: dict[str, int] = {
+    "Plus": 1,
+    "Times": 2, "Power": 2, "Sqrt": 2,
+    "Sin": 3, "Cos": 3, "Tan": 3, "Cot": 3, "Sec": 3, "Csc": 3,
+    "Exp": 4, "Log": 4,
+    "Sinh": 5, "Cosh": 5, "Tanh": 5, "Abs": 5,
+    "ArcSin": 5, "ArcCos": 5, "ArcTan": 5,
+}
+TRANSCENDENTAL_ANCHOR_GROUP: int = 5
+
+# Only global is excluded from anchor distance; the per-function subgraphs (f / f' / f'')
+# become independent connected components naturally once global is excluded from G_ast.
+ANCHOR_EXCLUDED_NODE_IDS: frozenset[str] = frozenset({"global"})
+
+# Identity-aware root-node coloring: each function tree root gets a unique color code.
+ROOT_COLOR_VOCAB: dict[str, int] = {"none": 0, "f": 1, "d1": 2, "d2": 3, "kappa": 4}
+NUM_ROOT_COLORS: int = len(ROOT_COLOR_VOCAB)  # 5
+
+# Subtree histogram bins — count of each operator/function category within a node's subtree.
+HISTOGRAM_GROUP_BY_LABEL: dict[str, int] = {
+    "Plus": 0,
+    "Times": 1, "Power": 1, "Sqrt": 1,
+    "Sin": 2, "Cos": 2, "Tan": 2, "Cot": 2, "Sec": 2, "Csc": 2,
+    "Exp": 3, "Log": 3,
+    "Sinh": 4, "Cosh": 4, "Tanh": 4, "Abs": 4,
+    "ArcSin": 4, "ArcCos": 4, "ArcTan": 4,
+}
+HISTOGRAM_VARIABLE_BIN: int = 5
+HISTOGRAM_CONSTANT_BIN: int = 6
+NUM_HISTOGRAM_BINS: int = 7
+HISTOGRAM_FEATURES: tuple[str, ...] = (
+    "hist_additive",
+    "hist_multiplicative",
+    "hist_trigonometric",
+    "hist_exponential",
+    "hist_transcendental",
+    "hist_variables",
+    "hist_constants",
+)
 
 CANONICAL_EDGE_TYPES: tuple[str, ...] = (
     "<UNK>",
     "child_of",
     "child_of_reverse",
-    "belongs_to_f",
-    "belongs_to_f_reverse",
-    "belongs_to_d1",
-    "belongs_to_d1_reverse",
-    "belongs_to_d2",
-    "belongs_to_d2_reverse",
     "virtual",
     "virtual_reverse",
     "supernode_connection",
@@ -75,10 +121,7 @@ CANONICAL_EDGE_TYPES: tuple[str, ...] = (
 ) + tuple(f"OuterToInner_Arg{i}" for i in range(10)) + tuple(
     f"InnerToOuter_Arg{i}" for i in range(10)
 ) + (
-    # Operand-side relation types for non-commutative binary operators. Appended at the
-    # end so existing edge-type ids stay stable. The homogeneous relation_type column and
-    # the heterogeneous metapath keys both resolve through get_relation_type, so left vs
-    # right operand is distinguished consistently in both representations.
+    # Operand-side relation types for non-commutative binary operators.
     "left_operand",
     "left_operand_reverse",
     "right_operand",
@@ -86,14 +129,20 @@ CANONICAL_EDGE_TYPES: tuple[str, ...] = (
 )
 CANONICAL_EDGE_TYPE_VOCAB: dict[str, int] = {etype: idx for idx, etype in enumerate(CANONICAL_EDGE_TYPES)}
 
-VIRTUAL_NODE_TYPES = frozenset(FUNCTION_AGGREGATOR_IDS)
+VIRTUAL_NODE_TYPES: frozenset[str] = frozenset()
 
-# Categorical vocabulary sizes (embedding-table row counts). node_type ids occupy a
-# fixed 0..10 code space (11 rows, with gaps); label / edge sizes follow their vocabs.
-# Single source of truth — model encoders import these instead of redefining them.
-NUM_NODE_TYPES: int = 11
+# Categorical vocabulary sizes. node_type uses codes: 0=global, 1=operator, 2=root, 5=supernode.
+# NUM_NODE_TYPES covers the range 0..5 (6 entries), with gap at 3 and 4.
+NUM_NODE_TYPES: int = 6
 NUM_LABELS: int = len(CANONICAL_LABEL_VOCAB)
 NUM_EDGE_TYPES: int = len(CANONICAL_EDGE_TYPE_VOCAB)
+
+# Optional fully-connected virtual supernode (opt-in via add_virtual_supernode). It is
+# given its own node_type code in the otherwise-unused 0..10 gap (5), distinct from the
+# f/d1/d2 aggregator virtual types (6/9/10) so the model treats it as an ordinary
+# message-passing node rather than a task aggregator. NUM_NODE_TYPES already covers code 5.
+SUPERNODE_NODE_TYPE: int = 5
+SUPERNODE_NODE_ID: str = "virtual_supernode"
 
 
 def _is_numeric_label(label: str) -> bool:
@@ -124,25 +173,95 @@ def encode_edge_type(etype: str) -> int:
     return CANONICAL_EDGE_TYPE_VOCAB.get(etype, CANONICAL_EDGE_TYPE_VOCAB["<UNK>"])
 
 
+def anchor_group_for_node(label: Any, node_type: Any) -> int | None:
+    """Return the 1-based anchor group for a node, or ``None`` if it is not an anchor.
+
+    Explicitly grouped operator/function labels map to their group; any other
+    operator/function falls through to the transcendental group; variables, constants,
+    global and root structural nodes are not anchors.
+    """
+    if label in ANCHOR_GROUP_BY_LABEL:
+        return ANCHOR_GROUP_BY_LABEL[label]
+    if node_type in ("operator", "function", "root"):
+        return TRANSCENDENTAL_ANCHOR_GROUP
+    return None
+
+
+def _compute_anchor_positional_encoding(G: nx.DiGraph) -> np.ndarray:
+    """Per-node anchor positional encoding, shape ``(num_nodes, NUM_ANCHOR_GROUPS)``.
+
+    Rows are aligned to ``list(G.nodes)`` order (matching the other topology arrays). For
+    each node and each anchor group, the value is ``1/(1 + d)`` where ``d`` is the
+    shortest-path hop distance (undirected) to the nearest anchor of that group within the
+    node's own function subgraph; ``0.0`` if that group is absent from the subgraph.
+    Anchor distances are measured after dropping the structural connector nodes so f / f'
+    / f'' are isolated.
+    """
+    node_order = list(G.nodes)
+    pe = np.zeros((len(node_order), NUM_ANCHOR_GROUPS))
+    if not node_order:
+        return pe
+    index_of = {node_id: i for i, node_id in enumerate(node_order)}
+
+    G_und = G.to_undirected()
+    kept = [n for n in G_und.nodes if str(n) not in ANCHOR_EXCLUDED_NODE_IDS]
+    H = G_und.subgraph(kept)
+
+    for component in nx.connected_components(H):
+        comp_graph = H.subgraph(component)
+        anchors_by_group: dict[int, list] = {}
+        for node_id in component:
+            attrs = H.nodes[node_id]
+            group = anchor_group_for_node(attrs.get("label"), attrs.get("type"))
+            if group is not None:
+                anchors_by_group.setdefault(group, []).append(node_id)
+        for group, sources in anchors_by_group.items():
+            distances = _multi_source_bfs(comp_graph, sources)
+            col = group - 1
+            for node_id, dist in distances.items():
+                pe[index_of[node_id], col] = 1.0 / (1.0 + dist)
+    return pe
+
+
+def _multi_source_bfs(graph: nx.Graph, sources: list) -> dict:
+    """Shortest-path hop distance from the nearest of ``sources`` to every reachable node.
+
+    A plain breadth-first sweep seeded with all sources at distance 0; equivalent to
+    ``nx.multi_source_shortest_path_length`` but available across networkx versions.
+    """
+    dist: dict = {source: 0 for source in sources}
+    queue = deque(sources)
+    while queue:
+        node = queue.popleft()
+        next_dist = dist[node] + 1
+        for neighbor in graph.neighbors(node):
+            if neighbor not in dist:
+                dist[neighbor] = next_dist
+                queue.append(neighbor)
+    return dist
+
+
 def get_hetero_node_type(raw_type: str) -> str:
-    if raw_type in ("operator", "function"):
-        return "operator"
-    elif raw_type == "variable":
-        return "variable"
-    elif raw_type == "constant":
-        return "constant"
-    elif raw_type in ("global", "f_root", "d1_root", "d2_root"):
-        return "virtual"
+    """Map internal node type strings to the heterogeneous node type names.
+
+    All expression-tree nodes collapse to "operator"; root nodes keep their "root"
+    type for identity-aware message passing; global and supernode become "global".
+    """
+    if raw_type == "root":
+        return "root"
+    elif raw_type in ("global", "supernode"):
+        return "global"
     else:
-        return "virtual"
+        # operator, function, variable, constant → unified "operator"
+        return "operator"
 
 
 def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
     is_reverse = etype.endswith("_reverse")
     base_etype = etype[:-8] if is_reverse else etype
-    
+
     if base_etype == "child_of":
-        if parent_label in ("Plus", "Times", "GLOBAL", "f_root", "d1_root", "d2_root"):
+        if parent_label in ("Plus", "Times", "GLOBAL"):
             return "child_of_reverse" if is_reverse else "child_of"
         else:
             if child_index == 0.0:
@@ -156,87 +275,72 @@ def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
 
 
 
-def _compute_belongs_to_subtree(
-    raw: dict,
-    prov_edge_type: str,
-    id_prefix: str,
-) -> dict[str, float]:
-    """Mark nodes in a provenance subtree (aggregator edge + id prefix + child_of BFS)."""
-    child_edges = [
-        (edge["source"], edge["target"])
-        for edge in raw.get("edges", [])
-        if edge.get("type") == "child_of"
-    ]
-    subtree_roots = {
-        edge["target"]
-        for edge in raw.get("edges", [])
-        if edge.get("type") == prov_edge_type
+def _histogram_bin_for_node(label: str, orig_type: str) -> int:
+    """Return the 0-based histogram bin for a single node (based on its own label/type)."""
+    if label in HISTOGRAM_GROUP_BY_LABEL:
+        return HISTOGRAM_GROUP_BY_LABEL[label]
+    if orig_type == "variable":
+        return HISTOGRAM_VARIABLE_BIN
+    if orig_type == "constant":
+        return HISTOGRAM_CONSTANT_BIN
+    # Unknown operator/function → transcendental bin
+    return 4
+
+
+def _compute_subtree_histograms(G: nx.DiGraph) -> dict:
+    """Iterative subtree histogram: for each node, count operator types in its subtree.
+
+    Returns a dict mapping node_id -> np.ndarray of shape (NUM_HISTOGRAM_BINS,).
+    Each entry counts how many nodes of each category appear in the subtree rooted at
+    that node (inclusive). Global, kappa, and supernode nodes are expected to be absent
+    from G (pass the pure AST subgraph).
+    """
+    hists: dict = {
+        nid: np.zeros(NUM_HISTOGRAM_BINS, dtype=np.float32)
+        for nid in G.nodes
     }
 
-    subtree_nodes: set[str] = set(subtree_roots)
-    for node in raw.get("nodes", []):
-        node_id = node["id"]
-        if str(node_id).startswith(id_prefix):
-            subtree_nodes.add(node_id)
+    # Assign the self-contribution of each node
+    for nid, attrs in G.nodes(data=True):
+        b = _histogram_bin_for_node(attrs.get("label", ""), attrs.get("type", "operator"))
+        hists[nid][b] = 1.0
 
-    queue = list(subtree_roots)
-    while queue:
-        parent = queue.pop(0)
-        for src, tgt in child_edges:
-            if src == parent and tgt not in subtree_nodes:
-                subtree_nodes.add(tgt)
-                queue.append(tgt)
+    # Process nodes bottom-up (reverse topological order = leaves first)
+    try:
+        topo_order = list(nx.topological_sort(G))
+    except nx.NetworkXUnfeasible:
+        return hists
 
-    return {
-        node["id"]: 1.0 if node["id"] in subtree_nodes else 0.0
-        for node in raw.get("nodes", [])
-    }
+    for nid in reversed(topo_order):
+        for child in G.successors(nid):
+            hists[nid] += hists[child]
 
-
-def compute_belongs_to_f(raw: dict) -> dict[str, float]:
-    return _compute_belongs_to_subtree(raw, "belongs_to_f", "f_")
-
-
-def compute_belongs_to_d1(raw: dict) -> dict[str, float]:
-    return _compute_belongs_to_subtree(raw, "belongs_to_d1", "d1_")
-
-
-def compute_belongs_to_d2(raw: dict) -> dict[str, float]:
-    return _compute_belongs_to_subtree(raw, "belongs_to_d2", "d2_")
+    return hists
 
 
 NODE_FEATURE_SCHEMA = [
-    "node_type",
-    "label_id",
-    "depth",
-    "height",
-    "subtree_size",
-    "out_degree",
-    "betweenness_centrality",
-    "value",
-    "has_value",
-    "lpe_1",
-    "lpe_2",
-    "lpe_3",
-    "lpe_4",
-    "rwpe_1",
-    "rwpe_2",
-    "rwpe_3",
-    "rwpe_4",
-    "virtual_current_x_val",
-    "virtual_delta_target_val",
-    "virtual_d1_x_val",
-    "virtual_d2_x_val",
-    "belongs_to_f",
-    "belongs_to_d1",
-    "belongs_to_d2",
+    "node_type",           # 0: global=0, operator=1, root=2, supernode=5
+    "root_color",          # 1: none=0, f=1, d1=2, d2=3, kappa=4
+    "subtree_size",        # 2: number of nodes in subtree (self + descendants)
+    "subtree_depth",       # 3: height = max depth of subtree below this node
+    "hist_additive",       # 4: Plus count in subtree
+    "hist_multiplicative", # 5: Times/Power/Sqrt count in subtree
+    "hist_trigonometric",  # 6: Sin/Cos/Tan/… count in subtree
+    "hist_exponential",    # 7: Exp/Log count in subtree
+    "hist_transcendental", # 8: Sinh/Cosh/Tanh/Abs/ArcSin… count in subtree
+    "hist_variables",      # 9: variable node count in subtree
+    "hist_constants",      # 10: constant node count in subtree
+    "anchor_additive",     # 11: positional encoding
+    "anchor_scaling",      # 12
+    "anchor_periodic",     # 13
+    "anchor_exponential",  # 14
+    "anchor_transcendental", # 15
 ]
 
 EDGE_FEATURE_SCHEMA = [
     "child_index",
     "direction",
     "relation_type",
-    "edge_betweenness_centrality",
     # kappa (h-function) edge weight: the parsed kappa value on GlobalToKappa/KappaToGlobal
     # edges, 0.0 on all other edges. Continuous column (not in EDGE_CATEGORICAL_REGISTRY).
     "kappa_weight",
@@ -254,6 +358,83 @@ def validate_edge_direction(edge_direction: str) -> str:
     return edge_direction
 
 
+def inject_virtual_supernode(
+    G_enriched: nx.DiGraph,
+    G_directed: nx.DiGraph,
+    node_ids: list,
+) -> None:
+    """Inject one fully-connected virtual supernode into an already-built graph.
+
+    The supernode is wired with bidirectional edges to every pre-existing node so a
+    message can travel between any two nodes in at most two hops, shrinking the
+    effective graph diameter and boosting long-range message passing.
+
+    It is injected *after* the AST topology / positional features and the augmented
+    (NextUse / function-nesting) edges have been computed, so adding it does not perturb
+    those structural node features. The supernode carries its own node_type code
+    (``SUPERNODE_NODE_TYPE``), distinct from the f/d1/d2 aggregator virtual types
+    (6/9/10); the model therefore treats it as an ordinary message-passing node instead
+    of excluding it like the task aggregators.
+
+    Mutates ``G_enriched`` (feature graph), ``G_directed`` (source of the node-type /
+    label / belongs tensors and the node/edge counts) and appends the supernode id to
+    ``node_ids`` in place. Idempotent: a second call is a no-op.
+    """
+    if SUPERNODE_NODE_ID in G_enriched:
+        return
+
+    existing_nodes = [nid for nid in node_ids if nid != SUPERNODE_NODE_ID]
+
+    supernode_attrs: dict[str, Any] = {
+        "node_type": SUPERNODE_NODE_TYPE,
+        "root_color": 0.0,
+        "label_id": encode_label("GLOBAL"),
+        "type": "supernode",
+        "label": "GLOBAL",
+        "subtree_size": 0.0,
+        "subtree_depth": 0.0,
+        "anchor_additive": 0.0,
+        "anchor_scaling": 0.0,
+        "anchor_periodic": 0.0,
+        "anchor_exponential": 0.0,
+        "anchor_transcendental": 0.0,
+        **{name: 0.0 for name in HISTOGRAM_FEATURES},
+    }
+    G_enriched.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
+    G_directed.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
+
+    forward_rel = float(encode_edge_type("supernode_connection"))
+    reverse_rel = float(encode_edge_type("supernode_connection_reverse"))
+
+    def _edge_attrs(relation_type: float, direction: float, etype: str) -> dict[str, Any]:
+        return {
+            "child_index": 0.0,
+            "direction": direction,
+            "relation_type": relation_type,
+            "kappa_weight": 0.0,
+            "etype": etype,
+        }
+
+    for nid in existing_nodes:
+        # Both directions are always added so the supernode shortcut stays bidirectional
+        # regardless of the AST edge_direction setting (mirrors virtual/task edges).
+        G_enriched.add_edge(
+            SUPERNODE_NODE_ID,
+            nid,
+            **_edge_attrs(forward_rel, 0.0, "supernode_connection"),
+        )
+        G_enriched.add_edge(
+            nid,
+            SUPERNODE_NODE_ID,
+            **_edge_attrs(reverse_rel, 1.0, "supernode_connection_reverse"),
+        )
+        # Mirror the structural edges into G_directed so num_edges/num_nodes stay accurate.
+        G_directed.add_edge(SUPERNODE_NODE_ID, nid)
+        G_directed.add_edge(nid, SUPERNODE_NODE_ID)
+
+    node_ids.append(SUPERNODE_NODE_ID)
+
+
 def _find_global_node_id(raw: dict) -> str | None:
     for node in raw.get("nodes", []):
         if node.get("type") == "global":
@@ -261,84 +442,56 @@ def _find_global_node_id(raw: dict) -> str | None:
     return None
 
 
-def _insert_function_aggregators(raw: dict) -> None:
-    """Insert provenance-scoped aggregator nodes between global and AST roots."""
+def _mark_function_roots(raw: dict) -> None:
+    """Mark AST root nodes with type='root' and root_color, replacing provenance edges.
+
+    For the legacy JSON format that carries ``belongs_to_f/d1/d2`` edges, this rewrites
+    those edges as plain ``child_of`` edges from global to each root and annotates the
+    root nodes with ``root_color`` so the model can distinguish f / f' / f'' via a
+    learnable embedding without needing separate virtual aggregator nodes.
+    """
     global_id = _find_global_node_id(raw)
     if global_id is None:
         return
 
-    node_ids = {node["id"] for node in raw["nodes"]}
-    edges = list(raw.get("edges", []))
+    prov_to_color: dict[str, str] = {
+        "belongs_to_f": "f",
+        "belongs_to_d1": "d1",
+        "belongs_to_d2": "d2",
+    }
 
-    for prov_type, agg_id in FUNCTION_AGGREGATOR_CONFIG:
-        roots = [
-            edge["target"]
-            for edge in edges
-            if edge.get("source") == global_id and edge.get("type") == prov_type
-        ]
-        if not roots:
-            continue
+    # Find root nodes that are direct targets of provenance edges from global.
+    root_to_color: dict[str, str] = {}
+    for edge in raw.get("edges", []):
+        etype = edge.get("type", "")
+        if edge.get("source") == global_id and etype in prov_to_color:
+            root_to_color[edge["target"]] = prov_to_color[etype]
 
-        if agg_id not in node_ids:
-            raw["nodes"].append({
-                "id": agg_id,
-                "label": agg_id,
-                "type": agg_id,
-                "value": None,
-            })
-            node_ids.add(agg_id)
+    # Fallback: if no provenance edges exist, treat all in-degree-0 non-global nodes as
+    # roots of f (single-function graphs without explicit provenance markup).
+    if not root_to_color:
+        non_global = {n["id"] for n in raw.get("nodes", []) if n.get("type") != "global"}
+        targets = {e["target"] for e in raw.get("edges", [])}
+        for nid in non_global:
+            if nid not in targets:
+                root_to_color[nid] = "f"
 
-        edges = [
-            edge
-            for edge in edges
-            if not (edge.get("source") == global_id and edge.get("type") == prov_type)
-        ]
-        edges.append({"source": global_id, "target": agg_id, "type": prov_type})
-        for root in roots:
-            edges.append({"source": agg_id, "target": root, "type": "child_of"})
+    # Annotate root nodes in raw.
+    node_by_id = {n["id"]: n for n in raw.get("nodes", [])}
+    for root_id, color in root_to_color.items():
+        if root_id in node_by_id:
+            node_by_id[root_id]["type"] = "root"
+            node_by_id[root_id]["root_color"] = ROOT_COLOR_VOCAB[color]
 
-    implicit_specs = (
-        ("f_root", "belongs_to_f", lambda node_id: not node_id.startswith(("d1_", "d2_"))),
-        ("d1_root", "belongs_to_d1", lambda node_id: node_id.startswith("d1_")),
-        ("d2_root", "belongs_to_d2", lambda node_id: node_id.startswith("d2_")),
-    )
-    for agg_id, prov_type, id_predicate in implicit_specs:
-        if agg_id in node_ids:
-            continue
-
-        ast_nodes = [
-            node["id"]
-            for node in raw["nodes"]
-            if node["id"] != global_id
-            and node.get("type") not in VIRTUAL_NODE_TYPES
-            and node.get("type") != "global"
-            and id_predicate(str(node["id"]))
-        ]
-        if not ast_nodes:
-            continue
-
-        ast_set = set(ast_nodes)
-        internal_child_targets = {
-            edge["target"]
-            for edge in edges
-            if edge.get("type") == "child_of" and edge["source"] in ast_set
-        }
-        roots = [node_id for node_id in ast_nodes if node_id not in internal_child_targets]
-        if not roots:
-            roots = ast_nodes
-
-        raw["nodes"].append({
-            "id": agg_id,
-            "label": agg_id,
-            "type": agg_id,
-            "value": None,
-        })
-        node_ids.add(agg_id)
-        edges.append({"source": global_id, "target": agg_id, "type": prov_type})
-        for root in roots:
-            edges.append({"source": agg_id, "target": root, "type": "child_of"})
-
-    raw["edges"] = edges
+    # Replace belongs_to_* edges with child_of edges (global → root).
+    new_edges = []
+    for edge in raw.get("edges", []):
+        etype = edge.get("type", "")
+        if edge.get("source") == global_id and etype in prov_to_color:
+            new_edges.append({"source": global_id, "target": edge["target"], "type": "child_of"})
+        else:
+            new_edges.append(edge)
+    raw["edges"] = new_edges
 
 
 class ExpressionGraphData(Data):
@@ -422,19 +575,13 @@ class TopologicalFeatureExtractor:
         # Out-Degrees (Out-Degree)
         out_degrees = {node: G.out_degree(node) for node in G.nodes}
 
-        # Undirected graph representation for Laplacians, LPE, RWPE, and Undirected Centralities
+        # Undirected graph representation for the Laplacian and undirected centralities
+        # (the anchor PE builds its own undirected view inside its helper).
         G_und = G.to_undirected()
         num_nodes = G_und.number_of_nodes()
 
         # Betweenness Centrality (computed on undirected graph)
         betweenness = nx.betweenness_centrality(G_und)
-
-        # Edge Betweenness Centrality (computed on undirected graph)
-        edge_betweenness = nx.edge_betweenness_centrality(G_und)
-        eb_lookup = {}
-        for (u, v), val in edge_betweenness.items():
-            eb_lookup[(u, v)] = val
-            eb_lookup[(v, u)] = val
 
         # Laplace-Matrix (Graph)
         if num_nodes > 0:
@@ -442,68 +589,19 @@ class TopologicalFeatureExtractor:
         else:
             laplace_matrix = np.zeros((0, 0))
 
-        # Laplacian Positional Encodings (LPE) (dimension 4)
-        lpe_features = np.zeros((num_nodes, 4))
-        if num_nodes > 1:
-            try:
-                A = nx.to_numpy_array(G_und)
-                d = A.sum(axis=1)
-                d_inv_sqrt = np.zeros_like(d)
-                d_inv_sqrt[d > 0] = np.power(d[d > 0], -0.5)
-                D_inv_sqrt = np.diag(d_inv_sqrt)
-                L_norm = np.eye(num_nodes) - D_inv_sqrt @ A @ D_inv_sqrt
-                
-                evals, evecs = np.linalg.eigh(L_norm)
-                idx = np.argsort(evals)
-                evals = evals[idx]
-                evecs = evecs[:, idx]
-                
-                lpe_list = []
-                for i in range(1, 5):
-                    if i < num_nodes:
-                        # abs() removes arbitrary sign ambiguity from eigh eigenvectors
-                        lpe_list.append(np.abs(evecs[:, i]))
-                    else:
-                        lpe_list.append(np.zeros(num_nodes))
-                lpe_features = np.stack(lpe_list, axis=1)
-            except Exception:
-                lpe_features = np.zeros((num_nodes, 4))
-
-        # Random Walk Positional Encodings (RWPE) (4 steps).
-        # NOTE: the AST is a tree, hence bipartite. On a bipartite graph the
-        # return probability of a *non-lazy* random walk is exactly 0 for every
-        # odd number of steps, which previously made rwpe_1/rwpe_3 dead (all-zero)
-        # features. We use a *lazy* random walk P = 1/2 (I + D^-1 A) and record
-        # the return probabilities for steps k=2..5, so all four dimensions carry
-        # structural information regardless of bipartiteness.
-        rwpe_features = np.zeros((num_nodes, 4))
-        if num_nodes > 0:
-            try:
-                A = nx.to_numpy_array(G_und)
-                d = A.sum(axis=1)
-                d_inv = np.zeros_like(d)
-                d_inv[d > 0] = 1.0 / d[d > 0]
-                D_inv = np.diag(d_inv)
-                P_lazy = 0.5 * (np.eye(num_nodes) + D_inv @ A)
-
-                # Skip k=1 (its diagonal is the constant 0.5 for every node and
-                # therefore carries no structural signal); record k=2..5.
-                Pk = P_lazy @ P_lazy
-                for step in range(4):
-                    rwpe_features[:, step] = np.diag(Pk)
-                    Pk = Pk @ P_lazy
-            except Exception:
-                rwpe_features = np.zeros((num_nodes, 4))
+        # Anchor-based positional encoding (replaces the former LPE / RWPE). Encodes each
+        # node by 1/(1+d) proximity to the nearest anchor of each semantic operator group,
+        # measured within the node's own function subgraph. See
+        # _compute_anchor_positional_encoding for the full definition.
+        anchor_pe = _compute_anchor_positional_encoding(G)
 
         results.update({
             "heights": heights,
             "subtree_sizes": subtree_sizes,
             "out_degrees": out_degrees,
             "betweenness": betweenness,
-            "edge_betweenness": eb_lookup,
             "laplace_matrix": laplace_matrix,
-            "lpe": lpe_features,
-            "rwpe": rwpe_features,
+            "anchor_pe": anchor_pe,
         })
         return results
 
@@ -548,7 +646,6 @@ def build_augmented_math_graph(
             child_index=0.0,
             direction=0.0,
             relation_type=float(etype_id),
-            edge_betweenness_centrality=0.0,
             etype=etype,
         )
 
@@ -609,15 +706,17 @@ def build_augmented_math_graph(
 
 
 class ExpressionGraphConverter:
+    # node_type codes: 0=global, 1=operator (incl. function/variable/constant), 2=root, 5=supernode.
+    # Legacy types (function/variable/constant) all map to 1 for backward compatibility
+    # with datasets that still carry those type strings.
     NODE_TYPES = {
         "global": 0,
         "operator": 1,
-        "constant": 2,
-        "variable": 3,
-        "function": 4,
-        "f_root": 6,
-        "d1_root": 9,
-        "d2_root": 10,
+        "function": 1,
+        "variable": 1,
+        "constant": 1,
+        "root": 2,
+        "supernode": SUPERNODE_NODE_TYPE,
     }
 
     def __init__(self):
@@ -630,7 +729,6 @@ class ExpressionGraphConverter:
         child: str,
         child_idx: int,
         etype: str,
-        eb_val: float,
         edge_direction: str,
     ) -> None:
         effective = edge_direction
@@ -647,7 +745,6 @@ class ExpressionGraphConverter:
                 child_index=float(child_idx),
                 direction=0.0,
                 relation_type=float(self._encode_edge_type(rel_forward)),
-                edge_betweenness_centrality=eb_val,
                 etype=etype,
             )
         if effective in ("bottom_up", "bidirectional"):
@@ -657,7 +754,6 @@ class ExpressionGraphConverter:
                 child_index=float(child_idx),
                 direction=1.0 if effective == "bidirectional" else 0.0,
                 relation_type=float(self._encode_edge_type(rel_reverse)),
-                edge_betweenness_centrality=eb_val,
                 etype=etype + "_reverse",
             )
 
@@ -667,60 +763,54 @@ class ExpressionGraphConverter:
         heterogeneous: bool = False,
         mode: str = "graph",
         edge_direction: str = "top_down",
+        add_virtual_supernode: bool = False,
     ) -> Union[Data, HeteroData]:
         edge_direction = validate_edge_direction(edge_direction)
         
         if isinstance(source, nx.DiGraph):
-            # Extract AST nodes and edges to construct G_ast for topological extraction
+            # Extract pure AST nodes (exclude global and kappa subgraph).
             ast_nodes = [
-                n for n in source.nodes 
-                if n not in ("global", "f_root", "d1_root", "d2_root")
+                n for n in source.nodes
+                if n != "global"
                 and not str(n).startswith("kappa_")
+                and str(n) != SUPERNODE_NODE_ID
             ]
             G_ast = source.subgraph(ast_nodes).copy()
             topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
+            hist = _compute_subtree_histograms(G_ast)
             ast_node_ids = list(G_ast.nodes)
             ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
-            
+
             node_ids = list(source.nodes)
             G_directed = source
-            
+
             # Enrich/add features to G_enriched
             G_enriched = nx.DiGraph()
-            
+
             for node in node_ids:
                 attrs = source.nodes[node]
                 enriched_attrs = attrs.copy()
                 ast_idx = ast_id_to_idx.get(node)
 
                 if ast_idx is not None:
-                    enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
-                    enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
                     enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
-                    enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
-                    enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                    enriched_attrs["subtree_depth"] = float(topo["heights"].get(node, 0.0))
+                    node_hist = hist.get(node, np.zeros(NUM_HISTOGRAM_BINS))
+                    for _col, _name in enumerate(HISTOGRAM_FEATURES):
+                        enriched_attrs[_name] = float(node_hist[_col])
+                    for _col, _name in enumerate(ANCHOR_GROUP_FEATURES):
+                        enriched_attrs[_name] = float(topo["anchor_pe"][ast_idx, _col])
                 else:
-                    enriched_attrs["depth"] = 0.0
-                    enriched_attrs["height"] = 0.0
-                    enriched_attrs["subtree_size"] = 1.0
-                    enriched_attrs["out_degree"] = 0.0
-                    enriched_attrs["betweenness_centrality"] = 0.0
-                    enriched_attrs["lpe_1"] = 0.0
-                    enriched_attrs["lpe_2"] = 0.0
-                    enriched_attrs["lpe_3"] = 0.0
-                    enriched_attrs["lpe_4"] = 0.0
-                    enriched_attrs["rwpe_1"] = 0.0
-                    enriched_attrs["rwpe_2"] = 0.0
-                    enriched_attrs["rwpe_3"] = 0.0
-                    enriched_attrs["rwpe_4"] = 0.0
+                    enriched_attrs["subtree_size"] = 0.0
+                    enriched_attrs["subtree_depth"] = 0.0
+                    for _name in HISTOGRAM_FEATURES:
+                        enriched_attrs[_name] = 0.0
+                    for _name in ANCHOR_GROUP_FEATURES:
+                        enriched_attrs[_name] = 0.0
+
+                # Ensure root_color is present (may have been set before conversion).
+                if "root_color" not in enriched_attrs:
+                    enriched_attrs["root_color"] = float(ROOT_COLOR_VOCAB["none"])
 
                 G_enriched.add_node(node, **enriched_attrs)
 
@@ -737,17 +827,18 @@ class ExpressionGraphConverter:
                 child_idx = child_counters.get(parent, 0)
                 child_counters[parent] = child_idx + 1
 
-                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
                 self._add_ast_edges(
-                    G_enriched, parent, child, child_idx, etype, eb_val, edge_direction
+                    G_enriched, parent, child, child_idx, etype, edge_direction
                 )
 
+            # Include global→root child_of edges so the DFS can traverse from global
+            # into each function subtree and correctly track NextUse variable reuse.
             children_dict = {}
-            for u, v, attrs in G_ast.edges(data=True):
+            for u, v, attrs in G_directed.edges(data=True):
                 etype = attrs.get("etype") or attrs.get("type") or "child_of"
                 if etype == "child_of":
                     children_dict.setdefault(u, []).append(v)
-                    
+
             raw = None
         else:
             raw = self._load(source)
@@ -780,61 +871,50 @@ class ExpressionGraphConverter:
                 roots_d1 = find_roots(nodes_d1, edges_d1)
                 roots_d2 = find_roots(nodes_d2, edges_d2)
 
+                # Mark actual AST roots with type="root" and root_color.
+                _root_specs = [("f", roots_f, nodes_f), ("d1", roots_d1, nodes_d1), ("d2", roots_d2, nodes_d2)]
+                for color, roots, nodes_list in _root_specs:
+                    root_set = set(roots)
+                    for node in nodes_list:
+                        if node["id"] in root_set:
+                            node["type"] = "root"
+                            node["root_color"] = ROOT_COLOR_VOCAB[color]
+
                 combined_edges = edges_f + edges_d1 + edges_d2
-                if roots_f:
-                    combined_nodes.append({
-                        "id": "f_root", "label": "f_root", "type": "f_root", "value": None
-                    })
-                    combined_edges.append({"source": "f_root", "target": "global", "type": "belongs_to_f"})
-                    for root in roots_f:
-                        combined_edges.append({"source": root, "target": "f_root", "type": "child_of"})
-                if roots_d1:
-                    combined_nodes.append({
-                        "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
-                    })
-                    combined_edges.append({"source": "d1_root", "target": "global", "type": "belongs_to_d1"})
-                    for root in roots_d1:
-                        combined_edges.append({"source": root, "target": "d1_root", "type": "child_of"})
-                if roots_d2:
-                    combined_nodes.append({
-                        "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
-                    })
-                    combined_edges.append({"source": "d2_root", "target": "global", "type": "belongs_to_d2"})
-                    for root in roots_d2:
-                        combined_edges.append({"source": root, "target": "d2_root", "type": "child_of"})
+                # Direct global → root child_of edges replace the old aggregator chain.
+                for color, roots in [("f", roots_f), ("d1", roots_d1), ("d2", roots_d2)]:
+                    for root in roots:
+                        combined_edges.append({"source": "global", "target": root, "type": "child_of"})
 
                 raw["nodes"] = combined_nodes
                 raw["edges"] = combined_edges
             else:
                 raw["nodes"] = list(raw.get("nodes", []))
                 raw["edges"] = list(raw.get("edges", []))
-                _insert_function_aggregators(raw)
+                _mark_function_roots(raw)
 
-            # Topology is computed on the pure AST (before virtual nodes are injected).
-            raw_ast = {"nodes": list(raw["nodes"]), "edges": list(raw["edges"])}
-            belongs_to_f_map = compute_belongs_to_f(raw_ast)
-            belongs_to_d1_map = compute_belongs_to_d1(raw_ast)
-            belongs_to_d2_map = compute_belongs_to_d2(raw_ast)
-            # 1. Build AST graph for structural features (excludes virtual nodes)
-            G_ast = self._build_networkx(
-                raw_ast,
-                belongs_to_f_map=belongs_to_f_map,
-                belongs_to_d1_map=belongs_to_d1_map,
-                belongs_to_d2_map=belongs_to_d2_map,
-            )
+            # Topology and histogram are computed on the pure AST (excludes global + kappa).
+            global_id_raw = _find_global_node_id(raw) or "global"
+            raw_ast = {
+                "nodes": [n for n in raw["nodes"]
+                          if n["id"] != global_id_raw and not str(n["id"]).startswith("kappa_")],
+                "edges": [e for e in raw["edges"]
+                          if e["source"] != global_id_raw and e["target"] != global_id_raw
+                          and not str(e["source"]).startswith("kappa_")
+                          and not str(e["target"]).startswith("kappa_")],
+            }
+
+            # 1. Build AST graph for structural features (excludes global + kappa nodes)
+            G_ast = self._build_networkx(raw_ast)
             topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
+            hist = _compute_subtree_histograms(G_ast)
             ast_node_ids = list(G_ast.nodes)
             ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
 
-            # 2. Build full directed graph (includes virtual nodes when mode=graph)
-            G_directed = self._build_networkx(
-                raw,
-                belongs_to_f_map=belongs_to_f_map,
-                belongs_to_d1_map=belongs_to_d1_map,
-                belongs_to_d2_map=belongs_to_d2_map,
-            )
+            # 2. Build full directed graph
+            G_directed = self._build_networkx(raw)
 
-            # 3. Enrich attributes based on mode
+            # 3. Enrich node attributes
             G_enriched = nx.DiGraph()
             node_ids = list(G_directed.nodes)
 
@@ -844,33 +924,20 @@ class ExpressionGraphConverter:
                 ast_idx = ast_id_to_idx.get(node)
 
                 if ast_idx is not None:
-                    enriched_attrs["depth"] = float(topo["depths"].get(node, 0.0))
-                    enriched_attrs["height"] = float(topo["heights"].get(node, 0.0))
                     enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
-                    enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
-                    enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                    enriched_attrs["subtree_depth"] = float(topo["heights"].get(node, 0.0))
+                    node_hist = hist.get(node, np.zeros(NUM_HISTOGRAM_BINS))
+                    for _col, _name in enumerate(HISTOGRAM_FEATURES):
+                        enriched_attrs[_name] = float(node_hist[_col])
+                    for _col, _name in enumerate(ANCHOR_GROUP_FEATURES):
+                        enriched_attrs[_name] = float(topo["anchor_pe"][ast_idx, _col])
                 else:
-                    enriched_attrs["depth"] = 0.0
-                    enriched_attrs["height"] = 0.0
-                    enriched_attrs["subtree_size"] = 1.0
-                    enriched_attrs["out_degree"] = 0.0
-                    enriched_attrs["betweenness_centrality"] = 0.0
-                    enriched_attrs["lpe_1"] = 0.0
-                    enriched_attrs["lpe_2"] = 0.0
-                    enriched_attrs["lpe_3"] = 0.0
-                    enriched_attrs["lpe_4"] = 0.0
-                    enriched_attrs["rwpe_1"] = 0.0
-                    enriched_attrs["rwpe_2"] = 0.0
-                    enriched_attrs["rwpe_3"] = 0.0
-                    enriched_attrs["rwpe_4"] = 0.0
+                    enriched_attrs["subtree_size"] = 0.0
+                    enriched_attrs["subtree_depth"] = 0.0
+                    for _name in HISTOGRAM_FEATURES:
+                        enriched_attrs[_name] = 0.0
+                    for _name in ANCHOR_GROUP_FEATURES:
+                        enriched_attrs[_name] = 0.0
 
                 G_enriched.add_node(node, **enriched_attrs)
 
@@ -883,23 +950,20 @@ class ExpressionGraphConverter:
                 child_idx = child_counters.get(parent, 0)
                 child_counters[parent] = child_idx + 1
 
-                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
                 self._add_ast_edges(
                     G_enriched,
                     parent,
                     child,
                     child_idx,
                     etype,
-                    eb_val,
                     edge_direction,
                 )
 
-            # Build children_dict from all parent-to-child edges in raw_ast
+            # Include global→root edges so the DFS from global reaches all AST nodes.
             children_dict = {}
-            for edge in raw_ast.get("edges", []):
-                parent = edge["source"]
-                child = edge["target"]
-                children_dict.setdefault(parent, []).append(child)
+            for edge in raw.get("edges", []):
+                if edge.get("type") == "child_of":
+                    children_dict.setdefault(edge["source"], []).append(edge["target"])
 
         # Common G_enriched processing (augmented features path).
         # The augmented NextUse / function-nesting edges turn the expression *tree*
@@ -925,6 +989,12 @@ class ExpressionGraphConverter:
                         children_dict,
                         edge_direction,
                     )
+
+        # Optional fully-connected supernode: injected after topology/PE features and the
+        # augmented edges so it does not perturb the AST structural features. Independent
+        # of mode — it connects to every node regardless of graph/tree/tree_derivatives.
+        if add_virtual_supernode:
+            inject_virtual_supernode(G_enriched, G_directed, node_ids)
 
         # Gather node_kappas mapping matching node_ids
         node_kappas = [G_enriched.nodes[nid].get("kappa_value") for nid in node_ids]
@@ -954,7 +1024,7 @@ class ExpressionGraphConverter:
         for u, v in G_enriched.edges:
             for key in all_edge_keys:
                 if key not in G_enriched.edges[u, v]:
-                    if key in ("child_index", "direction", "relation_type", "edge_betweenness_centrality", "kappa_weight", "edge_type"):
+                    if key in ("child_index", "direction", "relation_type", "kappa_weight", "edge_type"):
                         G_enriched.edges[u, v][key] = 0.0
                     else:
                         G_enriched.edges[u, v][key] = None
@@ -975,27 +1045,13 @@ class ExpressionGraphConverter:
         node_type_tensor = torch.tensor(
             [G_directed.nodes[n]["node_type"] for n in node_ids], dtype=torch.long
         )
-        label_id_tensor = torch.tensor(
-            [G_directed.nodes[n]["label_id"] for n in node_ids], dtype=torch.long
+        root_color_tensor = torch.tensor(
+            [G_directed.nodes[n].get("root_color", ROOT_COLOR_VOCAB["none"]) for n in node_ids],
+            dtype=torch.long,
         )
-        belongs_to_f_tensor = torch.tensor(
-            [G_directed.nodes[n]["belongs_to_f"] for n in node_ids], dtype=torch.float
-        )
-        belongs_to_d1_tensor = torch.tensor(
-            [G_directed.nodes[n]["belongs_to_d1"] for n in node_ids], dtype=torch.float
-        )
-        belongs_to_d2_tensor = torch.tensor(
-            [G_directed.nodes[n]["belongs_to_d2"] for n in node_ids], dtype=torch.float
-        )
-        if heterogeneous:
-            # Bypassed because true heterogeneous doesn't use a monolithic 'node' type
-            pass
-        else:
+        if not heterogeneous:
             data.node_type = node_type_tensor
-            data.label_id = label_id_tensor
-            data.belongs_to_f = belongs_to_f_tensor
-            data.belongs_to_d1 = belongs_to_d1_tensor
-            data.belongs_to_d2 = belongs_to_d2_tensor
+            data.root_color = root_color_tensor
 
         # Add global graph features
         data.tree_depth = topo["tree_depth"]
@@ -1021,49 +1077,17 @@ class ExpressionGraphConverter:
     def _encode_edge_type(self, etype: str) -> int:
         return encode_edge_type(etype)
 
-    def _build_networkx(
-        self,
-        raw: dict,
-        belongs_to_f_map: dict[str, float] | None = None,
-        belongs_to_d1_map: dict[str, float] | None = None,
-        belongs_to_d2_map: dict[str, float] | None = None,
-    ) -> nx.DiGraph:
-        if belongs_to_f_map is None:
-            belongs_to_f_map = compute_belongs_to_f(raw)
-        if belongs_to_d1_map is None:
-            belongs_to_d1_map = compute_belongs_to_d1(raw)
-        if belongs_to_d2_map is None:
-            belongs_to_d2_map = compute_belongs_to_d2(raw)
+    def _build_networkx(self, raw: dict) -> nx.DiGraph:
         G = nx.DiGraph()
         for node in raw["nodes"]:
-            val_dict = node.get("value")
-            if isinstance(val_dict, dict) and val_dict.get("mantissa") is not None:
-                mantissa = val_dict["mantissa"]
-                exponent = val_dict.get("exponent", 0)
-                actual_value = float(mantissa * (10 ** exponent))
-                has_val = 1.0
-            else:
-                if isinstance(val_dict, (int, float)):
-                    actual_value = float(val_dict)
-                    has_val = 1.0
-                else:
-                    actual_value = 0.0
-                    has_val = 0.0
-
+            orig_type = node.get("type", "operator")
+            node_type_code = self.NODE_TYPES.get(orig_type, 1)
             G.add_node(
                 node["id"],
-                node_type=self.NODE_TYPES[node["type"]],
+                node_type=node_type_code,
+                root_color=float(node.get("root_color", ROOT_COLOR_VOCAB["none"])),
                 label_id=self._encode_label(node["label"]),
-                value=float(actual_value),
-                has_value=has_val,
-                belongs_to_f=float(belongs_to_f_map.get(node["id"], 0.0)),
-                belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),
-                belongs_to_d2=float(belongs_to_d2_map.get(node["id"], 0.0)),
-                virtual_current_x_val=0.0,
-                virtual_delta_target_val=0.0,
-                virtual_d1_x_val=0.0,
-                virtual_d2_x_val=0.0,
-                type=node["type"],
+                type=orig_type,
                 label=node["label"],
             )
         for edge in raw["edges"]:
@@ -1173,72 +1197,11 @@ def populate_task_virtual_values(
     Exceptions:
         None
     """
-    if isinstance(data, HeteroData):
-        if 'virtual' not in data.node_types or not hasattr(data['virtual'], 'node_ids') or data['virtual'].node_ids is None:
-            return
-        if not hasattr(data['virtual'], 'x') or data['virtual'].x is None:
-            return
-            
-        virtual_node_ids = data['virtual'].node_ids
-        
-        def write_hetero(node_id: str, col_idx: int, value: float) -> None:
-            if node_id_indices is not None:
-                if node_id in node_id_indices:
-                    idx = node_id_indices[node_id]
-                    data['virtual'].x[idx, col_idx] = float(value)
-            elif node_id in virtual_node_ids:
-                idx = virtual_node_ids.index(node_id)
-                data['virtual'].x[idx, col_idx] = float(value)
-                
-        try:
-            delta_val = yt_val - fx_val
-            task_target = "f_root" if "f_root" in virtual_node_ids else "global"
-            write_hetero(task_target, 0, cx_val)
-            write_hetero(task_target, 1, delta_val)
-            write_hetero("d1_root", 2, d1x_val)
-            write_hetero("d2_root", 3, d2x_val)
-        except ValueError:
-            pass
-        return
-
-    if not hasattr(data, "node_ids") or data.node_ids is None or data.x is None:
-        return
-    if len(data.x.shape) != 2:
-        return
-
-    schema = NODE_FEATURE_SCHEMA
-    expected_count = len(schema)
-    if data.x.shape[1] != expected_count:
-        return
-
-    cx_idx = schema.index("virtual_current_x_val")
-    dt_idx = schema.index("virtual_delta_target_val")
-    d1_idx = schema.index("virtual_d1_x_val")
-    d2_idx = schema.index("virtual_d2_x_val")
-    has_idx = schema.index("has_value") if set_has_value else None
-
-    def write(node_id: str, col_idx: int, value: float) -> None:
-        if node_id_indices is not None:
-            if node_id not in node_id_indices:
-                raise ValueError
-            idx = node_id_indices[node_id]
-        else:
-            idx = data.node_ids.index(node_id)
-        data.x[idx, col_idx] = float(value)
-        if has_idx is not None:
-            data.x[idx, has_idx] = 1.0
-
-    try:
-        delta_val = yt_val - fx_val
-        task_target = "f_root" if "f_root" in data.node_ids else "global"
-        write(task_target, cx_idx, cx_val)
-        write(task_target, dt_idx, delta_val)
-        if "d1_root" in data.node_ids:
-            write("d1_root", d1_idx, d1x_val)
-        if "d2_root" in data.node_ids:
-            write("d2_root", d2_idx, d2x_val)
-    except ValueError:
-        pass
+    # Task-value slots (virtual_current_x_val, virtual_delta_target_val, …) were removed
+    # from NODE_FEATURE_SCHEMA in the position-aware GNN rewrite. The RL workflow will be
+    # redesigned to convey solver state via a separate mechanism. This function is kept as
+    # a graceful no-op so call sites don't need to be updated immediately.
+    pass
 
 
 def slice_active_features(x: torch.Tensor, active_features: list[str] | None) -> torch.Tensor:
@@ -1371,10 +1334,13 @@ def create_virtual_global_node(
     g_d1 = to_digraph(graph_derivative)
     g_d2 = to_digraph(graph_secondderivative)
 
-    def normalize_graph(G: nx.DiGraph):
+    def normalize_graph(G: nx.DiGraph, color: str):
         G_norm = nx.DiGraph()
+        # Identify root nodes (in-degree 0) before building so we can colour them.
+        in_degree_zero = {nid for nid, d in G.in_degree() if d == 0}
         for nid, attrs in G.nodes(data=True):
-            if "node_type" in attrs:
+            if "node_type" in attrs and attrs["node_type"] != 1:
+                # Already fully encoded (e.g. re-entrant call); just copy.
                 G_norm.add_node(nid, **attrs)
                 continue
             name_val = attrs.get("Name") or attrs.get("nodeKey1")
@@ -1382,35 +1348,23 @@ def create_virtual_global_node(
                 label = str(nid)
             else:
                 label = parse_graphml_node_name(name_val)
-            type_str = _determine_node_type_from_label(label)
-            val = 0.0
-            has_val = 0.0
-            if type_str == "constant":
-                val = _parse_constant_value(label)
-                has_val = 1.0
+            is_root = nid in in_degree_zero
+            type_str = "root" if is_root else _determine_node_type_from_label(label)
             G_norm.add_node(
                 nid,
-                node_type=ExpressionGraphConverter.NODE_TYPES[type_str],
+                node_type=ExpressionGraphConverter.NODE_TYPES.get(type_str, 1),
+                root_color=float(ROOT_COLOR_VOCAB[color] if is_root else ROOT_COLOR_VOCAB["none"]),
                 label_id=encode_label(label),
                 label=label,
                 type=type_str,
-                value=float(val),
-                has_value=has_val,
-                belongs_to_f=0.0,
-                belongs_to_d1=0.0,
-                belongs_to_d2=0.0,
-                virtual_current_x_val=0.0,
-                virtual_delta_target_val=0.0,
-                virtual_d1_x_val=0.0,
-                virtual_d2_x_val=0.0
             )
         for u, v, attrs in G.edges(data=True):
             G_norm.add_edge(u, v, **attrs)
         return G_norm
 
-    g_f = normalize_graph(g_f)
-    g_d1 = normalize_graph(g_d1)
-    g_d2 = normalize_graph(g_d2)
+    g_f = normalize_graph(g_f, "f")
+    g_d1 = normalize_graph(g_d1, "d1")
+    g_d2 = normalize_graph(g_d2, "d2")
 
     roots_f = [n for n, d in g_f.in_degree() if d == 0]
     roots_d1 = [n for n, d in g_d1.in_degree() if d == 0]
@@ -1420,18 +1374,10 @@ def create_virtual_global_node(
     G_combined.add_node(
         "global",
         node_type=ExpressionGraphConverter.NODE_TYPES["global"],
+        root_color=float(ROOT_COLOR_VOCAB["none"]),
         label_id=encode_label("GLOBAL"),
         label="GLOBAL",
         type="global",
-        value=0.0,
-        has_value=0.0,
-        belongs_to_f=0.0,
-        belongs_to_d1=0.0,
-        belongs_to_d2=0.0,
-        virtual_current_x_val=0.0,
-        virtual_delta_target_val=0.0,
-        virtual_d1_x_val=0.0,
-        virtual_d2_x_val=0.0
     )
 
     def add_component(g_comp, prefix: str):
@@ -1444,40 +1390,13 @@ def create_virtual_global_node(
     add_component(g_d1, "d1")
     add_component(g_d2, "d2")
 
-    prov_edge_by_agg = {
-        "f_root": "belongs_to_f",
-        "d1_root": "belongs_to_d1",
-        "d2_root": "belongs_to_d2",
-    }
-
-    def add_aggregator(agg_id: str, agg_type: str, roots: list, prefix: str):
-        if not roots:
-            return
-        G_combined.add_node(
-            agg_id,
-            node_type=ExpressionGraphConverter.NODE_TYPES[agg_type],
-            label_id=encode_label(agg_id),
-            label=agg_id,
-            type=agg_type,
-            value=0.0,
-            has_value=0.0,
-            belongs_to_f=1.0 if agg_type == "f_root" else 0.0,
-            belongs_to_d1=1.0 if agg_type == "d1_root" else 0.0,
-            belongs_to_d2=1.0 if agg_type == "d2_root" else 0.0,
-            virtual_current_x_val=0.0,
-            virtual_delta_target_val=0.0,
-            virtual_d1_x_val=0.0,
-            virtual_d2_x_val=0.0,
-        )
-        G_combined.add_edge(
-            "global", agg_id, edge_type=encode_edge_type(prov_edge_by_agg[agg_type])
-        )
-        for r in roots:
-            G_combined.add_edge(agg_id, f"{prefix}_{r}", edge_type=encode_edge_type("child_of"))
-
-    add_aggregator("f_root", "f_root", roots_f, "f")
-    add_aggregator("d1_root", "d1_root", roots_d1, "d1")
-    add_aggregator("d2_root", "d2_root", roots_d2, "d2")
+    # Connect global directly to each function tree root (no aggregator nodes).
+    for r in roots_f:
+        G_combined.add_edge("global", f"f_{r}", edge_type=encode_edge_type("child_of"))
+    for r in roots_d1:
+        G_combined.add_edge("global", f"d1_{r}", edge_type=encode_edge_type("child_of"))
+    for r in roots_d2:
+        G_combined.add_edge("global", f"d2_{r}", edge_type=encode_edge_type("child_of"))
 
     return G_combined
 
@@ -1639,19 +1558,11 @@ class AugmentedFunctionGraph(nx.DiGraph):
         self.add_node(
             global_id,
             node_type=ExpressionGraphConverter.NODE_TYPES.get("global", 0),
+            root_color=float(ROOT_COLOR_VOCAB["none"]),
             label_id=encode_label("GLOBAL"),
             label="GLOBAL",
             type="global",
-            value=0.0,
-            has_value=0.0,
-            belongs_to_f=0.0,
-            belongs_to_d1=0.0,
-            belongs_to_d2=0.0,
-            virtual_current_x_val=0.0,
-            virtual_delta_target_val=0.0,
-            virtual_d1_x_val=0.0,
-            virtual_d2_x_val=0.0,
-            context_type=nodeType
+            context_type=nodeType,
         )
         return global_id
 
@@ -1704,23 +1615,15 @@ class AugmentedFunctionGraph(nx.DiGraph):
                     val = _parse_constant_value(label)
                 has_val = 1.0
 
-            ntype_code = ExpressionGraphConverter.NODE_TYPES.get(type_str, 4)
+            ntype_code = ExpressionGraphConverter.NODE_TYPES.get(type_str, 1)
 
             normalized_g_kappa.add_node(
                 nid,
                 node_type=ntype_code,
+                root_color=float(ROOT_COLOR_VOCAB["none"]),
                 label_id=encode_label(label),
                 label=label,
                 type=type_str,
-                value=float(val),
-                has_value=has_val,
-                belongs_to_f=0.0,
-                belongs_to_d1=0.0,
-                belongs_to_d2=0.0,
-                virtual_current_x_val=0.0,
-                virtual_delta_target_val=0.0,
-                virtual_d1_x_val=0.0,
-                virtual_d2_x_val=0.0
             )
 
         for u, v, attrs in g_kappa.edges(data=True):
@@ -1746,7 +1649,12 @@ class AugmentedFunctionGraph(nx.DiGraph):
 
         for nid, attrs in normalized_g_kappa.nodes(data=True):
             shifted_id = f"{prefix}_{nid}"
-            self.add_node(shifted_id, **attrs)
+            node_attrs = dict(attrs)
+            if nid == original_root:
+                node_attrs["node_type"] = ExpressionGraphConverter.NODE_TYPES["root"]
+                node_attrs["root_color"] = float(ROOT_COLOR_VOCAB["kappa"])
+                node_attrs["type"] = "root"
+            self.add_node(shifted_id, **node_attrs)
 
         for u, v, attrs in normalized_g_kappa.edges(data=True):
             self.add_edge(f"{prefix}_{u}", f"{prefix}_{v}", **attrs)
@@ -1867,39 +1775,17 @@ def LoadGraphFromLocalStructure(folder: Union[Path, str], id: str) -> AugmentedF
         nodes = raw_data.get("nodes", [])
         edges = raw_data.get("edges", [])
 
-        belongs_to_f_map = compute_belongs_to_f(raw_data)
-        belongs_to_d1_map = compute_belongs_to_d1(raw_data)
-        belongs_to_d2_map = compute_belongs_to_d2(raw_data)
+        _mark_function_roots(raw_data)
 
         for node in nodes:
-            val_dict = node.get("value")
-            if isinstance(val_dict, dict) and val_dict.get("mantissa") is not None:
-                mantissa = val_dict["mantissa"]
-                exponent = val_dict.get("exponent", 0)
-                actual_value = float(mantissa * (10 ** exponent))
-                has_val = 1.0
-            else:
-                if isinstance(val_dict, (int, float)):
-                    actual_value = float(val_dict)
-                    has_val = 1.0
-                else:
-                    actual_value = 0.0
-                    has_val = 0.0
-
+            orig_type = node.get("type", "operator")
+            ntype_code = ExpressionGraphConverter.NODE_TYPES.get(orig_type, 1)
             nx_graph.add_node(
                 node["id"],
-                node_type=ExpressionGraphConverter.NODE_TYPES[node["type"]],
+                node_type=ntype_code,
+                root_color=float(node.get("root_color", ROOT_COLOR_VOCAB["none"])),
                 label_id=encode_label(node["label"]),
-                value=float(actual_value),
-                has_value=has_val,
-                belongs_to_f=float(belongs_to_f_map.get(node["id"], 0.0)),
-                belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),
-                belongs_to_d2=float(belongs_to_d2_map.get(node["id"], 0.0)),
-                virtual_current_x_val=0.0,
-                virtual_delta_target_val=0.0,
-                virtual_d1_x_val=0.0,
-                virtual_d2_x_val=0.0,
-                type=node["type"],
+                type=orig_type,
                 label=node["label"],
             )
         for edge in edges:

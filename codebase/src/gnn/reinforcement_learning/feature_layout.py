@@ -4,11 +4,13 @@ from dataclasses import dataclass
 
 from datetime import datetime
 
-from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA
+from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA, NODE_FEATURE_SCHEMA
 
 current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-NATIVE_NODE_FEATURE_COUNT = 24
+# Derived from the shared node schema (21 columns: removed lpe/rwpe, added the 5 anchor
+# positional-encoding columns) so it stays in sync with feature changes automatically.
+NATIVE_NODE_FEATURE_COUNT = len(NODE_FEATURE_SCHEMA)
 # Must equal the shared edge schema width: the policy backbone coalesces edge_attr to this
 # count before the edge encoder (which expects len(EDGE_FEATURE_SCHEMA) columns).
 NATIVE_EDGE_FEATURE_COUNT = len(EDGE_FEATURE_SCHEMA)

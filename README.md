@@ -75,8 +75,8 @@ python main.py --config config_supervised.yaml --mode tree
 # 5. Bottom-up Message Passing auf AST-Kanten:
 python main.py --config config_supervised.yaml --edge-direction bottom_up
 
-# 6. Nur Laplacian-Positional-Encoding (LPE), ohne Random-Walk-PE (RWPE):
-python main.py --config config_supervised.yaml --positional-encoding lpe
+# 6. Nur eine Anchor-Positional-Encoding-Gruppe (z. B. periodische Operatoren):
+python main.py --config config_supervised.yaml --positional-encoding anchor_periodic
 
 # 7. Keine Positional Encodings, nur Node- und Topologie-Features:
 python main.py --config config_supervised.yaml --feature-groups node topology --positional-encoding none
@@ -98,9 +98,9 @@ python main.py --config config_supervised.yaml --add-kappa
 | `--edge-direction` | `top_down` | `top_down`, `bottom_up`, `bidirectional` | AST-Message-Passing-Richtung (parent→child, child→parent oder beides). |
 | `--add-kappa` | *aus* | Flag | Fügt Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` über `GlobalToKappa`/`KappaToGlobal`-Kanten in jeden Graphen ein. Standardmäßig deaktiviert (Opt-in). |
 | `--feature-groups` | alle (aus Config) | Liste | Aktiviert nur bestimmte Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
-| `--positional-encoding` | `lpe rwpe` | Liste | Positional Encodings: `lpe` (Laplacian), `rwpe` (Random Walk), oder `none`. |
+| `--positional-encoding` | alle Gruppen | Liste | Anchor-Positional-Encoding-Gruppen: `anchor_additive`, `anchor_scaling`, `anchor_periodic`, `anchor_exponential`, `anchor_transcendental`, oder `none`. Inkompatibel mit `--add-virtual-supernode`. |
 | `--active-features` | `None` | String (Komma-separiert) | Explizite Teilmenge an Knoten-Features; überschreibt `--feature-groups` und `--positional-encoding`. |
-| `--enrich` | aus Config | Flag | Schaltet zwischen **12 Basis-Knoten-Features** und **24 angereicherten Knoten-Features** (plus native Edge-Features) um. |
+| `--enrich` | aus Config | Flag | Schaltet zwischen **12 Basis-Knoten-Features** und **21 angereicherten Knoten-Features** (plus native Edge-Features) um. |
 
 ---
 
@@ -261,9 +261,9 @@ Sie können Parameter direkt in `config_supervised.yaml` modifizieren:
     features:
       node: true               # node_type, label_id, value, virtual_*, belongs_to_*
       topology: true           # depth, height, subtree_size, out_degree, betweenness
-      positional:
-        enabled: true
-        encodings: [lpe, rwpe] # lpe = Laplacian PE, rwpe = Random-Walk PE
+      positional: true         # Anchor-PE-Gruppen (anchor_additive, …, anchor_transcendental);
+                               # true = alle, false = keine, [a, b] = Teilmenge.
+                               # Inkompatibel mit add_virtual_supernode.
       edge: true               # native edge_attr (child_index, direction, …)
     active_features: ""        # Optional: explizite Override-Liste
   ```
@@ -274,7 +274,7 @@ Sie können Parameter direkt in `config_supervised.yaml` modifizieren:
 | :--- | :--- |
 | **node** | `node_type`, `label_id`, `value`, `has_value`, `virtual_*`, `belongs_to_*` |
 | **topology** | `depth`, `height`, `subtree_size`, `out_degree`, `betweenness_centrality` |
-| **positional** | `lpe_1..4` (Laplacian), `rwpe_1..4` (Random Walk) |
+| **positional** | Anchor-PE: `anchor_additive`, `anchor_scaling`, `anchor_periodic`, `anchor_exponential`, `anchor_transcendental` (je `1/(1+hops)` zum nächsten Operator-Anker der Gruppe, pro Funktion) |
 | **edge** | `child_index`, `direction`, `relation_type`, `edge_betweenness_centrality` |
 
 Die Auflösung erfolgt zentral über `shared/utils/feature_config.py` und ist für Supervised und RL identisch.
@@ -301,8 +301,8 @@ python main.py --config config_rl.yaml --edge-direction bidirectional
 # Kappa- (h-Funktions-) Subgraphen einbinden:
 python main.py --config config_rl.yaml --add-kappa
 
-# Nur LPE, ohne RWPE:
-python main.py --config config_rl.yaml --positional-encoding lpe
+# Nur eine Anchor-PE-Gruppe (z. B. exponentielle Operatoren):
+python main.py --config config_rl.yaml --positional-encoding anchor_exponential
 
 # Pausierte Studie fortsetzen (Resume):
 python main.py --config config_rl.yaml --experiment kein_inv --continue-study --n-envs 4
@@ -317,7 +317,7 @@ python main.py --config config_rl.yaml --experiment kein_inv --continue-study --
 | `--edge-direction` | `top_down` | AST-Kantenrichtung (parent→child, child→parent oder beides). |
 | `--add-kappa` | *aus* | Flag: Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` einbinden (Opt-in). |
 | `--feature-groups` | alle | Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
-| `--positional-encoding` | `lpe rwpe` | `lpe`, `rwpe`, oder `none`. |
+| `--positional-encoding` | alle Gruppen | Anchor-PE-Gruppen (`anchor_additive`, …, `anchor_transcendental`) oder `none`. Inkompatibel mit `--add-virtual-supernode`. |
 | `--active-features` | — | Explizite Knoten-Feature-Liste (überschreibt Gruppen). |
 | `--timesteps` | `10000` | PPO-Schritte pro Trial. |
 | `--n_trials` | `50` | Anzahl Optuna-Trials. |
@@ -336,8 +336,8 @@ cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn/reinforcement_lea
 # 1. Parameter-Überprüfung des besten Trials (Dry-Run):
 python train_best.py --config config_rl.yaml --db optuna_kein_inv_n45g69_20260527_163125.db --dry-run
 
-# 2. Ausgedehntes Training mit Feature-Experiment (nur RWPE):
-python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps 300000 --positional-encoding rwpe --n-envs 4
+# 2. Ausgedehntes Training mit Feature-Experiment (nur periodische Anchor-PE):
+python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps 300000 --positional-encoding anchor_periodic --n-envs 4
 ```
 
 #### 📋 CLI-Optionen

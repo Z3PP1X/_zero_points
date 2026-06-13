@@ -26,7 +26,7 @@ Reads the best trial from the Optuna DB and trains long.
 
 ```bash
 python train_best.py --config config_rl.yaml --db optuna_kein_inv_n45g69_20260527_163125.db --dry-run
-python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps 300000 --positional-encoding rwpe --n-envs 4
+python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps 300000 --positional-encoding anchor_periodic --n-envs 4
 ```
 `--db` is **required**. Other flags: `--timesteps` (default 250000 from yaml), `--save-dir`, `--model-name`, `--dry-run` (load hparams + init only), `--no-torch-compile`.
 
