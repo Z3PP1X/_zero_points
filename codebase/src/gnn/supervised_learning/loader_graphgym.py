@@ -25,6 +25,8 @@ if str(src_root) not in sys.path:
 from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa: F401
 from gnn.supervised_learning.run_results.eval_metrics import compute_confidence_metrics
 from gnn.supervised_learning.supervised_config import (
+    LAYERS_WITHOUT_EDGE_FEATURES,
+    architecture_from_layer_type,
     resolve_edge_dim,
     validate_layer_type,
 )
@@ -310,12 +312,6 @@ class GINEConvLayer(torch.nn.Module):
 from torch_geometric.graphgym.register import register_network
 from gnn.shared.models.classifiers import TestGraphNetwork
 
-# cfg.gnn.layer_type -> TestGraphNetwork architecture (edge-aware stacks only).
-_LAYER_TYPE_TO_ARCHITECTURE = {
-    "gatv2conv": "gatv2_stack",
-    "gineconv": "gine_stack",
-}
-
 
 @register_network("expression_classifier")
 class ExpressionClassifierNetwork(torch.nn.Module):
@@ -332,10 +328,10 @@ class ExpressionClassifierNetwork(torch.nn.Module):
     def __init__(self, dim_in, dim_out, **kwargs):
         super().__init__()
         layer_type = validate_layer_type(cfg.gnn.layer_type)
-        if layer_type not in _LAYER_TYPE_TO_ARCHITECTURE:
+        if layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
             raise ValueError(
-                f"expression_classifier supports {list(_LAYER_TYPE_TO_ARCHITECTURE)} "
-                f"layer types (edge-aware); got {layer_type!r}"
+                f"expression_classifier supports only edge-aware layer types "
+                f"(not {sorted(LAYERS_WITHOUT_EDGE_FEATURES)}); got {layer_type!r}"
             )
         names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
         self.net = TestGraphNetwork(
@@ -344,7 +340,7 @@ class ExpressionClassifierNetwork(torch.nn.Module):
             global_dim=0,  # GraphGym batches carry no graph-level global features
             output_dim=dim_out,  # 1 for binary classification -> BCE path
             heads=getattr(cfg.gnn, "att_heads", 4),
-            architecture=_LAYER_TYPE_TO_ARCHITECTURE[layer_type],
+            architecture=architecture_from_layer_type(layer_type),
             edge_dim=cfg.dataset.edge_dim,
             active_features=names or None,
             activation="prelu",
@@ -495,6 +491,15 @@ def load_custom_expression_graphs(format, name, dataset_dir):
 
     mode = getattr(cfg.expression_graph, "mode", "graph")
     layer_type = validate_layer_type(cfg.gnn.layer_type)
+    # Fail fast (before the dataset load) if expression_classifier was paired with a
+    # non-edge-aware layer type; otherwise ExpressionClassifierNetwork.__init__ would
+    # only raise after the full data load/cache. Mirrors the check in that constructor.
+    is_expression_classifier = cfg.model.type == "expression_classifier"
+    if is_expression_classifier and layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
+        raise ValueError(
+            f"model.type 'expression_classifier' supports only edge-aware layer types "
+            f"(not {sorted(LAYERS_WITHOUT_EDGE_FEATURES)}); got {layer_type!r}"
+        )
     cfg.dataset.edge_dim = resolve_edge_dim()
     from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
 

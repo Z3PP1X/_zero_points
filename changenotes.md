@@ -370,7 +370,7 @@ YAML: `expression_graph.add_kappa` (supervised) / `experiment.add_kappa` (RL)
 
 ---
 
-## 14. Hierarchical Pooling / Skip-Connection Ablation in the GraphGym Workflow
+## 15. Hierarchical Pooling / Skip-Connection Ablation in the GraphGym Workflow
 
 `gnn_backbones.py` (and `classifiers.py` / `GraphPolicyBackbone`) expose two orthogonal
 axes via `UniformPoolMixin`:
@@ -387,7 +387,7 @@ Previously these axes were reachable only through `TestGraphNetwork` / the RL ba
 **never by the supervised GraphGym pipeline**, which builds PyG's stock `GNN`
 (`cfg.model.type: gnn`). `TestGraphNetwork` was orphaned from training.
 
-### 14.1 Custom GraphGym network
+### 15.1 Custom GraphGym network
 - New `@register_network("expression_classifier")` in `loader_graphgym.py` — a thin adapter
   around the shared `TestGraphNetwork`. Custom networks receive **raw `batch.x`** (the
   `ExpressionNodeEncoder` is not auto-applied), which is exactly what `TestGraphNetwork`
@@ -398,7 +398,7 @@ Previously these axes were reachable only through `TestGraphNetwork` / the RL ba
 - `cfg.gnn.layer_type` maps to the backbone architecture (`gatv2conv→gatv2_stack`,
   `gineconv→gine_stack`); only edge-aware stacks are supported.
 
-### 14.2 Config plumbing & aux loss
+### 15.2 Config plumbing & aux loss
 - `set_custom_cfg` registers `cfg.gnn.variant`, `cfg.gnn.pool_type`, `cfg.gnn.aux_loss_weight`
   (so `grid.yaml` can sweep them) and `cfg.expression_graph.active_feature_names` (stashed by
   the loader so the model, built later by `create_model()`, locates categorical columns by
@@ -410,7 +410,7 @@ Previously these axes were reachable only through `TestGraphNetwork` / the RL ba
   the stock GNN's `.mp` stage) so they no-op gracefully on the custom backbone instead of
   crashing. Feature-importance saliency is model-agnostic and needs no change.
 
-### 14.3 Usage
+### 15.3 Usage
 - `config_supervised.yaml`: `model.type: expression_classifier`, `gnn.variant`,
   `gnn.pool_type`, `gnn.aux_loss_weight`, and a pinned `gnn.att_heads: 4`. Set
   `model.type: gnn` to revert to PyG's stock GNN (`graph_pooling`/`stage_type` take effect
@@ -420,7 +420,7 @@ Previously these axes were reachable only through `TestGraphNetwork` / the RL ba
 - DiffPool densifies batches (`to_dense_batch`); reduce `train.batch_size` for diffpool arms
   if OOM.
 
-### 14.4 Tests
+### 15.4 Tests
 - `tests/test_supervised_classifier.py` already covers the `pooling`/`pooling_skip` ×
   `topk`/`diffpool` variants of `TestGraphNetwork`.
 
