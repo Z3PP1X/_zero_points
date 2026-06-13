@@ -1,0 +1,25 @@
+# grid.yaml — STUFE 5 (Heterogene Netzwerke)
+# 2 x 2 = 4 Konfigurationen.
+# Nur wirksame Achsen: dim_inner und layers_mp werden vom Hetero-Backbone honoriert.
+# layer_type/att_heads sind im Hetero-Pfad INERT (HeteroExpressionClassifier nutzt
+# ausschließlich SAGEConv) und werden daher NICHT gesweept -> in der base_config gepinnt.
+
+gnn.dim_inner:
+  - 128
+  - 256
+
+gnn.layers_mp:         # vom Hetero-Backbone honoriert (num_layers)
+  - 2
+  - 3
+
+# -------------------------------------------------------------------------------------
+# GEPLANT: Hierarchical Pooling für heterogene Netze. Aktivieren, sobald der
+# HeteroExpressionClassifier variant/pool_type unterstützt (siehe base_config TODO):
+#
+# gnn.variant:
+#   - legacy
+#   - pooling
+# gnn.pool_type:
+#   - topk
+#   - diffpool
+# -------------------------------------------------------------------------------------

@@ -146,9 +146,74 @@ def _train_configs(
             )
 
 
+# Architecture "evolution stages": each maps to a self-contained config_settings/<folder>/
+# holding a tailored base_config.yaml + grid.yaml that exposes ONLY the parameters tunable
+# at that stage. Selected via --stage (accepts the number or the folder name). See
+# config_settings/README.md for the full overview.
+STAGE_REGISTRY = {
+    "1": ("stage1_tree_basic",
+          "Tree, Basisfeatures (stock GNN, edge-blind): layer_type, dim_inner, dropout, layers_mp"),
+    "2": ("stage2_tree_derivatives",
+          "Tree-Derivatives + edge_direction (top_down|bottom_up|bidirectional)"),
+    "3": ("stage3_graph_features",
+          "Graphen + Virtual Supernode + Kappa + erweiterte/Anchor-Features"),
+    "4": ("stage4_edge_networks",
+          "Edge-Networks (gatv2conv | gineconv), expression_classifier"),
+    "5": ("stage5_heterogeneous",
+          "Heterogene Netzwerke (flach); Hetero-Pooling = TODO"),
+    "6": ("stage6_hetero_diffpool",
+          "Hetero + Diffpool (Gerüst); Code-Erweiterung ausstehend"),
+}
+
+
+def _resolve_stage(stage: str, script_dir: Path) -> tuple[Path, Path]:
+    """Map a --stage id (number or folder name) to its base_config.yaml + grid.yaml."""
+    settings_dir = script_dir / "config_settings"
+    folders = {folder for folder, _ in STAGE_REGISTRY.values()}
+    if stage in STAGE_REGISTRY:
+        folder = STAGE_REGISTRY[stage][0]
+    elif stage in folders:
+        folder = stage
+    else:
+        valid = ", ".join(f"{k}={v[0]}" for k, v in STAGE_REGISTRY.items())
+        raise SystemExit(f"[Orchestrator] Unknown --stage '{stage}'. Valid: {valid}")
+    base = settings_dir / folder / "base_config.yaml"
+    grid = settings_dir / folder / "grid.yaml"
+    if not base.exists() or not grid.exists():
+        raise SystemExit(
+            f"[Orchestrator] Stage folder incomplete: {settings_dir / folder} "
+            f"(need base_config.yaml + grid.yaml)"
+        )
+    return base, grid
+
+
+def _print_stages() -> None:
+    print("Available architecture evolution stages (use --stage <number|folder>):\n")
+    for key, (folder, desc) in STAGE_REGISTRY.items():
+        print(f"  {key}  {folder:<26} {desc}")
+    print("\nExample: python run_all.py --stage 3 --dry-run")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run GraphGym grid search with automatic post-evaluation."
+    )
+    parser.add_argument(
+        "--stage",
+        type=str,
+        default=None,
+        help="Architecture evolution stage (number 1-6 or folder name); selects "
+             "config_settings/<stage>/{base_config.yaml,grid.yaml}. See --list-stages.",
+    )
+    parser.add_argument(
+        "--list-stages",
+        action="store_true",
+        help="List the available evolution stages and exit.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only generate the grid configs (+ manifest) and exit; no training/eval.",
     )
     parser.add_argument(
         "--experiment-name",
@@ -159,14 +224,16 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="config_supervised.yaml",
-        help="Base GraphGym config YAML",
+        default=None,
+        help="Base GraphGym config YAML (default: config_supervised.yaml, or the "
+             "--stage base_config.yaml when --stage is given). Overrides the stage base.",
     )
     parser.add_argument(
         "--grid",
         type=str,
-        default="grid.yaml",
-        help="Grid search YAML",
+        default=None,
+        help="Grid search YAML (default: grid.yaml, or the --stage grid.yaml when "
+             "--stage is given). Overrides the stage grid.",
     )
     parser.add_argument(
         "--parallel",
@@ -214,6 +281,10 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.list_stages:
+        _print_stages()
+        return
+
     if args.num < 1:
         parser.error("--num must be at least 1")
     
@@ -234,8 +305,18 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
 
     configs_dir = script_dir / "configs"
-    config_base = script_dir / args.config
-    grid_path = script_dir / args.grid
+    if args.stage:
+        config_base, grid_path = _resolve_stage(args.stage, script_dir)
+        # An explicit --config/--grid still overrides the stage's defaults.
+        if args.config is not None:
+            config_base = script_dir / args.config
+        if args.grid is not None:
+            grid_path = script_dir / args.grid
+        print(f"[Orchestrator] Stage '{args.stage}': "
+              f"{config_base.relative_to(script_dir)} + {grid_path.relative_to(script_dir)}")
+    else:
+        config_base = script_dir / (args.config or "config_supervised.yaml")
+        grid_path = script_dir / (args.grid or "grid.yaml")
     train_script = script_dir / "main_graphgym.py"
     python_exe = sys.executable
 
@@ -264,6 +345,11 @@ def main():
         repo_dir=script_dir,
     )
     print(f"[Orchestrator] Wrote run manifest: {manifest_path}")
+
+    if args.dry_run:
+        print(f"[Orchestrator] Dry run: generated {len(config_files)} config(s) in "
+              f"{configs_dir}; skipping training and evaluation.")
+        return
 
     if not args.skip_training:
         _train_configs(

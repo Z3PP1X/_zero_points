@@ -1,0 +1,81 @@
+# =====================================================================================
+# STUFE 1 — Tree, Basisfeatures (edge-blinder Baseline)
+# =====================================================================================
+# Erste Evolutionsstufe: nur der Funktionsbaum f als reine AST, ohne Ableitungen,
+# ohne erweiterte Features, ohne Edge-/Virtual-/Kappa-Strukturen. Klassisches
+# Hyperparameter-Sweeping eines edge-blinden Stock-GNN.
+#
+# FIX (hier nicht verändern):
+#   mode=tree, model.type=gnn (edge-blind), edge_direction=top_down,
+#   heterogeneous=false, add_kappa=false, add_virtual_supernode=false,
+#   features = nur 'node' (Basis: node_type, root_color)
+#
+# EINSTELLBAR (siehe grid.yaml):
+#   gnn.layer_type {gcnconv, ginconv}, gnn.dim_inner, gnn.dropout, gnn.layers_mp
+# =====================================================================================
+
+out_dir: results
+seed: 42001
+
+dataset:
+  format: custom_expression_graphs
+  name: run_20260603_123013/parallel_benchmark_results
+  task: graph
+  task_type: classification
+  transductive: False
+  node_encoder: True
+  node_encoder_name: ExpressionNodeEncoder
+  node_encoder_bn: True
+
+expression_graph:
+  mode: tree                       # FIX: nur Funktionsbaum f
+  edge_direction: top_down         # FIX (Edge-Direction kommt erst in Stufe 2)
+  heterogeneous: false             # FIX
+  add_kappa: false                 # FIX
+  add_virtual_supernode: false     # FIX
+  synthetic: True
+  synthetic_dataset: run_20260604_154509/parallel_benchmark_results
+  features:
+    node: true                     # FIX: Basisfeatures (node_type, root_color)
+    topology: false                # FIX: topologische Features erst ab Stufe 3
+    positional: false              # FIX: Anchor-PE erst ab Stufe 3
+    edge: false                    # FIX: Edge-Features erst ab Stufe 4
+  active_features: ""
+
+train:
+  mode: custom
+  batch_size: 2048
+  num_workers: 0
+  eval_period: 10
+  ckpt_period: 20
+  epoch_warmup: 5
+  epochs: 25
+  restart_period: 20              # Periode für cosine_with_restarts (bei epochs=25 ein Warm-Restart)
+  curated_eval_period: 5
+  curated_eval_on_test_highscore: true
+  early_stopping: false
+  early_stopping_monitor: val_pr_auc
+  early_stopping_patience: 10
+  early_stopping_min_delta: 0.0
+
+model:
+  type: gnn                        # FIX: PyG Stock-GNN (edge-blind)
+  loss_fun: weighted_cross_entropy
+  edge_decoding: dot
+  graph_pooling: mean
+
+gnn:
+  layers_pre_mp: 1
+  layers_mp: 2                     # EINSTELLBAR (siehe grid.yaml)
+  layers_post_mp: 2
+  dim_inner: 128                   # EINSTELLBAR
+  layer_type: ginconv             # EINSTELLBAR {gcnconv, ginconv} — edge-blind
+  stage_type: skipsum
+  act: gelu
+  dropout: 0.2                     # EINSTELLBAR
+
+optim:
+  optimizer: adamw
+  base_lr: 0.0001
+  weight_decay: 0.0005
+  scheduler: cosine_with_restarts

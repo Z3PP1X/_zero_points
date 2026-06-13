@@ -13,7 +13,8 @@ from torch_geometric.graphgym.register import register_layer, register_loss
 from torch_geometric.nn.conv import GINEConv
 import math
 from torch.optim.lr_scheduler import LambdaLR
-from torch_geometric.graphgym.register import register_scheduler
+from torch.optim import AdamW
+from torch_geometric.graphgym.register import register_scheduler, register_optimizer
 
 gnn_root = Path(__file__).resolve().parents[2]
 if str(gnn_root) not in sys.path:
@@ -244,8 +245,16 @@ class ExpressionNodeEncoder(torch.nn.Module):
 
     def __init__(self, dim_emb: int):
         super().__init__()
-        active = getattr(cfg.expression_graph, "active_features", "")
-        names = parse_csv_list(active) or full_node_schema()
+        # Use the RESOLVED active-feature names (the same list that slices batch.x in
+        # preprocessing). The grouped toggles (features.node/topology/...) are resolved
+        # into active_feature_names; the active_features CSV is only the explicit
+        # override and is empty when groups are used. Reading the CSV here would fall
+        # back to the full 16-col schema while x is sliced to the selected subset,
+        # making the continuous-column gather index out of bounds.
+        names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
+        if not names:
+            active = getattr(cfg.expression_graph, "active_features", "")
+            names = parse_csv_list(active) or full_node_schema()
         self.encoder = TwoWayFeatureEncoder(
             names, dim_emb, NODE_CATEGORICAL_REGISTRY, activation=nn.GELU()
         )
@@ -439,6 +448,40 @@ def cosine_with_warmup_scheduler(optimizer, max_epoch):
 register_scheduler("cosine_with_warmup", cosine_with_warmup_scheduler)
 
 
+# from_config matches the parameter names (base_lr, weight_decay) against
+# cfg.optim keys, so no new config keys are needed for AdamW. AdamW differs
+# from Adam only in applying *decoupled* weight decay.
+def adamw_optimizer(params, base_lr, weight_decay):
+    return AdamW(params, lr=base_lr, weight_decay=weight_decay)
+
+
+register_optimizer("adamw", adamw_optimizer)
+
+
+def cosine_with_restarts_scheduler(optimizer, max_epoch):
+    """Linear warmup, then cosine annealing with warm restarts (SGDR).
+
+    Mirrors cosine_with_warmup but restarts the cosine every
+    cfg.train.restart_period epochs. Read from cfg.train (not via from_config)
+    so no extra cfg.optim keys are required.
+    """
+    from torch_geometric.graphgym.config import cfg
+
+    warmup_epochs = getattr(cfg.train, "epoch_warmup", 5)
+    period = max(1, int(getattr(cfg.train, "restart_period", 20)))
+
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return float(epoch) / float(max(1, warmup_epochs))
+        progress = float(epoch - warmup_epochs) % period / float(period)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    return LambdaLR(optimizer, lr_lambda)
+
+
+register_scheduler("cosine_with_restarts", cosine_with_restarts_scheduler)
+
+
 def prepare_hetero_data_list(data_list):
     """Pad HeteroData graphs to a uniform edge-type layout and return the metadata.
 
@@ -511,6 +554,7 @@ def set_custom_cfg(cfg):
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
     cfg.train.epoch_warmup = 5
+    cfg.train.restart_period = 20      # period (epochs) for cosine_with_restarts
     cfg.train.curated_eval_period = 5
     cfg.train.curated_eval_on_test_highscore = True
     cfg.train.num_workers = 0
