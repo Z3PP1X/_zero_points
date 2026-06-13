@@ -336,4 +336,97 @@ Node-feature slicing is fully wired; the **edge** class is documented in config 
 - `time_management/config_base.yaml`, `time_management/benchmark.py`
 - `tests/test_graph_utils.py`, `tests/test_feature_config.py`, `tests/test_rl_config.py`
 
+---
+
+## 14. Graph-Only Augmented Edges & Opt-In Kappa Augmentation
+
+Two related controls over how much structure is added on top of the raw expression tree.
+
+### 14.1 Augmented edges restricted to `graph` mode
+The augmented edges built by `build_augmented_math_graph()` — variable data-flow (`NextUse` / `NextUseBackward`) and position-aware function nesting (`OuterToInner_Arg{i}` / `InnerToOuter_Arg{i}`) — turn the expression *tree* into a *graph*. They are now only emitted when `mode == "graph"`. This re-establishes a meaningful difference between the modes (which had collapsed after virtual task nodes were removed):
+
+| Mode | Compiled subgraphs | Augmented (graph-making) edges |
+|---|---|---|
+| `tree` | `f` only | no |
+| `tree_derivatives` | `f`, `f'`, `f''` merged via `global` + aggregators | no |
+| `graph` | `f`, `f'`, `f''` merged via `global` + aggregators | yes |
+
+AST edges, provenance/aggregator edges, and `edge_direction` handling are unchanged; only the augmented-edge pass is gated. Logic in `ExpressionGraphConverter.convert()` (`graph_utils.py`).
+
+### 14.2 Opt-in kappa (h-function) augmentation (`add_kappa`)
+Merging kappa subgraphs (`GlobalToKappa` / `KappaToGlobal` edges via `LoadAugmentedFunctionGraph`) was previously auto-enabled whenever `datasets/kappas/*.json` existed, with no way to disable it. It is now controlled by an explicit `add_kappa` flag that **defaults to `false`** (opt-in). When enabled, the kappa folder must still exist and contain JSON for augmentation to apply.
+
+The flag propagates exactly like `edge_direction`: `GraphDataLoader` (gates `use_augmented`, part of the disk-cache key via the `_augmented` suffix) → `UnifiedDataLoader` (multiton cache key) → GraphGym dependency injection, supervised `main.py` / `GraphPipeline`, and RL `main.py` / `train_best.py`.
+
+CLI: `--add-kappa` (store-true)  
+YAML: `expression_graph.add_kappa` (supervised) / `experiment.add_kappa` (RL)
+
+> **Behaviour change:** runs that relied on kappa loading automatically now require `--add-kappa` or `add_kappa: true`.
+
+### 14.3 Modified files
+- `shared/utils/graph_utils.py` (augmented-edge gating), `graph_loader.py`, `unified_loader.py`
+- `supervised_learning/supervised_config.py`, `main.py`, `preprocessing.py`, `loader_graphgym.py`, `config_supervised.yaml`
+- `reinforcement_learning/rl_config.py`, `main.py`, `train_best.py`, `preprocessor.py`, `config_rl.yaml`
+
+---
+
+## 14. Hierarchical Pooling / Skip-Connection Ablation in the GraphGym Workflow
+
+`gnn_backbones.py` (and `classifiers.py` / `GraphPolicyBackbone`) expose two orthogonal
+axes via `UniformPoolMixin`:
+
+| Axis | Values | Effect |
+|---|---|---|
+| **`variant`** | `legacy` / `standard` | original conv stack + real/virtual split pooling (baseline) |
+| | `pooling` | hierarchical pooling between conv blocks, last-block readout |
+| | `pooling_skip` | hierarchical pooling + JK-style skip aggregation (concat of per-block readouts → `jk_proj`) |
+| **`pool_type`** | `topk` | `TopKPooling` after each block, readout = mean ‖ max |
+| | `diffpool` | `DenseSAGEConv` soft clustering (fixed clusters `16, 4`) + link+entropy aux loss |
+
+Previously these axes were reachable only through `TestGraphNetwork` / the RL backbone and
+**never by the supervised GraphGym pipeline**, which builds PyG's stock `GNN`
+(`cfg.model.type: gnn`). `TestGraphNetwork` was orphaned from training.
+
+### 14.1 Custom GraphGym network
+- New `@register_network("expression_classifier")` in `loader_graphgym.py` — a thin adapter
+  around the shared `TestGraphNetwork`. Custom networks receive **raw `batch.x`** (the
+  `ExpressionNodeEncoder` is not auto-applied), which is exactly what `TestGraphNetwork`
+  wants — it runs its own `TwoWayFeatureEncoder` and reads `node_type` by name before
+  encoding. The head output is squeezed to a 1-D logit so the existing
+  `weighted_cross_entropy` (BCE branch) and `compute_binary_metrics` behave identically to
+  the stock single-logit path.
+- `cfg.gnn.layer_type` maps to the backbone architecture (`gatv2conv→gatv2_stack`,
+  `gineconv→gine_stack`); only edge-aware stacks are supported.
+
+### 14.2 Config plumbing & aux loss
+- `set_custom_cfg` registers `cfg.gnn.variant`, `cfg.gnn.pool_type`, `cfg.gnn.aux_loss_weight`
+  (so `grid.yaml` can sweep them) and `cfg.expression_graph.active_feature_names` (stashed by
+  the loader so the model, built later by `create_model()`, locates categorical columns by
+  name).
+- `GraphGymModule._shared_step` is monkeypatched (mirroring the existing Logger patches) to
+  fold the DiffPool link+entropy aux loss into the **training** loss. No-op for the stock GNN,
+  `topk`, and `legacy` (aux = 0).
+- `main_graphgym.py` `_register_mp_hook()` guards the Dirichlet-energy callbacks (which hook
+  the stock GNN's `.mp` stage) so they no-op gracefully on the custom backbone instead of
+  crashing. Feature-importance saliency is model-agnostic and needs no change.
+
+### 14.3 Usage
+- `config_supervised.yaml`: `model.type: expression_classifier`, `gnn.variant`,
+  `gnn.pool_type`, `gnn.aux_loss_weight`, and a pinned `gnn.att_heads: 4`. Set
+  `model.type: gnn` to revert to PyG's stock GNN (`graph_pooling`/`stage_type` take effect
+  again then).
+- `grid.yaml`: sweeps `gnn.variant × gnn.pool_type` (6 configs; `legacy×topk` and
+  `legacy×diffpool` are identical since legacy ignores `pool_type`).
+- DiffPool densifies batches (`to_dense_batch`); reduce `train.batch_size` for diffpool arms
+  if OOM.
+
+### 14.4 Tests
+- `tests/test_supervised_classifier.py` already covers the `pooling`/`pooling_skip` ×
+  `topk`/`diffpool` variants of `TestGraphNetwork`.
+
+**Modified files:**
+- `supervised_learning/loader_graphgym.py` (custom network, cfg fields, aux-loss patch)
+- `supervised_learning/main_graphgym.py` (`_register_mp_hook` guard)
+- `supervised_learning/config_supervised.yaml`, `grid.yaml`
+
 

@@ -22,6 +22,7 @@ dataset:
 expression_graph:
   mode: graph
   edge_direction: top_down  # top_down | bottom_up | bidirectional
+  add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
 
@@ -55,10 +56,13 @@ train:
 
 # --- Model Structure ---
 model:
-  type: gnn
+  # expression_classifier routes through the shared TestGraphNetwork backbone, exposing the
+  # gnn.variant (legacy/pooling/pooling_skip) and gnn.pool_type (topk/diffpool) axes below.
+  # Set back to `gnn` to use PyG's stock GNN (graph_pooling/stage_type take effect then).
+  type: expression_classifier
   loss_fun: weighted_cross_entropy
   edge_decoding: dot
-  graph_pooling: mean
+  graph_pooling: mean              # inert for expression_classifier (it owns its pooling/readout)
 
 # --- GNN Backbone Architecture (gatv2conv | gineconv | gcnconv | ginconv) ---
 gnn:
@@ -67,9 +71,14 @@ gnn:
   layers_post_mp: 2                 
   dim_inner: 128                    
   layer_type: gatv2conv             # gatv2conv/gineconv use edge features; gcnconv/ginconv do not
-  stage_type: skipsum               # residual connections counter supernode-induced oversmoothing
-  act: gelu                   
+  stage_type: skipsum               # (inert for expression_classifier) residual connections in stock GNN
+  act: gelu
   dropout: 0.2
+  att_heads: 4                      # GATv2 attention heads (held constant across the ablation arms)
+  # --- expression_classifier pooling/skip ablation axes (see grid.yaml) ---
+  variant: legacy                   # legacy | standard | pooling | pooling_skip
+  pool_type: topk                   # topk | diffpool (only used by pooling* variants)
+  aux_loss_weight: 1.0              # weight of the DiffPool link+entropy auxiliary loss
 
 # --- Optimizations ---
 optim:

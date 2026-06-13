@@ -39,6 +39,20 @@ from gnn.supervised_learning.supervised_config import (
 set_cfg(cfg)
 
 
+def _register_mp_hook(pl_module, hook_fn):
+    """Register a forward hook on the message-passing stage, if the model has one.
+
+    The Dirichlet-energy callbacks hook ``pl_module.model.mp`` — the message-passing
+    stage of PyG's stock ``GNN``. The custom ``expression_classifier`` backbone has no
+    ``.mp`` stage (and node embeddings are pooled away under DiffPool), so we skip the
+    hook and report energy 0.0 rather than crash. Returns the handle or ``None``.
+    """
+    mp = getattr(getattr(pl_module, "model", None), "mp", None)
+    if mp is None:
+        return None
+    return mp.register_forward_hook(hook_fn)
+
+
 class CuratedEvalCallback(pl.callbacks.Callback):
     """Run curated holdout evaluation on a schedule, not every validation epoch."""
 
@@ -110,7 +124,7 @@ class CuratedEvalCallback(pl.callbacks.Callback):
         def hook_fn(module, inputs, outputs):
             mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
 
-        hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+        hook_handle = _register_mp_hook(pl_module, hook_fn)
 
         with torch.no_grad():
             for batch in self.curated_loader:
@@ -125,7 +139,8 @@ class CuratedEvalCallback(pl.callbacks.Callback):
                 true_parts.append(outputs["true"].detach().cpu())
                 pred_parts.append(outputs["pred_score"].detach().cpu())
 
-        hook_handle.remove()
+        if hook_handle is not None:
+            hook_handle.remove()
 
         if count == 0:
             return {
@@ -199,21 +214,21 @@ class DirichletLoggerCallback(LoggerCallback):
         self._embeddings = []
         def hook_fn(module, inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
-        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+        self._hook_handle = _register_mp_hook(pl_module, hook_fn)
 
     def on_validation_epoch_start(self, trainer, pl_module):
         super().on_validation_epoch_start(trainer, pl_module)
         self._embeddings = []
         def hook_fn(module, inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
-        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+        self._hook_handle = _register_mp_hook(pl_module, hook_fn)
 
     def on_test_epoch_start(self, trainer, pl_module):
         super().on_test_epoch_start(trainer, pl_module)
         self._embeddings = []
         def hook_fn(module, inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
-        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+        self._hook_handle = _register_mp_hook(pl_module, hook_fn)
 
     def _get_dirichlet_energy_for_batch(self):
         if not self._embeddings:
@@ -273,7 +288,7 @@ class ValMetricLogger(pl.callbacks.Callback):
         self._embeddings = []
         def hook_fn(module, inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
-        self._hook_handle = pl_module.model.mp.register_forward_hook(hook_fn)
+        self._hook_handle = _register_mp_hook(pl_module, hook_fn)
     
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if outputs is None:

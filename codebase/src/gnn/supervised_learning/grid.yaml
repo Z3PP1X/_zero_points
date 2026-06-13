@@ -1,18 +1,27 @@
 # grid.yaml
+#
+# Pooling / skip-connection ablation over the shared TestGraphNetwork backbone
+# (requires model.type: expression_classifier in config_supervised.yaml).
+#
+#   variant:   legacy        -> real/virtual split pooling (baseline, ignores pool_type)
+#              pooling       -> hierarchical pooling between blocks (last-block readout)
+#              pooling_skip  -> hierarchical pooling + JK-style skip aggregation of readouts
+#   pool_type: topk          -> TopKPooling (readout = mean || max)
+#              diffpool      -> DenseSAGE soft clustering (clusters 16,4) + link+entropy aux loss
+#
+# Cartesian product = 6 runs. legacy x topk and legacy x diffpool are behaviourally
+# identical (legacy ignores pool_type) -- keep one as a reproducibility duplicate or
+# prune a config_grid_variant_legacy_pool_type_diffpool_*.yaml after generation.
+# layer_type is held fixed (gatv2conv) for a clean single-axis study; add it back below
+# to cross pooling with layer type.
+gnn.variant:
+  - legacy
+  - pooling
+  - pooling_skip
+
+gnn.pool_type:
+  - topk
+  - diffpool
+
 gnn.layer_type:
   - gatv2conv
-  - gineconv
-
-gnn.layers_mp:
-  - 2
-  - 3
-
-gnn.dim_inner:
-  - 256
-
-gnn.dropout:
-  - 0.2
-
-model.graph_pooling:
-  - add
-  - mean
