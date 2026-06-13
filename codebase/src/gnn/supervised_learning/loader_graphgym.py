@@ -327,6 +327,30 @@ class ExpressionClassifierNetwork(torch.nn.Module):
 
     def __init__(self, dim_in, dim_out, **kwargs):
         super().__init__()
+        self._hetero = bool(getattr(cfg.expression_graph, "heterogeneous", False))
+        self._last_aux_loss = torch.zeros(())
+
+        if self._hetero:
+            from gnn.shared.models.hetero_backbone import (
+                HETERO_NODE_TYPES,
+                HeteroExpressionClassifier,
+            )
+
+            names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
+            edge_types = [
+                tuple(et) for et in getattr(cfg.expression_graph, "hetero_edge_types", [])
+            ]
+            metadata = (list(HETERO_NODE_TYPES), edge_types)
+            self.net = HeteroExpressionClassifier(
+                metadata,
+                in_dim=(len(names) or dim_in),
+                hidden_dim=cfg.gnn.dim_inner,
+                out_dim=dim_out,
+                num_layers=getattr(cfg.gnn, "layers_mp", 2),
+                aggr=getattr(cfg.gnn, "hetero_aggr", "sum"),
+            )
+            return
+
         layer_type = validate_layer_type(cfg.gnn.layer_type)
         if layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
             raise ValueError(
@@ -351,14 +375,19 @@ class ExpressionClassifierNetwork(torch.nn.Module):
         self._last_aux_loss = torch.zeros(())
 
     def forward(self, batch):
-        logits = self.net(
-            batch.x,
-            batch.edge_index,
-            batch.batch,
-            global_features=None,
-            edge_attr=getattr(batch, "edge_attr", None),
-        )
-        self._last_aux_loss = self.net._last_aux_loss
+        if self._hetero:
+            # HeteroExpressionClassifier consumes the whole HeteroData batch (x_dict /
+            # edge_index_dict); aux loss stays zero (DiffPool is homogeneous-only).
+            logits = self.net(batch)
+        else:
+            logits = self.net(
+                batch.x,
+                batch.edge_index,
+                batch.batch,
+                global_features=None,
+                edge_attr=getattr(batch, "edge_attr", None),
+            )
+            self._last_aux_loss = self.net._last_aux_loss
         if logits.size(-1) == 1:  # match the stock single-logit BCE path
             logits = logits.view(-1)
         return logits, batch.y
@@ -410,39 +439,25 @@ def cosine_with_warmup_scheduler(optimizer, max_epoch):
 register_scheduler("cosine_with_warmup", cosine_with_warmup_scheduler)
 
 
-def homogenize_for_classifier(data):
-    """Collapse a HeteroData graph to homogeneous Data via PyG's ``to_homogeneous``.
+def prepare_hetero_data_list(data_list):
+    """Pad HeteroData graphs to a uniform edge-type layout and return the metadata.
 
-    The ``expression_classifier`` backbone consumes homogeneous tensors (``batch.x`` /
-    ``batch.edge_index``), and ``InMemoryDataset.collate`` only round-trips graphs that
-    share a uniform store layout — HeteroData with type-dependent node/edge stores fails
-    both (the collate/separate ``slices`` span only the graphs that happen to carry each
-    store). Every hetero node type already carries the full ``NODE_FEATURE_SCHEMA`` (see
-    ``heterogeneous_converter.to_hetero``), so PyG's library ``to_homogeneous`` rebuilds
-    the exact node-feature matrix the classifier expects, with ``node_type`` preserved as a
-    column of ``x``. Dropped first: the non-tensor ``node_ids`` metadata (``to_homogeneous``
-    only merges tensors) and the hetero ``edge_attr`` (2-D augmented-edge features that do
-    not match the homogeneous ``EDGE_FEATURE_SCHEMA``; the backbone zero-fills edge features
-    to the right dim). Connectivity is kept; edge-type semantics fold into ``edge_index``.
-    Homogeneous ``Data`` passes through unchanged.
+    A true heterogeneous run keeps ``HeteroData`` (no homogenization). The only blocker is
+    ``InMemoryDataset.collate``, which needs every graph to expose the same stores — so we
+    pad each graph to the dataset-wide union of edge types (empty ``edge_index`` for absent
+    ones) via the shared ``hetero_backbone`` helpers. Returns ``(padded_list, edge_types)``;
+    ``edge_types`` is stashed on the cfg so the network can build its ``to_hetero`` metadata.
     """
-    from torch_geometric.data import HeteroData
+    from gnn.shared.models.hetero_backbone import collect_edge_types, pad_edge_types
 
-    if not isinstance(data, HeteroData):
-        return data
-    for store in data.node_stores:
-        if "node_ids" in store:
-            del store["node_ids"]
-    for store in data.edge_stores:
-        if "edge_attr" in store:
-            del store["edge_attr"]
-    return data.to_homogeneous(add_node_type=True, add_edge_type=True)
+    edge_types = collect_edge_types(data_list)
+    padded = [pad_edge_types(d, edge_types) for d in data_list]
+    return padded, edge_types
 
 
 class ExpressionGraphDataset(InMemoryDataset):
     def __init__(self, data_list, train_idx, val_idx, test_idx):
         super().__init__()
-        data_list = [homogenize_for_classifier(d) for d in data_list]
         self._data, self.slices = self.collate(data_list)
         self._data.train_graph_index = torch.tensor(train_idx, dtype=torch.long)
         self._data.val_graph_index = torch.tensor(val_idx, dtype=torch.long)
@@ -479,6 +494,9 @@ def set_custom_cfg(cfg):
     # ExpressionClassifierNetwork (built later by create_model) can locate categorical
     # columns BY NAME. Empty => fall back to the full node schema.
     cfg.expression_graph.active_feature_names = []
+    # Edge-type metadata for the heterogeneous to_hetero model, stashed by the loader as a
+    # list of [src, relation, dst] lists. Empty unless cfg.expression_graph.heterogeneous.
+    cfg.expression_graph.hetero_edge_types = []
     # Structural / pooling axes for the ExpressionClassifierNetwork backbone. Declared here
     # so YACS accepts grid.yaml overrides; ignored when cfg.model.type == "gnn".
     cfg.gnn.variant = "legacy"        # legacy | standard | pooling | pooling_skip
@@ -739,6 +757,12 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         print(f"[GraphGym] Saved class balance info to {agg_dir / 'class_balance.json'}")
     except Exception as e:
         print(f"[Warning] Failed to calculate or save class balance info: {e}")
+
+    if heterogeneous:
+        all_data_list, edge_types = prepare_hetero_data_list(all_data_list)
+        # Stash the edge-type metadata so the network can build its to_hetero model.
+        cfg.expression_graph.hetero_edge_types = [list(et) for et in edge_types]
+        print(f"[GraphGym] Heterogeneous mode: {len(edge_types)} edge types collected")
 
     return ExpressionGraphDataset(
         all_data_list, train_indices, val_indices, test_indices
