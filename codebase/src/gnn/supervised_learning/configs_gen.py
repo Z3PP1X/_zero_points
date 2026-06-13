@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 from pathlib import Path
 import itertools
 import yaml
@@ -11,13 +12,55 @@ def set_nested_value(d, key, value):
     d[keys[-1]] = value
 
 
+def get_nested_value(d, key):
+    cur = d
+    for k in key.split("."):
+        if not isinstance(cur, dict) or k not in cur:
+            return None
+        cur = cur[k]
+    return cur
+
+
+def _canonical_signature(config: dict, swept_keys: list[str]) -> tuple:
+    """Signature of a config over the swept axes, nullifying inert combinations.
+
+    The pooling axes interact: ``variant=legacy`` ignores ``pool_type``, and
+    ``pool_type=topk`` ignores ``aux_loss_weight``. Blindly crossing them emits runs that
+    train to identical behaviour. Collapsing those inert axes to ``None`` here lets
+    generate_configs() skip the duplicate before it costs a full training run.
+    """
+    gnn = config.get("gnn", {}) or {}
+    variant = gnn.get("variant")
+    pool_type = gnn.get("pool_type")
+
+    sig = {}
+    for key in swept_keys:
+        short = key.split(".")[-1]
+        value = get_nested_value(config, key)
+        if short == "pool_type" and variant == "legacy":
+            value = None  # legacy variant ignores pool_type entirely
+        elif short == "aux_loss_weight" and (variant == "legacy" or pool_type == "topk"):
+            value = None  # aux loss is a DiffPool-only term
+        sig[key] = value
+    return tuple(sorted((k, str(v)) for k, v in sig.items()))
+
+
 def generate_configs(
     config_path: Path,
     grid_path: Path,
     configs_out_dir: Path,
     results_base_dir: Path | None = None,
+    run_timestamp: str | None = None,
 ) -> list[Path]:
-    """Generate GraphGym grid configs and return the created YAML paths."""
+    """Generate GraphGym grid configs and return the created YAML paths.
+
+    Filenames and run folders are datetime+index based (``cfg_<ts>_<NNN>.yaml`` /
+    ``run_<ts>_<NNN>``) rather than param-encoded, so they stay short as the grid grows.
+    Each generated config carries the swept values internally and is snapshotted into its
+    run folder as config.yaml at train time, so reproducibility does not depend on the
+    name. ``run_timestamp`` groups one grid's configs under a shared stamp (run_all passes
+    its experiment timestamp); when omitted a fresh stamp is generated.
+    """
     import copy
 
     if not config_path.exists():
@@ -45,34 +88,44 @@ def generate_configs(
         except OSError:
             pass
 
-    created = []
     results_root = (
         Path(results_base_dir)
         if results_base_dir is not None
         else Path(base_config.get("out_dir", "results"))
     )
-    if results_root.name.startswith("grid-"):
+    if results_root.name.startswith(("grid-", "run_")):
         results_root = results_root.parent
 
+    timestamp = run_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    created = []
+    seen_signatures: set[tuple] = set()
+    index = 0
     for combination in combinations:
         config = copy.deepcopy(base_config)
-        param_desc_und = []
-        param_desc_pyg = []
         for key, val in zip(keys, combination):
             set_nested_value(config, key, val)
-            short_key = key.split(".")[-1]
-            param_desc_und.append(f"{short_key}_{val}")
-            param_desc_pyg.append(f"{short_key}={val}")
 
-        suffix_und = "_".join(param_desc_und)
-        suffix_pyg = "-".join(param_desc_pyg)
-        config_name = f"config_grid_{suffix_und}.yaml"
-        config["out_dir"] = str(results_root / f"grid-{suffix_pyg}")
+        signature = _canonical_signature(config, keys)
+        if signature in seen_signatures:
+            continue  # behaviourally identical to an already-emitted config
+        seen_signatures.add(signature)
 
-        dest_path = configs_out_dir / config_name
+        stem = f"{timestamp}_{index:03d}"
+        config["out_dir"] = str(results_root / f"run_{stem}")
+
+        dest_path = configs_out_dir / f"cfg_{stem}.yaml"
         with open(dest_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
         created.append(dest_path)
+        index += 1
+
+    skipped = len(combinations) - len(created)
+    if skipped:
+        print(
+            f"  Deduplicated {skipped} inert pooling combination(s) "
+            f"({len(combinations)} grid points -> {len(created)} distinct configs)."
+        )
 
     return created
 

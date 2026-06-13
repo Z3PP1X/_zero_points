@@ -45,6 +45,11 @@ class GNNResultEvaluator:
         "graph_pooling",
         "act",
         "base_lr",
+        "variant",
+        "pool_type",
+        "aux_loss_weight",
+        "mode",
+        "edge_direction",
     )
     METRIC_COLS = {
         "epoch",
@@ -321,6 +326,7 @@ class GNNResultEvaluator:
 
     def _config_columns(self, df: pd.DataFrame) -> list:
         skip = set(self.METRIC_COLS)
+        skip.add("run_name")  # run identity, not a hyperparameter axis
         skip.update(c for c in df.columns if c.endswith("_std"))
         known = [c for c in self.CONFIG_COLS if c in df.columns]
         extra = [c for c in df.columns if c not in skip and c not in known]

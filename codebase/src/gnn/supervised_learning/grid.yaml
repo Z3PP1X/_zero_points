@@ -1,25 +1,58 @@
 # grid.yaml
 #
-# Pooling / skip-connection ablation over the shared TestGraphNetwork backbone
+# Hyperparameter sweep over the shared TestGraphNetwork backbone
 # (requires model.type: expression_classifier in config_supervised.yaml).
 #
-#   variant:   legacy        -> real/virtual split pooling (baseline, ignores pool_type)
+# Each key is a dotted path into config_supervised.yaml; configs_gen.py takes the blind
+# Cartesian product of the value lists. Folders/filenames are datetime+index based
+# (run_<ts>_<NNN> / cfg_<ts>_<NNN>.yaml) — the swept values live in each run's snapshotted
+# config.yaml and the leaderboard's run_name column, not in the folder name.
+#
+# Pooling axes — what variant/pool_type/aux_loss_weight mean:
+#   variant:   legacy        -> real/virtual split pooling (baseline, IGNORES pool_type)
 #              pooling       -> hierarchical pooling between blocks (last-block readout)
 #              pooling_skip  -> hierarchical pooling + JK-style skip aggregation of readouts
-#   pool_type: topk          -> TopKPooling (readout = mean || max)
+#   pool_type: topk          -> TopKPooling (readout = mean || max), IGNORES aux_loss_weight
 #              diffpool      -> DenseSAGE soft clustering (clusters 16,4) + link+entropy aux loss
+#   aux_loss_weight:         -> weight of the DiffPool aux loss; only active for diffpool arms
 #
-# NOTE: gnn.variant and gnn.pool_type are deliberately NOT swept here. The grid is a
-# blind Cartesian product (configs_gen.py), and `legacy` ignores pool_type, so sweeping
-# variant x pool_type emits a behaviourally identical `legacy x diffpool` duplicate that
-# wastes a full training run. Instead, pick one arm per run by setting gnn.variant /
-# gnn.pool_type directly in config_supervised.yaml, e.g.:
-#   - legacy            (pool_type ignored)
-#   - pooling      + topk | diffpool
-#   - pooling_skip + topk | diffpool
-# -> 5 distinct arms, zero duplicates.
+# Duplicate collapse: because legacy ignores pool_type and topk ignores aux_loss_weight,
+# a blind product would emit behaviourally identical runs (e.g. legacy×topk == legacy×diffpool).
+# configs_gen.py deduplicates these inert combinations, so it is safe to sweep all arms here.
 #
-# layer_type is the only swept axis (edge-aware stacks only for expression_classifier).
-# Add gineconv below to cross the chosen pooling arm with layer type.
+# layer_type: edge-aware stacks only for expression_classifier (gatv2conv | gineconv).
+
 gnn.layer_type:
   - gatv2conv
+  # - gineconv
+
+gnn.layers_mp:
+  - 2
+  - 3
+
+gnn.dim_inner:
+  - 128
+  - 256
+
+gnn.variant:
+  - legacy
+  - pooling
+  - pooling_skip
+
+gnn.pool_type:
+  - topk
+  - diffpool
+
+gnn.aux_loss_weight:
+  - 1.0
+  # - 0.5
+
+expression_graph.mode:
+  - graph
+  # - tree
+  # - tree_derivatives
+
+expression_graph.edge_direction:
+  - top_down
+  # - bottom_up
+  # - bidirectional

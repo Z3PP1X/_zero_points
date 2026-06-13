@@ -1,8 +1,11 @@
+import json
 import os
 import re
 import sys
 from pathlib import Path
 import os.path as osp
+
+import yaml
 
 _script_dir = Path(__file__).resolve().parent
 _gnn_root = _script_dir.parent
@@ -114,11 +117,14 @@ def custom_agg_batch(dir, metric_best='auto'):
     import numpy as np
     import pandas as pd
     from torch_geometric.graphgym.utils.agg_runs import (
-        name_to_dict,
         json_to_dict_list,
         makedirs_rm_exist,
     )
     from torch_geometric.graphgym.config import cfg
+
+    # Recover hyperparameter columns from each run's config.yaml snapshot (folders are
+    # now datetime-named). Restrict to the swept axes when a manifest is available.
+    axes = _grid_axes_from_manifest(dir)
 
     def _strip_keys(stats):
         for key in KEYS_TO_STRIP:
@@ -130,7 +136,7 @@ def custom_agg_batch(dir, metric_best='auto'):
     for run in os.listdir(dir):
         if run == 'agg':
             continue
-        dict_name = name_to_dict(run)
+        dict_name = _run_config_columns(osp.join(dir, run), run, axes)
         dir_run = osp.join(dir, run, 'agg')
         if not osp.isdir(dir_run):
             continue
@@ -149,7 +155,11 @@ def custom_agg_batch(dir, metric_best='auto'):
             continue
         results[key] = pd.DataFrame(results[key])
         if sort_keys is None and len(results[key].columns):
-            sort_keys = [c for c in results[key].columns if c not in AGG_METRIC_COLUMNS]
+            sort_keys = [
+                c
+                for c in results[key].columns
+                if c not in AGG_METRIC_COLUMNS and c not in NON_CONFIG_COLUMNS
+            ]
         if sort_keys:
             present = [k for k in sort_keys if k in results[key].columns]
             if present:
@@ -163,7 +173,7 @@ def custom_agg_batch(dir, metric_best='auto'):
     for run in os.listdir(dir):
         if run == 'agg':
             continue
-        dict_name = name_to_dict(run)
+        dict_name = _run_config_columns(osp.join(dir, run), run, axes)
         dir_run = osp.join(dir, run, 'agg')
         if not osp.isdir(dir_run):
             continue
@@ -191,7 +201,7 @@ def custom_agg_batch(dir, metric_best='auto'):
     for run in os.listdir(dir):
         if run == 'agg':
             continue
-        dict_name = name_to_dict(run)
+        dict_name = _run_config_columns(osp.join(dir, run), run, axes)
         dir_run = osp.join(dir, run, 'agg')
         if not osp.isdir(dir_run):
             continue
@@ -243,6 +253,91 @@ KNOWN_GRID_PARAMS = [
     "act",
     "base_lr",
 ]
+
+# Column name -> dotted path in the snapshotted config.yaml. Used to recover the
+# hyperparameter columns for the leaderboard now that run folders are datetime-named
+# (no longer grid-key=value). Covers every axis grid.yaml can sweep.
+CONFIG_COLUMN_PATHS = {
+    "layer_type": "gnn.layer_type",
+    "layers_mp": "gnn.layers_mp",
+    "dim_inner": "gnn.dim_inner",
+    "dropout": "gnn.dropout",
+    "act": "gnn.act",
+    "variant": "gnn.variant",
+    "pool_type": "gnn.pool_type",
+    "aux_loss_weight": "gnn.aux_loss_weight",
+    "graph_pooling": "model.graph_pooling",
+    "base_lr": "optim.base_lr",
+    "mode": "expression_graph.mode",
+    "edge_direction": "expression_graph.edge_direction",
+}
+
+# Columns that identify a run but are not hyperparameters; excluded from sort/grouping.
+NON_CONFIG_COLUMNS = ("run_name",)
+
+
+def _dotted_get(data: dict, dotted: str):
+    cur = data
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def _grid_axes_from_manifest(results_dir) -> dict | None:
+    """Map swept column name -> dotted config path from run_manifest.json, or None.
+
+    When present, restricts the recovered columns to exactly the axes that were swept,
+    reproducing the old "only swept params appear in the leaderboard" behaviour.
+    """
+    manifest_path = osp.join(str(results_dir), "run_manifest.json")
+    if not osp.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path, encoding="utf-8") as handle:
+            grid = (json.load(handle) or {}).get("grid", {}) or {}
+    except (OSError, ValueError):
+        return None
+    if not grid:
+        return None
+    return {key.split(".")[-1]: key for key in grid}
+
+
+def _run_config_columns(run_dir: str, run_name: str, axes: dict | None) -> dict:
+    """Hyperparameter columns for one run, read from its config.yaml snapshot.
+
+    Prefers the per-run snapshot (datetime-named folders carry no params in the name);
+    falls back to GraphGym folder-name parsing for legacy ``grid-key=value`` runs.
+    Always includes ``run_name`` so downstream code can locate the run directory.
+    """
+    from torch_geometric.graphgym.utils.agg_runs import name_to_dict
+
+    cfg_path = osp.join(run_dir, "config.yaml")
+    if osp.exists(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as handle:
+                data = yaml.safe_load(handle) or {}
+        except (OSError, yaml.YAMLError):
+            data = {}
+        if data:
+            paths = (
+                {col: axes[col] for col in axes}
+                if axes
+                else CONFIG_COLUMN_PATHS
+            )
+            columns = {}
+            for col, dotted in paths.items():
+                value = _dotted_get(data, dotted)
+                if value is not None:
+                    columns[col] = value
+            columns["run_name"] = run_name
+            return columns
+
+    # Legacy fallback: folder name still encodes the params.
+    columns = name_to_dict(run_name)
+    columns["run_name"] = run_name
+    return columns
 
 AGG_METRIC_COLUMNS = (
     'epoch', 'loss', 'accuracy', 'precision', 'recall', 'f1',
