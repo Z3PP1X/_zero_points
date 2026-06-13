@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch_geometric.nn import GATv2Conv, GINEConv
 
 from gnn.shared.models.gnn_backbones import (
+    DirichletProbe,
     EDGE_AWARE_ARCHITECTURE_NAMES,
     LEGACY_VARIANTS,
     UniformPoolMixin,
@@ -132,6 +133,10 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
             self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim)
 
         self.convs = nn.ModuleList([self.conv1, self.conv2, self.conv3])
+        # Forward-hook target for Dirichlet-energy / over-smoothing diagnostics. Parameter-
+        # free, so it leaves the checkpoint and numerics untouched; main_graphgym discovers
+        # it as the message-passing probe in place of PyG GNN's absent .mp stage.
+        self.dirichlet_probe = DirichletProbe()
         # One activation per conv layer so PReLU slopes are independent per layer.
         self.layer_activations = nn.ModuleList(
             [make_activation(activation) for _ in range(self.num_layers)]
@@ -240,6 +245,10 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
             )
             if is_virtual.any():
                 h_virt = self.virtual_update_mlps[layer_idx](h_virt)
+
+        # Probe the final message-passing embeddings on the real subgraph (virtual nodes
+        # are MLP-updated, not message-passed) for Dirichlet over-smoothing diagnostics.
+        self.dirichlet_probe(h_real, real_edge_index, real_edge_attr)
 
         return pool_split_embeddings(
             h_real,
