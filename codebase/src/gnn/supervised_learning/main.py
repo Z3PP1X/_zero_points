@@ -324,6 +324,24 @@ def main(
         num_workers=3,
     )
 
+    # In non-synthetic mode pipe() builds val_loader over the FULL 20% holdout and there
+    # is no separate test set, so the set used for checkpoint selection would also be the
+    # one reported as generalization (leakage). Split the holdout into two disjoint halves
+    # (deterministic interleave) so val drives selection and test stays untouched.
+    test_loader = None
+    if not synthetic:
+        from torch_geometric.loader import DataLoader as _PyGDataLoader
+
+        _holdout = [
+            pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
+        ]
+        val_loader = _PyGDataLoader(
+            _holdout[0::2], batch_size=batch_size, shuffle=False
+        )
+        test_loader = _PyGDataLoader(
+            _holdout[1::2], batch_size=batch_size, shuffle=False
+        )
+
     sample = pipeline.train_dataset[0]
     dim_in = sample.x.shape[1]
     configure_class_weights(class_weights)
@@ -507,6 +525,34 @@ def main(
                 f"F1: {cur_metrics['f1']:.4f} | "
                 f"ROC-AUC: {cur_metrics['auc']:.4f} | "
                 f"PR-AUC: {cur_metrics['pr_auc']:.4f}"
+            )
+            print("-" * 50)
+
+        elif test_loader is not None:
+            print("\nEvaluating best saved model on disjoint Test holdout...")
+            best_model = create_graphgym_model(cfg, dim_in=dim_in, device=DEVICE)
+            best_model.load_state_dict(torch.load(str(save_path), map_location=DEVICE))
+            test_loss, test_metrics, _, _, _ = evaluate(best_model, test_loader)
+
+            mlflow.log_metrics(
+                {
+                    "Loss/test": test_loss,
+                    "Accuracy/test": test_metrics["accuracy"],
+                    "F1/test": test_metrics["f1"],
+                    "Precision/test": test_metrics["precision"],
+                    "Recall/test": test_metrics["recall"],
+                    "AUC/test": test_metrics["auc"],
+                    "PR_AUC/test": test_metrics["pr_auc"],
+                }
+            )
+            print("-" * 50)
+            print(
+                f"Final Test (disjoint holdout) Evaluation | "
+                f"Loss: {test_loss:.4f} | "
+                f"Acc: {test_metrics['accuracy']:.4f} | "
+                f"F1: {test_metrics['f1']:.4f} | "
+                f"ROC-AUC: {test_metrics['auc']:.4f} | "
+                f"PR-AUC: {test_metrics['pr_auc']:.4f}"
             )
             print("-" * 50)
 

@@ -208,20 +208,20 @@ def test_load_augmented_function_graph(
 
     # Verify weights on edges
     edge_1_fwd = mainGraph.edges[globalNode, "kappa_1_k_root"]
-    assert edge_1_fwd["weight"] == -15.5
+    assert edge_1_fwd["kappa_weight"] == -15.5
     assert edge_1_fwd["etype"] == "GlobalToKappa"
     assert edge_1_fwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["GlobalToKappa"]
 
     edge_1_bwd = mainGraph.edges["kappa_1_k_root", globalNode]
-    assert edge_1_bwd["weight"] == -15.5
+    assert edge_1_bwd["kappa_weight"] == -15.5
     assert edge_1_bwd["etype"] == "KappaToGlobal"
     assert edge_1_bwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["KappaToGlobal"]
 
     edge_2_fwd = mainGraph.edges[globalNode, "kappa_2_1"]
-    assert edge_2_fwd["weight"] == -25.0
+    assert edge_2_fwd["kappa_weight"] == -25.0
 
     edge_2_bwd = mainGraph.edges["kappa_2_1", globalNode]
-    assert edge_2_bwd["weight"] == -25.0
+    assert edge_2_bwd["kappa_weight"] == -25.0
 
 
 def test_filter_active_kappa_nodes_edges(

@@ -1,8 +1,0 @@
-# Ignore auto-generated config permutations
-configs/
-
-# Ignore benchmark runs and plotted diagrams
-results/
-
-# Ignore python bytecode cache
-__pycache__/

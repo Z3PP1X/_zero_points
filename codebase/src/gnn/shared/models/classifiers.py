@@ -22,8 +22,8 @@ from gnn.shared.utils.feature_config import (
 from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA
 
 # Edge feature dim at which the relation-type column (index 2) is present and the
-# edge encoder can embed it.
-ENRICHED_EDGE_DIM = 4
+# edge encoder can embed it. Derived from the schema so it tracks edge-column changes.
+ENRICHED_EDGE_DIM = len(EDGE_FEATURE_SCHEMA)
 
 
 class SupervisedGraphClassifier(nn.Module):

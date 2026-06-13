@@ -87,7 +87,7 @@ def test_enriched_graph_features(tmp_path):
     assert data.edges == 2
     assert data.num_edges == 2
     assert data.tree_depth == 1
-    assert data.treewidth == 2 or data.tree_width == 2
+    assert data.tree_width == 2
 
     assert data.x.shape == (3, NATIVE_NODE_FEATURE_COUNT)
     assert data.edge_attr.shape == (4, NATIVE_EDGE_FEATURE_COUNT)
@@ -139,7 +139,7 @@ def test_enriched_graph_features(tmp_path):
     assert diag == [2.0, 1.0, 1.0]
 
     assert data.edge_index.shape == (2, 4)
-    assert data.edge_attr.shape == (4, 4)
+    assert data.edge_attr.shape == (4, len(EDGE_FEATURE_SCHEMA))
 
     directions = data.edge_attr[:, 1].tolist()
     assert directions.count(0.0) == 2

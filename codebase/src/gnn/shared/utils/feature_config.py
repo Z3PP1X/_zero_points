@@ -387,20 +387,6 @@ def active_features_to_csv(active_features: list[str] | None) -> str:
     return ",".join(active_features)
 
 
-def feature_catalog_markdown() -> str:
-    """Human-readable overview of feature classes and members."""
-    lines = [
-        "Feature classes:",
-        f"  node:       {list(NODE_FEATURES)}",
-        f"  topology:   {list(TOPOLOGY_FEATURES)}",
-        "  positional:",
-    ]
-    for name, members in POSITIONAL_ENCODING_FEATURES.items():
-        lines.append(f"    {name}: {list(members)}")
-    lines.append(f"  edge:       {list(EDGE_FEATURES)}")
-    return "\n".join(lines)
-
-
 def add_feature_cli_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--feature-groups",

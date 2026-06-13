@@ -174,23 +174,36 @@ class GNNResultEvaluator:
                 "Attempting fallback calculation..."
             )
             try:
+                # Dataset names are resolved from the run's config — never hardcoded,
+                # otherwise the fallback would compute class balance against the wrong
+                # dataset. If the config (or the dataset name) is unavailable we skip the
+                # annotation rather than guess.
                 config_file = self.base_dir.parent / "config_supervised.yaml"
-                dataset_name = "run_20260603_123013/parallel_benchmark_results"
-                synthetic_dataset_name = "run_20260604_154509/parallel_benchmark_results"
-                add_kappa = False
-
-                if config_file.exists():
-                    import yaml
-
-                    with open(config_file, "r", encoding="utf-8") as f:
-                        cfg_data = yaml.safe_load(f)
-                    dataset_name = cfg_data.get("dataset", {}).get("name", dataset_name)
-                    synthetic_dataset_name = cfg_data.get("expression_graph", {}).get(
-                        "synthetic_dataset", synthetic_dataset_name
+                if not config_file.exists():
+                    print(
+                        f"  Cannot compute class balance: config not found at "
+                        f"{config_file}. Skipping class-balance annotation."
                     )
-                    add_kappa = bool(
-                        cfg_data.get("expression_graph", {}).get("add_kappa", False)
+                    return
+
+                import yaml
+
+                with open(config_file, "r", encoding="utf-8") as f:
+                    cfg_data = yaml.safe_load(f) or {}
+                dataset_name = cfg_data.get("dataset", {}).get("name")
+                synthetic_dataset_name = cfg_data.get("expression_graph", {}).get(
+                    "synthetic_dataset"
+                )
+                add_kappa = bool(
+                    cfg_data.get("expression_graph", {}).get("add_kappa", False)
+                )
+                if not dataset_name or not synthetic_dataset_name:
+                    print(
+                        "  Cannot compute class balance: dataset.name / "
+                        "expression_graph.synthetic_dataset missing from "
+                        f"{config_file}. Skipping class-balance annotation."
                     )
+                    return
 
                 src_path = str(self.base_dir.parents[2])
                 if src_path not in sys.path:

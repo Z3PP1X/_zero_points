@@ -4,10 +4,14 @@ from dataclasses import dataclass
 
 from datetime import datetime
 
+from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA
+
 current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 NATIVE_NODE_FEATURE_COUNT = 24
-NATIVE_EDGE_FEATURE_COUNT = 4
+# Must equal the shared edge schema width: the policy backbone coalesces edge_attr to this
+# count before the edge encoder (which expects len(EDGE_FEATURE_SCHEMA) columns).
+NATIVE_EDGE_FEATURE_COUNT = len(EDGE_FEATURE_SCHEMA)
 # 8 global state scalars (solver removed — it is the network's action, not a feature).
 NATIVE_GLOBAL_FEATURE_COUNT = 8
 PADDED_NODE_FEATURE_COUNT = NATIVE_NODE_FEATURE_COUNT

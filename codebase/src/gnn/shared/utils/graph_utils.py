@@ -72,7 +72,18 @@ CANONICAL_EDGE_TYPES: tuple[str, ...] = (
     "NextUseBackward",
     "GlobalToKappa",
     "KappaToGlobal",
-) + tuple(f"OuterToInner_Arg{i}" for i in range(10)) + tuple(f"InnerToOuter_Arg{i}" for i in range(10))
+) + tuple(f"OuterToInner_Arg{i}" for i in range(10)) + tuple(
+    f"InnerToOuter_Arg{i}" for i in range(10)
+) + (
+    # Operand-side relation types for non-commutative binary operators. Appended at the
+    # end so existing edge-type ids stay stable. The homogeneous relation_type column and
+    # the heterogeneous metapath keys both resolve through get_relation_type, so left vs
+    # right operand is distinguished consistently in both representations.
+    "left_operand",
+    "left_operand_reverse",
+    "right_operand",
+    "right_operand_reverse",
+)
 CANONICAL_EDGE_TYPE_VOCAB: dict[str, int] = {etype: idx for idx, etype in enumerate(CANONICAL_EDGE_TYPES)}
 
 VIRTUAL_NODE_TYPES = frozenset(FUNCTION_AGGREGATOR_IDS)
@@ -83,13 +94,6 @@ VIRTUAL_NODE_TYPES = frozenset(FUNCTION_AGGREGATOR_IDS)
 NUM_NODE_TYPES: int = 11
 NUM_LABELS: int = len(CANONICAL_LABEL_VOCAB)
 NUM_EDGE_TYPES: int = len(CANONICAL_EDGE_TYPE_VOCAB)
-
-
-def signed_log_value(value: float) -> float:
-    """sign(v) * log1p(|v|) — same transform as RL global features."""
-    if value == 0.0:
-        return 0.0
-    return math.copysign(math.log1p(abs(value)), value)
 
 
 def _is_numeric_label(label: str) -> bool:
@@ -131,16 +135,6 @@ def get_hetero_node_type(raw_type: str) -> str:
         return "virtual"
     else:
         return "virtual"
-
-
-def fourier_frequency_encoding(val: float) -> list[float]:
-    # 8-dimensional multi-scale sinusoidal/fourier frequency encoding vector
-    frequencies = [2.0 ** i for i in range(4)]
-    enc = []
-    for freq in frequencies:
-        enc.append(math.sin(val * freq))
-        enc.append(math.cos(val * freq))
-    return enc
 
 
 def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
@@ -243,6 +237,9 @@ EDGE_FEATURE_SCHEMA = [
     "direction",
     "relation_type",
     "edge_betweenness_centrality",
+    # kappa (h-function) edge weight: the parsed kappa value on GlobalToKappa/KappaToGlobal
+    # edges, 0.0 on all other edges. Continuous column (not in EDGE_CATEGORICAL_REGISTRY).
+    "kappa_weight",
 ]
 
 EDGE_DIRECTIONS: tuple[str, ...] = ("top_down", "bottom_up", "bidirectional")
@@ -361,7 +358,6 @@ class ExpressionHeteroData(HeteroData):
 class TopologicalFeatureExtractor:
     """Extrahiert topologische Features aus einem NetworkX Graphen."""
 
-    @staticmethod
     @staticmethod
     def extract_and_annotate(G: nx.DiGraph) -> dict:
         deg_cent = nx.degree_centrality(G)
@@ -638,13 +634,19 @@ class ExpressionGraphConverter:
         edge_direction: str,
     ) -> None:
         effective = edge_direction
+        # Resolve the operand-aware relation type (left/right operand for non-commutative
+        # binary operators) so the homogeneous relation_type column matches the
+        # heterogeneous metapath keys. For non-child_of edges get_relation_type is a no-op.
+        parent_label = G_enriched.nodes[parent].get("label", "") if parent in G_enriched else ""
+        rel_forward = get_relation_type(parent_label, etype, float(child_idx))
+        rel_reverse = get_relation_type(parent_label, etype + "_reverse", float(child_idx))
         if effective in ("top_down", "bidirectional"):
             G_enriched.add_edge(
                 parent,
                 child,
                 child_index=float(child_idx),
                 direction=0.0,
-                relation_type=float(self._encode_edge_type(etype)),
+                relation_type=float(self._encode_edge_type(rel_forward)),
                 edge_betweenness_centrality=eb_val,
                 etype=etype,
             )
@@ -654,7 +656,7 @@ class ExpressionGraphConverter:
                 parent,
                 child_index=float(child_idx),
                 direction=1.0 if effective == "bidirectional" else 0.0,
-                relation_type=float(self._encode_edge_type(etype + "_reverse")),
+                relation_type=float(self._encode_edge_type(rel_reverse)),
                 edge_betweenness_centrality=eb_val,
                 etype=etype + "_reverse",
             )
@@ -941,14 +943,18 @@ class ExpressionGraphConverter:
                 if key not in G_enriched.nodes[nid]:
                     G_enriched.nodes[nid][key] = None
 
-        # Ensure all edges have exactly the same set of attribute keys
-        all_edge_keys = set()
+        # Ensure all edges have exactly the same set of attribute keys. Seed with the
+        # full edge schema so columns that only appear on some edges (e.g. kappa_weight,
+        # which is set on kappa edges only) are still present — and default to 0.0 — on
+        # graphs that lack those edges. Otherwise from_networkx(group_edge_attrs=...)
+        # raises a KeyError on the missing column.
+        all_edge_keys = set(EDGE_FEATURE_SCHEMA)
         for u, v in G_enriched.edges:
             all_edge_keys.update(G_enriched.edges[u, v].keys())
         for u, v in G_enriched.edges:
             for key in all_edge_keys:
                 if key not in G_enriched.edges[u, v]:
-                    if key in ("child_index", "direction", "relation_type", "edge_betweenness_centrality", "weight", "edge_type"):
+                    if key in ("child_index", "direction", "relation_type", "edge_betweenness_centrality", "kappa_weight", "edge_type"):
                         G_enriched.edges[u, v][key] = 0.0
                     else:
                         G_enriched.edges[u, v][key] = None
@@ -994,7 +1000,6 @@ class ExpressionGraphConverter:
         # Add global graph features
         data.tree_depth = topo["tree_depth"]
         data.tree_width = topo["tree_width"]
-        data.treewidth = topo["tree_width"]
         data.nodes = G_directed.number_of_nodes()
         data.num_nodes = G_directed.number_of_nodes()
         data.edges = G_directed.number_of_edges()
@@ -1769,7 +1774,7 @@ class AugmentedFunctionGraph(nx.DiGraph):
             edge.target,
             edge_type=edge_type_code,
             etype=edge.type,
-            weight=weight,
+            kappa_weight=weight,
             child_index=0.0,
             direction=direction_val,
             relation_type=float(edge_type_code),
@@ -2015,7 +2020,6 @@ def filter_active_kappa(
     Raises:
         None
     """
-    import math
     import torch
     from torch_geometric.data import Data
 
