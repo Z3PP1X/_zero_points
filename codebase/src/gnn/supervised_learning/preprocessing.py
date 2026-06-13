@@ -318,11 +318,9 @@ class GraphPipeline:
             return
         sample = next(iter(self.graphs.values()))
         edge_attr = getattr(sample, "edge_attr", None)
-        expected_dim = self.edge_dim
         if edge_attr is None:
-            raise ValueError(
-                "edge_attr is required on loaded graphs, but edge_attr is missing"
-            )
+            return
+        expected_dim = self.edge_dim
         if edge_attr.ndim != 2 or edge_attr.shape[1] != expected_dim:
             raise ValueError(
                 f"expected edge_attr with {expected_dim} features, "

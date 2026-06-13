@@ -70,13 +70,8 @@ def resolve_edge_dim() -> int:
 
 
 def get_batch_edge_attr(batch):
-    """Return edge attributes for a PyG batch; edge_attr is always required."""
-    edge_attr = getattr(batch, "edge_attr", None)
-    if edge_attr is None:
-        raise ValueError(
-            "edge_attr is required on every graph batch, but edge_attr is missing"
-        )
-    return edge_attr
+    """Return edge attributes for a PyG batch, or None for homogeneous graphs."""
+    return getattr(batch, "edge_attr", None)
 
 
 def bootstrap_graphgym_cfg(config_path: Path | str, seed: int | None = None):

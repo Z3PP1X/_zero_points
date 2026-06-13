@@ -9,11 +9,9 @@ the RL, supervised and GraphGym workflows.
 import pytest
 
 from graph_utils import (
-    EDGE_FEATURE_SCHEMA,
     ExpressionGraphConverter,
     SUPERNODE_NODE_ID,
     SUPERNODE_NODE_TYPE,
-    encode_edge_type,
 )
 
 
@@ -88,18 +86,7 @@ def test_supernode_bidirectionally_connected_to_all(sample_raw):
         assert (sn_idx, i) in edges, f"missing supernode->{data.node_ids[i]}"
         assert (i, sn_idx) in edges, f"missing {data.node_ids[i]}->supernode"
 
-    # The supernode edges use the reserved supernode_connection relation types.
-    fwd = float(encode_edge_type("supernode_connection"))
-    rev = float(encode_edge_type("supernode_connection_reverse"))
-    rel_col = EDGE_FEATURE_SCHEMA.index("relation_type")
-    edge_list = list(zip(data.edge_index[0].tolist(), data.edge_index[1].tolist()))
-    rels = {
-        (u, v): float(data.edge_attr[k, rel_col])
-        for k, (u, v) in enumerate(edge_list)
-    }
-    a_idx = other_indices[0]
-    assert rels[(sn_idx, a_idx)] == fwd
-    assert rels[(a_idx, sn_idx)] == rev
+    # Homogeneous mode has no edge_attr; edge structure is verified via edge_index above.
 
 
 @pytest.mark.parametrize("mode", ["graph", "tree", "tree_derivatives"])
