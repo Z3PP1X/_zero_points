@@ -66,6 +66,7 @@ class GraphPipeline:
         layer_type: str = "gatv2conv",
         heterogeneous: bool = False,
         add_kappa: bool = False,
+        add_virtual_supernode: bool = False,
     ):
         self.seed = seed
         self.mode = mode
@@ -75,6 +76,7 @@ class GraphPipeline:
         self.layer_type = validate_layer_type(layer_type)
         self.heterogeneous = heterogeneous
         self.add_kappa = add_kappa
+        self.add_virtual_supernode = add_virtual_supernode
 
         # Use unified_loader or get/create singleton instance
         if unified_loader is not None:
@@ -85,6 +87,7 @@ class GraphPipeline:
                 mode=mode,
                 heterogeneous=heterogeneous,
                 add_kappa=add_kappa,
+                add_virtual_supernode=add_virtual_supernode,
             )
 
         if self.synthetic and self.synthetic_dataset_name is not None:
@@ -94,6 +97,7 @@ class GraphPipeline:
                 heterogeneous=heterogeneous,
                 is_synthetic=True,
                 add_kappa=add_kappa,
+                add_virtual_supernode=add_virtual_supernode,
             )
         else:
             self.synthetic_unified_loader = None

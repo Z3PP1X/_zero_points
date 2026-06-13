@@ -95,6 +95,13 @@ NUM_NODE_TYPES: int = 11
 NUM_LABELS: int = len(CANONICAL_LABEL_VOCAB)
 NUM_EDGE_TYPES: int = len(CANONICAL_EDGE_TYPE_VOCAB)
 
+# Optional fully-connected virtual supernode (opt-in via add_virtual_supernode). It is
+# given its own node_type code in the otherwise-unused 0..10 gap (5), distinct from the
+# f/d1/d2 aggregator virtual types (6/9/10) so the model treats it as an ordinary
+# message-passing node rather than a task aggregator. NUM_NODE_TYPES already covers code 5.
+SUPERNODE_NODE_TYPE: int = 5
+SUPERNODE_NODE_ID: str = "virtual_supernode"
+
 
 def _is_numeric_label(label: str) -> bool:
     try:
@@ -252,6 +259,99 @@ def validate_edge_direction(edge_direction: str) -> str:
             f"expected one of {list(EDGE_DIRECTIONS)}"
         )
     return edge_direction
+
+
+def inject_virtual_supernode(
+    G_enriched: nx.DiGraph,
+    G_directed: nx.DiGraph,
+    node_ids: list,
+) -> None:
+    """Inject one fully-connected virtual supernode into an already-built graph.
+
+    The supernode is wired with bidirectional edges to every pre-existing node so a
+    message can travel between any two nodes in at most two hops, shrinking the
+    effective graph diameter and boosting long-range message passing.
+
+    It is injected *after* the AST topology / positional features and the augmented
+    (NextUse / function-nesting) edges have been computed, so adding it does not perturb
+    those structural node features. The supernode carries its own node_type code
+    (``SUPERNODE_NODE_TYPE``), distinct from the f/d1/d2 aggregator virtual types
+    (6/9/10); the model therefore treats it as an ordinary message-passing node instead
+    of excluding it like the task aggregators.
+
+    Mutates ``G_enriched`` (feature graph), ``G_directed`` (source of the node-type /
+    label / belongs tensors and the node/edge counts) and appends the supernode id to
+    ``node_ids`` in place. Idempotent: a second call is a no-op.
+    """
+    if SUPERNODE_NODE_ID in G_enriched:
+        return
+
+    existing_nodes = [nid for nid in node_ids if nid != SUPERNODE_NODE_ID]
+
+    supernode_attrs: dict[str, Any] = {
+        "node_type": SUPERNODE_NODE_TYPE,
+        "label_id": encode_label("GLOBAL"),
+        "type": "supernode",
+        "label": "GLOBAL",
+        "value": 0.0,
+        "has_value": 0.0,
+        "depth": 0.0,
+        "height": 0.0,
+        "subtree_size": 1.0,
+        "out_degree": 0.0,
+        "betweenness_centrality": 0.0,
+        "lpe_1": 0.0,
+        "lpe_2": 0.0,
+        "lpe_3": 0.0,
+        "lpe_4": 0.0,
+        "rwpe_1": 0.0,
+        "rwpe_2": 0.0,
+        "rwpe_3": 0.0,
+        "rwpe_4": 0.0,
+        "virtual_current_x_val": 0.0,
+        "virtual_delta_target_val": 0.0,
+        "virtual_d1_x_val": 0.0,
+        "virtual_d2_x_val": 0.0,
+        "belongs_to_f": 0.0,
+        "belongs_to_d1": 0.0,
+        "belongs_to_d2": 0.0,
+    }
+    G_enriched.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
+    G_directed.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
+
+    forward_rel = float(encode_edge_type("supernode_connection"))
+    reverse_rel = float(encode_edge_type("supernode_connection_reverse"))
+
+    def _edge_attrs(relation_type: float, direction: float, etype: str) -> dict[str, Any]:
+        # Populate the full edge schema so homogeneous from_networkx(group_edge_attrs=...)
+        # finds every column; kappa_weight is 0.0 on non-kappa edges.
+        return {
+            "child_index": 0.0,
+            "direction": direction,
+            "relation_type": relation_type,
+            "edge_betweenness_centrality": 0.0,
+            "kappa_weight": 0.0,
+            "etype": etype,
+        }
+
+    for nid in existing_nodes:
+        # Both directions are always added so the supernode shortcut stays bidirectional
+        # regardless of the AST edge_direction setting (mirrors virtual/task edges).
+        G_enriched.add_edge(
+            SUPERNODE_NODE_ID,
+            nid,
+            **_edge_attrs(forward_rel, 0.0, "supernode_connection"),
+        )
+        G_enriched.add_edge(
+            nid,
+            SUPERNODE_NODE_ID,
+            **_edge_attrs(reverse_rel, 1.0, "supernode_connection_reverse"),
+        )
+        # Mirror the structural edges into G_directed so num_edges/num_nodes stay accurate.
+        G_directed.add_edge(SUPERNODE_NODE_ID, nid)
+        G_directed.add_edge(nid, SUPERNODE_NODE_ID)
+
+    node_ids.append(SUPERNODE_NODE_ID)
 
 
 def _find_global_node_id(raw: dict) -> str | None:
@@ -615,6 +715,7 @@ class ExpressionGraphConverter:
         "constant": 2,
         "variable": 3,
         "function": 4,
+        "supernode": SUPERNODE_NODE_TYPE,
         "f_root": 6,
         "d1_root": 9,
         "d2_root": 10,
@@ -667,6 +768,7 @@ class ExpressionGraphConverter:
         heterogeneous: bool = False,
         mode: str = "graph",
         edge_direction: str = "top_down",
+        add_virtual_supernode: bool = False,
     ) -> Union[Data, HeteroData]:
         edge_direction = validate_edge_direction(edge_direction)
         
@@ -925,6 +1027,12 @@ class ExpressionGraphConverter:
                         children_dict,
                         edge_direction,
                     )
+
+        # Optional fully-connected supernode: injected after topology/PE features and the
+        # augmented edges so it does not perturb the AST structural features. Independent
+        # of mode — it connects to every node regardless of graph/tree/tree_derivatives.
+        if add_virtual_supernode:
+            inject_virtual_supernode(G_enriched, G_directed, node_ids)
 
         # Gather node_kappas mapping matching node_ids
         node_kappas = [G_enriched.nodes[nid].get("kappa_value") for nid in node_ids]
