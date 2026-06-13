@@ -1940,10 +1940,14 @@ def LoadAugmentedFunctionGraph(
         kv = float(kappa_value)
         entry = kappa_lookup.get(kv)
         if entry is None:
-            logger.warning(
-                f"Kappa value {kv} not found for graph '{graphId}'; "
-                f"available: {sorted(kappa_lookup)}. No kappa merged."
-            )
+            # kappa == 0 (and any value outside the curve set) intentionally has
+            # no h-function: nothing is attached. Only genuinely unexpected values
+            # are worth a warning.
+            if kv != 0.0:
+                logger.warning(
+                    f"Kappa value {kv} not found for graph '{graphId}'; "
+                    f"available: {sorted(kappa_lookup)}. No kappa merged."
+                )
         else:
             original_root, normalized = entry
             kappa_root_id = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
