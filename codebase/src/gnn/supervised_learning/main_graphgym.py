@@ -42,13 +42,21 @@ set_cfg(cfg)
 def _register_mp_hook(pl_module, hook_fn):
     """Register a forward hook on the message-passing stage, if the model has one.
 
-    The Dirichlet-energy callbacks hook ``pl_module.model.mp`` — the message-passing
-    stage of PyG's stock ``GNN``. The custom ``expression_classifier`` backbone has no
-    ``.mp`` stage (and node embeddings are pooled away under DiffPool), so we skip the
-    hook and report energy NaN (not measured) rather than crash. Returns the handle or
-    ``None``.
+    The Dirichlet-energy callbacks hook the message-passing output. PyG's stock ``GNN``
+    exposes it as ``pl_module.model.mp``; the custom ``expression_classifier`` backbone
+    has no ``.mp`` stage, so it exposes a parameter-free ``DirichletProbe`` submodule at
+    its message-passing output instead (see ``gnn_backbones.DirichletProbe``). Hook
+    whichever is present. Returns the handle, or ``None`` when neither exists (energy is
+    then reported NaN — not measured — rather than crashing).
     """
-    mp = getattr(getattr(pl_module, "model", None), "mp", None)
+    model = getattr(pl_module, "model", None)
+    if model is None:
+        return None
+    mp = getattr(model, "mp", None)
+    if mp is None:
+        from gnn.shared.models.gnn_backbones import DirichletProbe
+
+        mp = next((m for m in model.modules() if isinstance(m, DirichletProbe)), None)
     if mp is None:
         return None
     return mp.register_forward_hook(hook_fn)
@@ -347,7 +355,27 @@ class ValMetricLogger(pl.callbacks.Callback):
 _EARLY_STOPPING_MONITORS = {"val_pr_auc": "max", "val_loss": "min"}
 
 
-def _build_early_stopping_callback() -> "pl.callbacks.EarlyStopping":
+class _WarmupAwareEarlyStopping(pl.callbacks.EarlyStopping):
+    """EarlyStopping that ignores all epochs before `warmup_epochs`.
+
+    During the LR-warmup ramp the model has not yet converged, so val metrics
+    can be anomalously high or low and must not seed the patience counter.
+    Monitoring begins at the first validation epoch >= warmup_epochs, at which
+    point best_score is initialised from that epoch's metric — not from anything
+    seen during warmup.
+    """
+
+    def __init__(self, *args, warmup_epochs: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._warmup_epochs = warmup_epochs
+
+    def on_validation_end(self, trainer, pl_module):
+        if trainer.current_epoch < self._warmup_epochs:
+            return
+        super().on_validation_end(trainer, pl_module)
+
+
+def _build_early_stopping_callback() -> "_WarmupAwareEarlyStopping":
     """Construct the EarlyStopping callback from cfg.train.early_stopping_* settings."""
     monitor = str(getattr(cfg.train, "early_stopping_monitor", "val_pr_auc"))
     if monitor not in _EARLY_STOPPING_MONITORS:
@@ -359,16 +387,19 @@ def _build_early_stopping_callback() -> "pl.callbacks.EarlyStopping":
     mode = _EARLY_STOPPING_MONITORS[monitor]
     patience = int(getattr(cfg.train, "early_stopping_patience", 10))
     min_delta = float(getattr(cfg.train, "early_stopping_min_delta", 0.0))
+    warmup_epochs = int(getattr(cfg.train, "epoch_warmup", 0))
     print(
         f"[GraphGym] Early stopping ENABLED: monitor={monitor} (mode={mode}), "
-        f"patience={patience} epochs, min_delta={min_delta}"
+        f"patience={patience} epochs, min_delta={min_delta}, "
+        f"warmup_skip={warmup_epochs} epochs"
     )
-    return pl.callbacks.EarlyStopping(
+    return _WarmupAwareEarlyStopping(
         monitor=monitor,
         mode=mode,
         patience=patience,
         min_delta=min_delta,
         verbose=True,
+        warmup_epochs=warmup_epochs,
     )
 
 
