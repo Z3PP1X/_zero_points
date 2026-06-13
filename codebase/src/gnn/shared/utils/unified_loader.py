@@ -183,6 +183,28 @@ class UnifiedDataLoader:
         """Forwards checking if the graph exists."""
         return self.graph_loader.has_graph(graph_id)
 
-    def load_all(self) -> dict[str, Any]:
-        """Forwards preloading all graphs into memory."""
-        return self.graph_loader.load_all()
+    def build_kappa_map(self) -> dict[str, float]:
+        """Build a {graph_id: kappa_value} mapping from the tabular dataset.
+
+        Each graph ID is expected to map to exactly one kappa value. Returns an
+        empty dict if the dataset has no 'kappa' column.
+        """
+        df = self.dataset_loader.data
+        if "kappa" not in df.columns or "Problem_ID" not in df.columns:
+            return {}
+        return (
+            df.dropna(subset=["kappa"])
+            .groupby("Problem_ID")["kappa"]
+            .first()
+            .apply(float)
+            .to_dict()
+        )
+
+    def load_all(self, kappa_map: dict = None) -> dict[str, Any]:
+        """Forwards preloading all graphs into memory.
+
+        Arguments:
+            kappa_map: Optional {graph_id: kappa_value} mapping forwarded to
+                GraphDataLoader so each graph merges only its active kappa.
+        """
+        return self.graph_loader.load_all(kappa_map=kappa_map)
