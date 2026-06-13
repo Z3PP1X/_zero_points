@@ -8,10 +8,9 @@ from graph_utils import (
     ExpressionGraphConverter,
     TopologicalFeatureExtractor,
     NODE_FEATURE_SCHEMA,
-    EDGE_FEATURE_SCHEMA,
     CANONICAL_LABEL_VOCAB,
 )
-from feature_layout import NATIVE_NODE_FEATURE_COUNT, NATIVE_EDGE_FEATURE_COUNT
+from feature_layout import NATIVE_NODE_FEATURE_COUNT
 
 
 def test_convert_ignores_legacy_taylor_coeff_fields(tmp_path):
@@ -90,8 +89,7 @@ def test_enriched_graph_features(tmp_path):
     assert data.tree_width == 2
 
     assert data.x.shape == (3, NATIVE_NODE_FEATURE_COUNT)
-    assert data.edge_attr.shape == (4, NATIVE_EDGE_FEATURE_COUNT)
-    assert data.edge_attr.shape[1] == len(EDGE_FEATURE_SCHEMA)
+    assert getattr(data, "edge_attr", None) is None
 
     root_idx = 0
     child1_idx = 1
@@ -148,18 +146,6 @@ def test_enriched_graph_features(tmp_path):
     assert diag == [2.0, 1.0, 1.0]
 
     assert data.edge_index.shape == (2, 4)
-    assert data.edge_attr.shape == (4, len(EDGE_FEATURE_SCHEMA))
-
-    directions = data.edge_attr[:, 1].tolist()
-    assert directions.count(0.0) == 2
-    assert directions.count(1.0) == 2
-
-    child_indices = data.edge_attr[:, 0].tolist()
-    assert child_indices.count(0.0) == 2
-    assert child_indices.count(1.0) == 2
-
-    eb = data.edge_attr[:, 3].tolist()
-    assert all(val > 0.0 for val in eb)
 
 
 def test_edge_direction_top_down_has_parent_to_child_only():

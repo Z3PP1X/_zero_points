@@ -346,7 +346,6 @@ EDGE_FEATURE_SCHEMA = [
     "child_index",
     "direction",
     "relation_type",
-    "edge_betweenness_centrality",
     # kappa (h-function) edge weight: the parsed kappa value on GlobalToKappa/KappaToGlobal
     # edges, 0.0 on all other edges. Continuous column (not in EDGE_CATEGORICAL_REGISTRY).
     "kappa_weight",
@@ -423,13 +422,10 @@ def inject_virtual_supernode(
     reverse_rel = float(encode_edge_type("supernode_connection_reverse"))
 
     def _edge_attrs(relation_type: float, direction: float, etype: str) -> dict[str, Any]:
-        # Populate the full edge schema so homogeneous from_networkx(group_edge_attrs=...)
-        # finds every column; kappa_weight is 0.0 on non-kappa edges.
         return {
             "child_index": 0.0,
             "direction": direction,
             "relation_type": relation_type,
-            "edge_betweenness_centrality": 0.0,
             "kappa_weight": 0.0,
             "etype": etype,
         }
@@ -630,13 +626,6 @@ class TopologicalFeatureExtractor:
         # Betweenness Centrality (computed on undirected graph)
         betweenness = nx.betweenness_centrality(G_und)
 
-        # Edge Betweenness Centrality (computed on undirected graph)
-        edge_betweenness = nx.edge_betweenness_centrality(G_und)
-        eb_lookup = {}
-        for (u, v), val in edge_betweenness.items():
-            eb_lookup[(u, v)] = val
-            eb_lookup[(v, u)] = val
-
         # Laplace-Matrix (Graph)
         if num_nodes > 0:
             laplace_matrix = nx.laplacian_matrix(G_und).toarray()
@@ -654,7 +643,6 @@ class TopologicalFeatureExtractor:
             "subtree_sizes": subtree_sizes,
             "out_degrees": out_degrees,
             "betweenness": betweenness,
-            "edge_betweenness": eb_lookup,
             "laplace_matrix": laplace_matrix,
             "anchor_pe": anchor_pe,
         })
@@ -701,7 +689,6 @@ def build_augmented_math_graph(
             child_index=0.0,
             direction=0.0,
             relation_type=float(etype_id),
-            edge_betweenness_centrality=0.0,
             etype=etype,
         )
 
@@ -784,7 +771,6 @@ class ExpressionGraphConverter:
         child: str,
         child_idx: int,
         etype: str,
-        eb_val: float,
         edge_direction: str,
     ) -> None:
         effective = edge_direction
@@ -801,7 +787,6 @@ class ExpressionGraphConverter:
                 child_index=float(child_idx),
                 direction=0.0,
                 relation_type=float(self._encode_edge_type(rel_forward)),
-                edge_betweenness_centrality=eb_val,
                 etype=etype,
             )
         if effective in ("bottom_up", "bidirectional"):
@@ -811,7 +796,6 @@ class ExpressionGraphConverter:
                 child_index=float(child_idx),
                 direction=1.0 if effective == "bidirectional" else 0.0,
                 relation_type=float(self._encode_edge_type(rel_reverse)),
-                edge_betweenness_centrality=eb_val,
                 etype=etype + "_reverse",
             )
 
@@ -880,9 +864,8 @@ class ExpressionGraphConverter:
                 child_idx = child_counters.get(parent, 0)
                 child_counters[parent] = child_idx + 1
 
-                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
                 self._add_ast_edges(
-                    G_enriched, parent, child, child_idx, etype, eb_val, edge_direction
+                    G_enriched, parent, child, child_idx, etype, edge_direction
                 )
 
             children_dict = {}
@@ -1014,14 +997,12 @@ class ExpressionGraphConverter:
                 child_idx = child_counters.get(parent, 0)
                 child_counters[parent] = child_idx + 1
 
-                eb_val = float(topo["edge_betweenness"].get((parent, child), 0.0))
                 self._add_ast_edges(
                     G_enriched,
                     parent,
                     child,
                     child_idx,
                     etype,
-                    eb_val,
                     edge_direction,
                 )
 
@@ -1091,7 +1072,7 @@ class ExpressionGraphConverter:
         for u, v in G_enriched.edges:
             for key in all_edge_keys:
                 if key not in G_enriched.edges[u, v]:
-                    if key in ("child_index", "direction", "relation_type", "edge_betweenness_centrality", "kappa_weight", "edge_type"):
+                    if key in ("child_index", "direction", "relation_type", "kappa_weight", "edge_type"):
                         G_enriched.edges[u, v][key] = 0.0
                     else:
                         G_enriched.edges[u, v][key] = None

@@ -200,8 +200,26 @@ def to_hetero(
     else:
         x_virt = torch.empty((0, 7), dtype=torch.float)
 
-    # 7. Map edges to metapaths
+    def _is_augmented_edge(etype: str) -> bool:
+        return etype in ("NextUse", "NextUseBackward") or etype.startswith(
+            ("OuterToInner_Arg", "InnerToOuter_Arg")
+        )
+
+    def _augmented_edge_feature(etype: str) -> list[float]:
+        # direction: 0.0 = forward (NextUse, OuterToInner), 1.0 = backward
+        direction = 1.0 if ("Backward" in etype or etype.startswith("InnerToOuter")) else 0.0
+        # arg_index: N from _ArgN suffix; 0.0 for next-use edges
+        arg_idx = 0.0
+        if "Arg" in etype:
+            try:
+                arg_idx = float(etype.split("Arg")[-1])
+            except ValueError:
+                pass
+        return [direction, arg_idx]
+
+    # 7. Map edges to metapaths; collect edge features for augmented edge types only.
     edge_buckets: dict[tuple[str, str, str], list[tuple[int, int]]] = {}
+    edge_feature_buckets: dict[tuple[str, str, str], list[list[float]]] = {}
     for u, v, attrs in G.edges(data=True):
         src_type = get_hetero_node_type(G.nodes[u].get("type", ""))
         dst_type = get_hetero_node_type(G.nodes[v].get("type", ""))
@@ -223,9 +241,12 @@ def to_hetero(
         dst_local = type_to_local_idx[dst_type][v]
 
         triplet = (src_type, relation_type, dst_type)
-        edge_buckets.setdefault(triplet, []).append(
-            (src_local, dst_local)
-        )
+        edge_buckets.setdefault(triplet, []).append((src_local, dst_local))
+
+        if _is_augmented_edge(etype):
+            edge_feature_buckets.setdefault(triplet, []).append(
+                _augmented_edge_feature(etype)
+            )
 
     # 8. Construct HeteroData
     hetero = HeteroData()
@@ -244,5 +265,9 @@ def to_hetero(
         hetero[triplet].edge_index = torch.tensor(
             [list(src_ids), list(dst_ids)], dtype=torch.long
         )
+        if triplet in edge_feature_buckets:
+            hetero[triplet].edge_attr = torch.tensor(
+                edge_feature_buckets[triplet], dtype=torch.float
+            )
 
     return hetero
