@@ -1,9 +1,12 @@
+import pytest
 import yaml
 
 from gnn.supervised_learning.configs_gen import (
     _canonical_signature,
     generate_configs,
     get_nested_value,
+    path_exists,
+    validate_grid_keys,
 )
 
 
@@ -15,6 +18,8 @@ def _write_base(path):
                 "seed": 42001,
                 "gnn": {
                     "layer_type": "gatv2conv",
+                    "layers_mp": 3,
+                    "dim_inner": 128,
                     "variant": "legacy",
                     "pool_type": "topk",
                     "aux_loss_weight": 1.0,
@@ -112,3 +117,35 @@ def test_get_nested_value():
     assert get_nested_value(d, "a.b.c") == 5
     assert get_nested_value(d, "a.x") is None
     assert get_nested_value(d, "a.b.c.d") is None
+
+
+def test_path_exists_distinguishes_none_value_from_missing():
+    d = {"a": {"b": None}}
+    assert path_exists(d, "a.b") is True  # present, value is None
+    assert path_exists(d, "a.c") is False
+    assert path_exists(d, "a.b.c") is False  # cannot descend into a non-dict
+
+
+def test_validate_grid_keys_rejects_unknown_axis():
+    base = {"gnn": {"layer_type": "gatv2conv"}, "expression_graph": {"mode": "graph"}}
+    # This is exactly the typo that crashed yacs at train time.
+    grid = {"expression_graph.graph": ["graph"]}
+    with pytest.raises(ValueError) as exc:
+        validate_grid_keys(base, grid)
+    msg = str(exc.value)
+    assert "expression_graph.graph" in msg
+    assert "mode" in msg  # suggests the valid sibling key
+
+
+def test_validate_grid_keys_accepts_known_axes():
+    base = {"gnn": {"layer_type": "gatv2conv", "layers_mp": 3}}
+    validate_grid_keys(base, {"gnn.layer_type": ["gatv2conv"], "gnn.layers_mp": [2, 3]})
+
+
+def test_generate_configs_raises_on_typo_axis(tmp_path):
+    base = tmp_path / "base.yaml"
+    grid = tmp_path / "grid.yaml"
+    _write_base(base)
+    grid.write_text(yaml.safe_dump({"expression_graph.graph": ["graph"]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="expression_graph.graph"):
+        generate_configs(base, grid, tmp_path / "configs", run_timestamp="t")

@@ -21,6 +21,38 @@ def get_nested_value(d, key):
     return cur
 
 
+def path_exists(d, key) -> bool:
+    """True if every segment of the dotted key resolves in the nested mapping."""
+    cur = d
+    for k in key.split("."):
+        if not isinstance(cur, dict) or k not in cur:
+            return False
+        cur = cur[k]
+    return True
+
+
+def validate_grid_keys(base_config: dict, grid_config: dict) -> None:
+    """Fail fast if a grid axis names a path absent from the base config.
+
+    GraphGym merges the generated config with yacs in strict mode, so an unknown key
+    (e.g. ``expression_graph.graph`` instead of ``expression_graph.mode``) only surfaces
+    deep inside ``load_cfg`` at train time as ``Non-existent config key``. Catching it here
+    points at the offending grid axis with the closest valid siblings.
+    """
+    unknown = [key for key in grid_config if not path_exists(base_config, key)]
+    if not unknown:
+        return
+
+    lines = ["Grid axis/axes not found in the base config:"]
+    for key in unknown:
+        parent = key.rsplit(".", 1)[0] if "." in key else None
+        siblings = get_nested_value(base_config, parent) if parent else base_config
+        valid = sorted(siblings) if isinstance(siblings, dict) else []
+        hint = f" — valid keys under '{parent}': {valid}" if valid else ""
+        lines.append(f"  - {key}{hint}")
+    raise ValueError("\n".join(lines))
+
+
 def _canonical_signature(config: dict, swept_keys: list[str]) -> tuple:
     """Signature of a config over the swept axes, nullifying inert combinations.
 
@@ -76,6 +108,8 @@ def generate_configs(
 
     if not grid_config:
         raise ValueError("Grid file is empty or invalid.")
+
+    validate_grid_keys(base_config, grid_config)
 
     keys = list(grid_config.keys())
     value_lists = [grid_config[k] for k in keys]
