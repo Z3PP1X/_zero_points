@@ -302,6 +302,99 @@ class GINEConvLayer(torch.nn.Module):
         return batch
 
 
+# --------------------------------------------------------------------------- #
+# Custom network: routes the supervised pipeline through TestGraphNetwork so the
+# variant (legacy/pooling/pooling_skip) and pool_type (topk/diffpool) axes become
+# sweepable from grid.yaml. Selected via cfg.model.type = "expression_classifier".
+# --------------------------------------------------------------------------- #
+from torch_geometric.graphgym.register import register_network
+from gnn.shared.models.classifiers import TestGraphNetwork
+
+# cfg.gnn.layer_type -> TestGraphNetwork architecture (edge-aware stacks only).
+_LAYER_TYPE_TO_ARCHITECTURE = {
+    "gatv2conv": "gatv2_stack",
+    "gineconv": "gine_stack",
+}
+
+
+@register_network("expression_classifier")
+class ExpressionClassifierNetwork(torch.nn.Module):
+    """GraphGym adapter around the shared :class:`TestGraphNetwork`.
+
+    Unlike PyG's stock ``GNN``, a custom network receives the RAW ``batch.x`` (the
+    ``ExpressionNodeEncoder`` is never auto-applied), which is exactly what
+    ``TestGraphNetwork`` expects -- it does its own ``TwoWayFeatureEncoder`` encoding
+    and reads the ``node_type`` column by name before encoding. The head output is
+    squeezed to a 1-D logit so the existing ``weighted_cross_entropy`` (BCE branch) and
+    ``compute_binary_metrics`` behave identically to the stock single-logit path.
+    """
+
+    def __init__(self, dim_in, dim_out, **kwargs):
+        super().__init__()
+        layer_type = validate_layer_type(cfg.gnn.layer_type)
+        if layer_type not in _LAYER_TYPE_TO_ARCHITECTURE:
+            raise ValueError(
+                f"expression_classifier supports {list(_LAYER_TYPE_TO_ARCHITECTURE)} "
+                f"layer types (edge-aware); got {layer_type!r}"
+            )
+        names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
+        self.net = TestGraphNetwork(
+            input_dim=(len(names) or dim_in),
+            hidden_dim=cfg.gnn.dim_inner,
+            global_dim=0,  # GraphGym batches carry no graph-level global features
+            output_dim=dim_out,  # 1 for binary classification -> BCE path
+            heads=getattr(cfg.gnn, "att_heads", 4),
+            architecture=_LAYER_TYPE_TO_ARCHITECTURE[layer_type],
+            edge_dim=cfg.dataset.edge_dim,
+            active_features=names or None,
+            activation="prelu",
+            variant=cfg.gnn.variant,
+            pool_type=cfg.gnn.pool_type,
+        )
+        # Surfaced for the aux-loss monkeypatch on GraphGymModule._shared_step.
+        self._last_aux_loss = torch.zeros(())
+
+    def forward(self, batch):
+        logits = self.net(
+            batch.x,
+            batch.edge_index,
+            batch.batch,
+            global_features=None,
+            edge_attr=getattr(batch, "edge_attr", None),
+        )
+        self._last_aux_loss = self.net._last_aux_loss
+        if logits.size(-1) == 1:  # match the stock single-logit BCE path
+            logits = logits.view(-1)
+        return logits, batch.y
+
+
+# DiffPool exposes a link+entropy auxiliary loss on the network; fold it into the
+# training loss. Patching _shared_step mirrors the Logger/LoggerCallback monkeypatches
+# above. No-op for the stock GNN (no _last_aux_loss) and for topk/legacy (aux == 0).
+import time as _time
+from torch_geometric.graphgym.model_builder import GraphGymModule
+from torch_geometric.graphgym.loss import compute_loss as _compute_loss
+
+
+def _shared_step_with_aux(self, batch, split):
+    batch.split = split
+    pred, true = self(batch)
+    loss, pred_score = _compute_loss(pred, true)
+    if split == "train":
+        aux = getattr(self.model, "_last_aux_loss", None)
+        if aux is not None:
+            loss = loss + float(getattr(cfg.gnn, "aux_loss_weight", 1.0)) * aux
+    return dict(
+        loss=loss,
+        true=true,
+        pred_score=pred_score.detach(),
+        step_end_time=_time.time(),
+    )
+
+
+GraphGymModule._shared_step = _shared_step_with_aux
+
+
 def cosine_with_warmup_scheduler(optimizer, max_epoch):
     from torch_geometric.graphgym.config import cfg
 
@@ -353,7 +446,17 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name
     cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
     cfg.expression_graph.heterogeneous = False  # heterogeneous or homogeneous graph representation
+    cfg.expression_graph.add_kappa = False  # merge kappa (h-function) subgraphs from datasets/kappas/
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
+    # Resolved ordered node-feature names, stashed by the loader so the custom
+    # ExpressionClassifierNetwork (built later by create_model) can locate categorical
+    # columns BY NAME. Empty => fall back to the full node schema.
+    cfg.expression_graph.active_feature_names = []
+    # Structural / pooling axes for the ExpressionClassifierNetwork backbone. Declared here
+    # so YACS accepts grid.yaml overrides; ignored when cfg.model.type == "gnn".
+    cfg.gnn.variant = "legacy"        # legacy | standard | pooling | pooling_skip
+    cfg.gnn.pool_type = "topk"        # topk | diffpool (only used by pooling* variants)
+    cfg.gnn.aux_loss_weight = 1.0     # weight for the DiffPool link+entropy aux loss
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
     cfg.train.epoch_warmup = 5
@@ -401,6 +504,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         getattr(cfg.expression_graph, "edge_direction", "top_down")
     )
     heterogeneous = getattr(cfg.expression_graph, "heterogeneous", False)
+    add_kappa = getattr(cfg.expression_graph, "add_kappa", False)
 
     feature_selection, active_features = resolve_expression_graph_features(
         {
@@ -408,6 +512,10 @@ def load_custom_expression_graphs(format, name, dataset_dir):
             "active_features": getattr(cfg.expression_graph, "active_features", ""),
         },
     )
+    # Expose the resolved ordered node-feature names so the custom
+    # ExpressionClassifierNetwork (built later by create_model) can locate categorical
+    # columns BY NAME. Empty list => the network falls back to the full node schema.
+    cfg.expression_graph.active_feature_names = list(active_features) if active_features else []
 
     if "/" in dataset_name:
         run_key, _ = dataset_name.split("/", 1)
@@ -430,6 +538,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     if synthetic:
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
     print(f"  Injected Heterogeneous:  {heterogeneous}")
+    print(f"  Injected Add Kappa:      {add_kappa}")
     print(f"  Injected Feature Groups: {feature_selection.enabled_groups()}")
     print(f"  Injected Positional:     {list(feature_selection.positional_encodings)}")
     print(f"  Injected Features:       {feature_selection.summary()}")
@@ -442,6 +551,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         mode=mode,
         heterogeneous=heterogeneous,
         edge_direction=edge_direction,
+        add_kappa=add_kappa,
     )
 
     pipeline = GraphPipeline(
@@ -452,6 +562,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         graph_loader=loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
+        add_kappa=add_kappa,
         layer_type=layer_type,
         heterogeneous=heterogeneous,
     )

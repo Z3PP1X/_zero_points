@@ -203,6 +203,38 @@ gnn.dropout: [0.2]
 model.graph_pooling: [add, mean]
 ```
 
+#### ⚙️ Pooling-/Skip-Ablation (`model.type: expression_classifier`)
+
+Neben dem PyG-Standard-`GNN` (`model.type: gnn`) kann der Supervised-Workflow über die
+geteilte `TestGraphNetwork`-Backbone laufen. Das macht zwei orthogonale Achsen aus
+`gnn_backbones.py` (`UniformPoolMixin`) im Grid sweepbar:
+
+| Achse | Werte | Wirkung |
+| :--- | :--- | :--- |
+| `gnn.variant` | `legacy` | ursprünglicher Conv-Stack + Real/Virtual-Split-Pooling (Baseline) |
+| | `pooling` | hierarchisches Pooling zwischen den Blöcken (Readout aus letztem Block) |
+| | `pooling_skip` | hierarchisches Pooling + JK-artige Skip-Aggregation der Block-Readouts |
+| `gnn.pool_type` | `topk` | `TopKPooling` pro Block, Readout = mean ‖ max |
+| | `diffpool` | `DenseSAGEConv` Soft-Clustering (Cluster `16, 4`) + Link-/Entropie-Aux-Loss |
+
+```yaml
+# config_supervised.yaml
+model:
+  type: expression_classifier   # auf `gnn` zurücksetzen für PyG-Standard-GNN
+gnn:
+  att_heads: 4                  # über alle Ablations-Arme konstant gehalten
+  aux_loss_weight: 1.0          # Gewicht des DiffPool-Aux-Loss
+
+# grid.yaml
+gnn.variant:   [legacy, pooling, pooling_skip]
+gnn.pool_type: [topk, diffpool]
+gnn.layer_type: [gatv2conv]     # nur kantenbewusste Stacks (gatv2conv | gineconv)
+```
+
+Hinweise: `legacy` ignoriert `pool_type` (die beiden `legacy`-Kombis sind identisch);
+`model.graph_pooling` / `gnn.stage_type` sind für `expression_classifier` inert. DiffPool
+verdichtet Batches (`to_dense_batch`) — ggf. `train.batch_size` für DiffPool-Arme senken.
+
 #### ⚙️ Anpassung der Einstellungen in `config_supervised.yaml`
 Sie können Parameter direkt in `config_supervised.yaml` modifizieren:
 * **GNN-Schichten & Dimensionen**:
