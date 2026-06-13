@@ -132,6 +132,11 @@ def main():
         default=5,
         help="Top configs for diagnostics plots",
     )
+    parser.add_argument(
+        "--skip-report",
+        action="store_true",
+        help="Skip the auto summary report (summary.md / summary.json)",
+    )
     args = parser.parse_args()
 
     if args.num < 1:
@@ -197,6 +202,7 @@ def main():
         full_runs=args.full_eval,
         skip_slices=args.skip_slices,
         top_k=args.top_k,
+        skip_report=args.skip_report,
     )
 
 

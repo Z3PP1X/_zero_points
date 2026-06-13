@@ -35,3 +35,7 @@ mlflow.db
 codebase/src/gnn/supervised_learning/run_results/**
 !codebase/src/gnn/supervised_learning/run_results/
 !codebase/src/gnn/supervised_learning/run_results/*.py
+
+# Stray single-run GraphGym outputs (default out_dir when no experiment name given)
+codebase/src/agg/
+codebase/src/results/
