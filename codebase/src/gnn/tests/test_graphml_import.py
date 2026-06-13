@@ -90,20 +90,19 @@ def test_create_virtual_global_node():
 
     # Check node attributes
     assert G_comb.nodes["global"]["type"] == "global"
-    assert G_comb.nodes["f_1"]["type"] == "operator"
+    # f_1 (Plus) is the root of the f tree — marked as "root" with root_color=1
+    assert G_comb.nodes["f_1"]["type"] == "root"
+    assert G_comb.nodes["f_1"]["root_color"] == 1.0   # ROOT_COLOR_VOCAB["f"] = 1
     assert G_comb.nodes["f_2"]["type"] == "variable"
     assert G_comb.nodes["f_3"]["type"] == "constant"
-    assert G_comb.nodes["f_3"]["value"] == pytest.approx(5.0)
 
-    assert "f_root" in G_comb.nodes
-    assert "d1_root" in G_comb.nodes
-    assert "d2_root" in G_comb.nodes
-    assert G_comb.has_edge("global", "f_root")
-    assert G_comb.has_edge("f_root", "f_1")
-    assert G_comb.has_edge("global", "d1_root")
-    assert G_comb.has_edge("d1_root", "d1_1")
-    assert G_comb.has_edge("global", "d2_root")
-    assert G_comb.has_edge("d2_root", "d2_1")
+    # Aggregator nodes are removed; global connects directly to each tree's root
+    assert "f_root" not in G_comb.nodes
+    assert "d1_root" not in G_comb.nodes
+    assert "d2_root" not in G_comb.nodes
+    assert G_comb.has_edge("global", "f_1")
+    assert G_comb.has_edge("global", "d1_1")
+    assert G_comb.has_edge("global", "d2_1")
 
 
 def test_expression_graph_converter_with_container_format():
@@ -118,27 +117,27 @@ def test_expression_graph_converter_with_container_format():
 
     converter = ExpressionGraphConverter()
     
-    # 1. Test "graph" mode (compiles f, d1, d2 + aggregators, no task virtual nodes)
-    # Nodes: 3 + 1 + 1 + 1 + 3 aggregators = 9
+    # 1. Test "graph" mode: global + f_1/f_2/f_3 + d1_1 + d2_1 = 6 nodes (no aggregators)
     data_graph = converter.convert(raw_container, heterogeneous=False, mode="graph")
-    assert data_graph.num_nodes == 9
+    assert data_graph.num_nodes == 6
     assert "global" in data_graph.node_ids
     assert "f_1" in data_graph.node_ids
     assert "d1_1" in data_graph.node_ids
     assert "d2_1" in data_graph.node_ids
+    assert "f_root" not in data_graph.node_ids
 
-    # 2. Test "tree_derivatives" mode (compiles f, d1, d2 + aggregators, no task virtual nodes)
+    # 2. Test "tree_derivatives" mode (same structure as graph mode, no virtual nodes)
     data_tree_deriv = converter.convert(raw_container, heterogeneous=False, mode="tree_derivatives")
-    assert data_tree_deriv.num_nodes == 9
+    assert data_tree_deriv.num_nodes == 6
     assert "global" in data_tree_deriv.node_ids
     assert "f_1" in data_tree_deriv.node_ids
     assert "d1_1" in data_tree_deriv.node_ids
     assert "d2_1" in data_tree_deriv.node_ids
     assert "virtual_current_x" not in data_tree_deriv.node_ids
 
-    # 3. Test "tree" mode (compiles only f + f_root aggregator, without task virtual nodes)
+    # 3. Test "tree" mode: global + f_1/f_2/f_3 = 4 nodes (only f tree)
     data_tree = converter.convert(raw_container, heterogeneous=False, mode="tree")
-    assert data_tree.num_nodes == 5
+    assert data_tree.num_nodes == 4
     assert "global" in data_tree.node_ids
     assert "f_1" in data_tree.node_ids
     assert "d1_1" not in data_tree.node_ids

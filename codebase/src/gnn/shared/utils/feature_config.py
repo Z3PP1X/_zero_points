@@ -13,6 +13,7 @@ from gnn.shared.utils.graph_utils import (
     NUM_EDGE_TYPES,
     NUM_LABELS,
     NUM_NODE_TYPES,
+    NUM_ROOT_COLORS,
 )
 
 FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional", "edge")
@@ -22,24 +23,19 @@ POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ANCHOR_GROUP_FEATURES
 
 NODE_FEATURES: tuple[str, ...] = (
     "node_type",
-    "label_id",
-    "value",
-    "has_value",
-    "virtual_current_x_val",
-    "virtual_delta_target_val",
-    "virtual_d1_x_val",
-    "virtual_d2_x_val",
-    "belongs_to_f",
-    "belongs_to_d1",
-    "belongs_to_d2",
+    "root_color",
 )
 
 TOPOLOGY_FEATURES: tuple[str, ...] = (
-    "depth",
-    "height",
     "subtree_size",
-    "out_degree",
-    "betweenness_centrality",
+    "subtree_depth",
+    "hist_additive",
+    "hist_multiplicative",
+    "hist_trigonometric",
+    "hist_exponential",
+    "hist_transcendental",
+    "hist_variables",
+    "hist_constants",
 )
 
 # Each anchor group is a single positional-encoding column (identity mapping); the dict is
@@ -54,8 +50,8 @@ EDGE_FEATURES: tuple[str, ...] = tuple(EDGE_FEATURE_SCHEMA)
 # (vocab_size, embedding_dim). All other columns are treated as continuous (linear path).
 # `direction` is deliberately NOT here — relation_type already encodes forward/reverse.
 NODE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {
-    "node_type": (NUM_NODE_TYPES, 8),
-    "label_id": (NUM_LABELS, 16),
+    "node_type": (NUM_NODE_TYPES, 6),
+    "root_color": (NUM_ROOT_COLORS, 4),
 }
 EDGE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {
     "relation_type": (NUM_EDGE_TYPES, 8),

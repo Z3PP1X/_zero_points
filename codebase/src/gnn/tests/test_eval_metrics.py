@@ -69,8 +69,8 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     ]
 
     feature_names = resolve_feature_names(cfg)
-    # Full node schema has 21 features (5 anchor positional columns). Selecting a single
-    # anchor group drops the other 4, leaving 17.
-    assert len(feature_names) == 17
+    # New schema: 2 node + 9 topology + 5 anchor PE = 16 features.
+    # Selecting a single anchor group drops the other 4, leaving 12.
+    assert len(feature_names) == 12
     assert "anchor_periodic" in feature_names
     assert "anchor_additive" not in feature_names
