@@ -41,7 +41,12 @@ from gnn.reinforcement_learning.reward import RewardCalculator
 from gnn.reinforcement_learning.mathematica_vec_env import build_mathematica_training_env, MathematicaVecEnv
 from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
 from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
-from gnn.reinforcement_learning.feature_layout import FeatureLayout, EDGE_INPUT_DIM_CHOICES
+from gnn.reinforcement_learning.feature_layout import (
+    FeatureLayout,
+    EDGE_INPUT_DIM_CHOICES,
+    NATIVE_NODE_FEATURE_COUNT,
+)
+from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
 from gnn.reinforcement_learning.rl_config import (
     RL_EXPERIMENT_CHOICES,
@@ -385,11 +390,16 @@ def main() -> None:
         edge_features=args.edge_features,
         active_features=args.active_features,
     )
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
+
     print(f"[Pipeline] Feature groups: {feature_selection.enabled_groups()}")
     print(f"[Pipeline] Positional encodings: {list(feature_selection.positional_encodings)}")
     print(f"[Pipeline] Active node features: {feature_selection.summary()}")
 
-    padded_node_feature_count = len(active_features) if active_features is not None else 25
+    padded_node_feature_count = (
+        len(active_features) if active_features is not None else NATIVE_NODE_FEATURE_COUNT
+    )
 
     # 1. Load and parse hyperparameter configuration
     try:

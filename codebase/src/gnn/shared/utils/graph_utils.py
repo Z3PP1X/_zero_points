@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+from collections import deque
 import torch
 import networkx as nx
 from pathlib import Path
@@ -46,6 +47,43 @@ CANONICAL_LABELS: tuple[str, ...] = (
     "d2_root",
 )
 CANONICAL_LABEL_VOCAB: dict[str, int] = {label: idx for idx, label in enumerate(CANONICAL_LABELS)}
+
+# Anchor-based positional encoding. Each AST node is encoded by its proximity to the
+# nearest "anchor" — an operator/function node — of each semantic group. The distance is
+# the shortest-path hop count on the undirected AST, measured *within the node's own
+# function subgraph*: the structural connector nodes (global / f_root / d1_root / d2_root)
+# are removed before measuring, so f, f' and f'' fall into independent components and a
+# node never sees anchors from a sibling function (there is no message passing across them
+# anyway). The distance d is encoded as 1/(1+d) in (0, 1]: an anchor node scores 1.0 for
+# its own group, and a group absent from the node's function scores 0.0. This replaces the
+# former Laplacian / random-walk positional encodings (lpe_*/rwpe_*).
+ANCHOR_GROUP_FEATURES: tuple[str, ...] = (
+    "anchor_additive",        # G1: Plus (addition / subtraction)
+    "anchor_scaling",         # G2: Times, Power, Sqrt (multiplicative / algebraic scaling)
+    "anchor_periodic",        # G3: Sin, Cos, Tan, Cot, Sec, Csc (trigonometric)
+    "anchor_exponential",     # G4: Exp, Log
+    "anchor_transcendental",  # G5: Sinh, Cosh, Tanh, Abs, ArcSin/Cos/Tan + any other op/fn
+)
+NUM_ANCHOR_GROUPS: int = len(ANCHOR_GROUP_FEATURES)
+
+# Operator/function label -> 1-based anchor group index. An operator/function whose label
+# is not listed here falls through to the transcendental group (5); variables, constants
+# and structural/virtual nodes are never anchors.
+ANCHOR_GROUP_BY_LABEL: dict[str, int] = {
+    "Plus": 1,
+    "Times": 2, "Power": 2, "Sqrt": 2,
+    "Sin": 3, "Cos": 3, "Tan": 3, "Cot": 3, "Sec": 3, "Csc": 3,
+    "Exp": 4, "Log": 4,
+    "Sinh": 5, "Cosh": 5, "Tanh": 5, "Abs": 5,
+    "ArcSin": 5, "ArcCos": 5, "ArcTan": 5,
+}
+TRANSCENDENTAL_ANCHOR_GROUP: int = 5
+
+# Structural / connector node ids excluded from anchor distance so the per-function
+# subgraphs (f / f' / f'') split into independent connected components.
+ANCHOR_EXCLUDED_NODE_IDS: frozenset[str] = frozenset(
+    {"global", "f_root", "d1_root", "d2_root"}
+)
 
 FUNCTION_AGGREGATOR_CONFIG: tuple[tuple[str, str], ...] = (
     ("belongs_to_f", "f_root"),
@@ -129,6 +167,74 @@ def encode_label(label: str) -> int:
 
 def encode_edge_type(etype: str) -> int:
     return CANONICAL_EDGE_TYPE_VOCAB.get(etype, CANONICAL_EDGE_TYPE_VOCAB["<UNK>"])
+
+
+def anchor_group_for_node(label: Any, node_type: Any) -> int | None:
+    """Return the 1-based anchor group for a node, or ``None`` if it is not an anchor.
+
+    Explicitly grouped operator/function labels map to their group; any other
+    operator/function falls through to the transcendental group; variables, constants
+    and structural/virtual nodes are not anchors.
+    """
+    if label in ANCHOR_GROUP_BY_LABEL:
+        return ANCHOR_GROUP_BY_LABEL[label]
+    if node_type in ("operator", "function"):
+        return TRANSCENDENTAL_ANCHOR_GROUP
+    return None
+
+
+def _compute_anchor_positional_encoding(G: nx.DiGraph) -> np.ndarray:
+    """Per-node anchor positional encoding, shape ``(num_nodes, NUM_ANCHOR_GROUPS)``.
+
+    Rows are aligned to ``list(G.nodes)`` order (matching the other topology arrays). For
+    each node and each anchor group, the value is ``1/(1 + d)`` where ``d`` is the
+    shortest-path hop distance (undirected) to the nearest anchor of that group within the
+    node's own function subgraph; ``0.0`` if that group is absent from the subgraph.
+    Anchor distances are measured after dropping the structural connector nodes so f / f'
+    / f'' are isolated.
+    """
+    node_order = list(G.nodes)
+    pe = np.zeros((len(node_order), NUM_ANCHOR_GROUPS))
+    if not node_order:
+        return pe
+    index_of = {node_id: i for i, node_id in enumerate(node_order)}
+
+    G_und = G.to_undirected()
+    kept = [n for n in G_und.nodes if str(n) not in ANCHOR_EXCLUDED_NODE_IDS]
+    H = G_und.subgraph(kept)
+
+    for component in nx.connected_components(H):
+        comp_graph = H.subgraph(component)
+        anchors_by_group: dict[int, list] = {}
+        for node_id in component:
+            attrs = H.nodes[node_id]
+            group = anchor_group_for_node(attrs.get("label"), attrs.get("type"))
+            if group is not None:
+                anchors_by_group.setdefault(group, []).append(node_id)
+        for group, sources in anchors_by_group.items():
+            distances = _multi_source_bfs(comp_graph, sources)
+            col = group - 1
+            for node_id, dist in distances.items():
+                pe[index_of[node_id], col] = 1.0 / (1.0 + dist)
+    return pe
+
+
+def _multi_source_bfs(graph: nx.Graph, sources: list) -> dict:
+    """Shortest-path hop distance from the nearest of ``sources`` to every reachable node.
+
+    A plain breadth-first sweep seeded with all sources at distance 0; equivalent to
+    ``nx.multi_source_shortest_path_length`` but available across networkx versions.
+    """
+    dist: dict = {source: 0 for source in sources}
+    queue = deque(sources)
+    while queue:
+        node = queue.popleft()
+        next_dist = dist[node] + 1
+        for neighbor in graph.neighbors(node):
+            if neighbor not in dist:
+                dist[neighbor] = next_dist
+                queue.append(neighbor)
+    return dist
 
 
 def get_hetero_node_type(raw_type: str) -> str:
@@ -222,14 +328,11 @@ NODE_FEATURE_SCHEMA = [
     "betweenness_centrality",
     "value",
     "has_value",
-    "lpe_1",
-    "lpe_2",
-    "lpe_3",
-    "lpe_4",
-    "rwpe_1",
-    "rwpe_2",
-    "rwpe_3",
-    "rwpe_4",
+    "anchor_additive",
+    "anchor_scaling",
+    "anchor_periodic",
+    "anchor_exponential",
+    "anchor_transcendental",
     "virtual_current_x_val",
     "virtual_delta_target_val",
     "virtual_d1_x_val",
@@ -300,14 +403,11 @@ def inject_virtual_supernode(
         "subtree_size": 1.0,
         "out_degree": 0.0,
         "betweenness_centrality": 0.0,
-        "lpe_1": 0.0,
-        "lpe_2": 0.0,
-        "lpe_3": 0.0,
-        "lpe_4": 0.0,
-        "rwpe_1": 0.0,
-        "rwpe_2": 0.0,
-        "rwpe_3": 0.0,
-        "rwpe_4": 0.0,
+        "anchor_additive": 0.0,
+        "anchor_scaling": 0.0,
+        "anchor_periodic": 0.0,
+        "anchor_exponential": 0.0,
+        "anchor_transcendental": 0.0,
         "virtual_current_x_val": 0.0,
         "virtual_delta_target_val": 0.0,
         "virtual_d1_x_val": 0.0,
@@ -522,7 +622,8 @@ class TopologicalFeatureExtractor:
         # Out-Degrees (Out-Degree)
         out_degrees = {node: G.out_degree(node) for node in G.nodes}
 
-        # Undirected graph representation for Laplacians, LPE, RWPE, and Undirected Centralities
+        # Undirected graph representation for the Laplacian and undirected centralities
+        # (the anchor PE builds its own undirected view inside its helper).
         G_und = G.to_undirected()
         num_nodes = G_und.number_of_nodes()
 
@@ -542,58 +643,11 @@ class TopologicalFeatureExtractor:
         else:
             laplace_matrix = np.zeros((0, 0))
 
-        # Laplacian Positional Encodings (LPE) (dimension 4)
-        lpe_features = np.zeros((num_nodes, 4))
-        if num_nodes > 1:
-            try:
-                A = nx.to_numpy_array(G_und)
-                d = A.sum(axis=1)
-                d_inv_sqrt = np.zeros_like(d)
-                d_inv_sqrt[d > 0] = np.power(d[d > 0], -0.5)
-                D_inv_sqrt = np.diag(d_inv_sqrt)
-                L_norm = np.eye(num_nodes) - D_inv_sqrt @ A @ D_inv_sqrt
-                
-                evals, evecs = np.linalg.eigh(L_norm)
-                idx = np.argsort(evals)
-                evals = evals[idx]
-                evecs = evecs[:, idx]
-                
-                lpe_list = []
-                for i in range(1, 5):
-                    if i < num_nodes:
-                        # abs() removes arbitrary sign ambiguity from eigh eigenvectors
-                        lpe_list.append(np.abs(evecs[:, i]))
-                    else:
-                        lpe_list.append(np.zeros(num_nodes))
-                lpe_features = np.stack(lpe_list, axis=1)
-            except Exception:
-                lpe_features = np.zeros((num_nodes, 4))
-
-        # Random Walk Positional Encodings (RWPE) (4 steps).
-        # NOTE: the AST is a tree, hence bipartite. On a bipartite graph the
-        # return probability of a *non-lazy* random walk is exactly 0 for every
-        # odd number of steps, which previously made rwpe_1/rwpe_3 dead (all-zero)
-        # features. We use a *lazy* random walk P = 1/2 (I + D^-1 A) and record
-        # the return probabilities for steps k=2..5, so all four dimensions carry
-        # structural information regardless of bipartiteness.
-        rwpe_features = np.zeros((num_nodes, 4))
-        if num_nodes > 0:
-            try:
-                A = nx.to_numpy_array(G_und)
-                d = A.sum(axis=1)
-                d_inv = np.zeros_like(d)
-                d_inv[d > 0] = 1.0 / d[d > 0]
-                D_inv = np.diag(d_inv)
-                P_lazy = 0.5 * (np.eye(num_nodes) + D_inv @ A)
-
-                # Skip k=1 (its diagonal is the constant 0.5 for every node and
-                # therefore carries no structural signal); record k=2..5.
-                Pk = P_lazy @ P_lazy
-                for step in range(4):
-                    rwpe_features[:, step] = np.diag(Pk)
-                    Pk = Pk @ P_lazy
-            except Exception:
-                rwpe_features = np.zeros((num_nodes, 4))
+        # Anchor-based positional encoding (replaces the former LPE / RWPE). Encodes each
+        # node by 1/(1+d) proximity to the nearest anchor of each semantic operator group,
+        # measured within the node's own function subgraph. See
+        # _compute_anchor_positional_encoding for the full definition.
+        anchor_pe = _compute_anchor_positional_encoding(G)
 
         results.update({
             "heights": heights,
@@ -602,8 +656,7 @@ class TopologicalFeatureExtractor:
             "betweenness": betweenness,
             "edge_betweenness": eb_lookup,
             "laplace_matrix": laplace_matrix,
-            "lpe": lpe_features,
-            "rwpe": rwpe_features,
+            "anchor_pe": anchor_pe,
         })
         return results
 
@@ -801,28 +854,16 @@ class ExpressionGraphConverter:
                     enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
                     enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
                     enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                    for _col, _name in enumerate(ANCHOR_GROUP_FEATURES):
+                        enriched_attrs[_name] = float(topo["anchor_pe"][ast_idx, _col])
                 else:
                     enriched_attrs["depth"] = 0.0
                     enriched_attrs["height"] = 0.0
                     enriched_attrs["subtree_size"] = 1.0
                     enriched_attrs["out_degree"] = 0.0
                     enriched_attrs["betweenness_centrality"] = 0.0
-                    enriched_attrs["lpe_1"] = 0.0
-                    enriched_attrs["lpe_2"] = 0.0
-                    enriched_attrs["lpe_3"] = 0.0
-                    enriched_attrs["lpe_4"] = 0.0
-                    enriched_attrs["rwpe_1"] = 0.0
-                    enriched_attrs["rwpe_2"] = 0.0
-                    enriched_attrs["rwpe_3"] = 0.0
-                    enriched_attrs["rwpe_4"] = 0.0
+                    for _name in ANCHOR_GROUP_FEATURES:
+                        enriched_attrs[_name] = 0.0
 
                 G_enriched.add_node(node, **enriched_attrs)
 
@@ -951,28 +992,16 @@ class ExpressionGraphConverter:
                     enriched_attrs["subtree_size"] = float(topo["subtree_sizes"].get(node, 1.0))
                     enriched_attrs["out_degree"] = float(topo["out_degrees"].get(node, 0.0))
                     enriched_attrs["betweenness_centrality"] = float(topo["betweenness"].get(node, 0.0))
-                    enriched_attrs["lpe_1"] = float(topo["lpe"][ast_idx, 0])
-                    enriched_attrs["lpe_2"] = float(topo["lpe"][ast_idx, 1])
-                    enriched_attrs["lpe_3"] = float(topo["lpe"][ast_idx, 2])
-                    enriched_attrs["lpe_4"] = float(topo["lpe"][ast_idx, 3])
-                    enriched_attrs["rwpe_1"] = float(topo["rwpe"][ast_idx, 0])
-                    enriched_attrs["rwpe_2"] = float(topo["rwpe"][ast_idx, 1])
-                    enriched_attrs["rwpe_3"] = float(topo["rwpe"][ast_idx, 2])
-                    enriched_attrs["rwpe_4"] = float(topo["rwpe"][ast_idx, 3])
+                    for _col, _name in enumerate(ANCHOR_GROUP_FEATURES):
+                        enriched_attrs[_name] = float(topo["anchor_pe"][ast_idx, _col])
                 else:
                     enriched_attrs["depth"] = 0.0
                     enriched_attrs["height"] = 0.0
                     enriched_attrs["subtree_size"] = 1.0
                     enriched_attrs["out_degree"] = 0.0
                     enriched_attrs["betweenness_centrality"] = 0.0
-                    enriched_attrs["lpe_1"] = 0.0
-                    enriched_attrs["lpe_2"] = 0.0
-                    enriched_attrs["lpe_3"] = 0.0
-                    enriched_attrs["lpe_4"] = 0.0
-                    enriched_attrs["rwpe_1"] = 0.0
-                    enriched_attrs["rwpe_2"] = 0.0
-                    enriched_attrs["rwpe_3"] = 0.0
-                    enriched_attrs["rwpe_4"] = 0.0
+                    for _name in ANCHOR_GROUP_FEATURES:
+                        enriched_attrs[_name] = 0.0
 
                 G_enriched.add_node(node, **enriched_attrs)
 

@@ -30,6 +30,7 @@ from gnn.supervised_learning.supervised_config import (
     resolve_edge_dim,
     validate_layer_type,
 )
+from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.supervised_learning.loader_graphgym import (
     compute_binary_metrics,
     configure_class_weights,
@@ -277,6 +278,8 @@ def main(
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
     resolved_active_features = (
         None
         if not cfg.expression_graph.active_features
@@ -682,6 +685,21 @@ if __name__ == "__main__":
     add_virtual_supernode = (
         args.add_virtual_supernode or settings["add_virtual_supernode"]
     )
+
+    # Fail fast (outside the data-loading try/except below, which only logs) if anchor
+    # positional encoding is requested together with the fully-connected supernode.
+    from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
+
+    _guard_selection, _ = resolve_expression_graph_features(
+        load_yaml_config(config_path).get("expression_graph"),
+        feature_groups=args.feature_groups,
+        node_features=args.node_features,
+        topology_features=args.topology_features,
+        positional_encoding=args.positional_encoding,
+        edge_features=args.edge_features,
+        active_features=args.active_features,
+    )
+    validate_positional_supernode_compatibility(_guard_selection, add_virtual_supernode)
 
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 

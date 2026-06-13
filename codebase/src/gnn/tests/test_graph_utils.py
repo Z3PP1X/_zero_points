@@ -121,16 +121,25 @@ def test_enriched_graph_features(tmp_path):
     assert child2_features[7] == pytest.approx(2.0)
     assert child2_features[8] == 1.0
 
-    for idx in range(3):
-        node_features = data.x[idx].tolist()
-        lpe = node_features[9:13]
-        rwpe = node_features[13:17]
-        assert len(lpe) == 4
-        assert len(rwpe) == 4
-        # Lazy random-walk return probability (step 2) is strictly positive for
-        # every node, including on bipartite trees. This guards against the
-        # earlier regression where odd-step RWPE dims were identically zero.
-        assert rwpe[0] > 0.0
+    # Anchor positional encoding (the 5 anchor_* columns): proximity 1/(1+hops) to the
+    # nearest operator anchor of each semantic group, within the node's own function.
+    # f1 is Plus -> an additive anchor, so it scores 1.0 on anchor_additive and its two
+    # children (1 hop away) score 0.5; all other anchor groups are absent here.
+    child1_features = data.x[child1_idx].tolist()
+    add_col = NODE_FEATURE_SCHEMA.index("anchor_additive")
+    assert root_features[add_col] == pytest.approx(1.0)
+    assert child1_features[add_col] == pytest.approx(0.5)
+    assert child2_features[add_col] == pytest.approx(0.5)
+    for name in (
+        "anchor_scaling",
+        "anchor_periodic",
+        "anchor_exponential",
+        "anchor_transcendental",
+    ):
+        col = NODE_FEATURE_SCHEMA.index(name)
+        assert root_features[col] == 0.0
+        assert child1_features[col] == 0.0
+        assert child2_features[col] == 0.0
 
     assert hasattr(data, "laplacian")
     assert data.laplacian.shape == (3, 3)

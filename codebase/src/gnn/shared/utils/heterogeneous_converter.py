@@ -3,6 +3,7 @@ import torch
 from torch_geometric.data import HeteroData
 
 from gnn.shared.utils.graph_utils import (
+    ANCHOR_GROUP_FEATURES,
     get_hetero_node_type,
     get_relation_type,
 )
@@ -58,25 +59,12 @@ def to_hetero(
         "virtual": virt_idx,
     }
 
-    # Helper to construct LPE and RWPE
-    def get_lpe_rwpe(nid: str, ast_idx: int | None):
-        if ast_idx is not None:
-            if "lpe" in topo and topo["lpe"] is not None:
-                lpe_vals = [
-                    float(topo["lpe"][ast_idx, j]) for j in range(4)
-                ]
-            else:
-                lpe_vals = [0.0] * 4
-            if "rwpe" in topo and topo["rwpe"] is not None:
-                rwpe_vals = [
-                    float(topo["rwpe"][ast_idx, j]) for j in range(4)
-                ]
-            else:
-                rwpe_vals = [0.0] * 4
-        else:
-            lpe_vals = [0.0] * 4
-            rwpe_vals = [0.0] * 4
-        return lpe_vals, rwpe_vals
+    # Helper to construct the anchor positional encoding (5 columns).
+    def get_anchor_pe(nid: str, ast_idx: int | None):
+        n_groups = len(ANCHOR_GROUP_FEATURES)
+        if ast_idx is not None and "anchor_pe" in topo and topo["anchor_pe"] is not None:
+            return [float(topo["anchor_pe"][ast_idx, j]) for j in range(n_groups)]
+        return [0.0] * n_groups
 
     # Helper to construct topology features
     def get_topology(nid: str):
@@ -124,7 +112,7 @@ def to_hetero(
     # Operator / variable features: integer label_id (col 0, for a learnable
     # embedding on the model side) followed by raw continuous topology + PE columns.
     # One-hot label encoding is intentionally removed; the model embeds label_id.
-    OP_VAR_FEATURE_DIM = 1 + 5 + 8  # label_id + topology(5) + lpe/rwpe(8) = 14
+    OP_VAR_FEATURE_DIM = 1 + 5 + len(ANCHOR_GROUP_FEATURES)  # label_id + topology(5) + anchor PE(5) = 11
 
     for nid in operators:
         attrs = G.nodes[nid]
@@ -133,11 +121,10 @@ def to_hetero(
         # Topology metrics
         topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
 
-        # LPE / RWPE
+        # Anchor positional encoding
         ast_idx = ast_id_to_idx.get(nid)
-        lpe_vals, rwpe_vals = get_lpe_rwpe(nid, ast_idx)
         struct_feats = torch.tensor(
-            lpe_vals + rwpe_vals, dtype=torch.float
+            get_anchor_pe(nid, ast_idx), dtype=torch.float
         )
 
         # Combine
@@ -157,9 +144,8 @@ def to_hetero(
         topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
 
         ast_idx = ast_id_to_idx.get(nid)
-        lpe_vals, rwpe_vals = get_lpe_rwpe(nid, ast_idx)
         struct_feats = torch.tensor(
-            lpe_vals + rwpe_vals, dtype=torch.float
+            get_anchor_pe(nid, ast_idx), dtype=torch.float
         )
 
         x_vars_list.append(torch.cat([label_feat, topo_feats, struct_feats]))

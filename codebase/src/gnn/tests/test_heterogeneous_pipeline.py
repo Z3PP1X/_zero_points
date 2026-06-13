@@ -70,10 +70,10 @@ def test_heterogeneous_converter_shapes_and_types():
     # Let's count variable: x (1)
     # Constants: 5 (from f), 1 (from d1), 0 (from d2).
     # Virtuals: global, f_root, d1_root, d2_root (4 nodes; task virtual nodes removed)
-    # Operator/variable feature dim = integer label_id (1) + 5 topology + 8 (lpe/rwpe).
+    # Operator/variable feature dim = integer label_id (1) + 5 topology + 5 anchor PE.
     # One-hot label encoding removed; the model embeds the integer label_id.
-    assert data["operator"].x.shape[1] == 14
-    assert data["variable"].x.shape[1] == 14
+    assert data["operator"].x.shape[1] == 11
+    assert data["variable"].x.shape[1] == 11
     # Constant feature = raw value only (fourier encoding removed).
     assert data["constant"].x.shape[1] == 1
     assert data["virtual"].x.shape[1] == 7
@@ -186,5 +186,5 @@ def test_regression_homogeneous_mode():
     # Ensure legacy homogeneous structure is correct and contains 9 nodes (no task virtual nodes)
     assert data.num_nodes == 9
     assert not isinstance(data, HeteroData)
-    assert data.x.shape[1] == 24
+    assert data.x.shape[1] == 21  # 21 node features (5 anchor positional columns)
     assert hasattr(data, "node_ids")

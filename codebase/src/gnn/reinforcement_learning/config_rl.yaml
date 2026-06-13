@@ -16,7 +16,11 @@ experiment:
   features:
     node: true
     topology: true
-    positional: [lpe, rwpe]  # true = both encodings, false = none
+    # Anchor positional encoding (1/(1+hops) to nearest operator anchor per semantic
+    # group). Members: anchor_additive, anchor_scaling, anchor_periodic,
+    # anchor_exponential, anchor_transcendental. true = all groups, false = none.
+    # NOTE: incompatible with add_virtual_supernode (the supernode collapses distances).
+    positional: true
     edge: true
 
   # Optional explicit override (disables grouped toggles above when non-empty)
