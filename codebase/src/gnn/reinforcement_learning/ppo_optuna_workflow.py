@@ -98,6 +98,11 @@ class PpoOptunaWorkflow:
         trial_config = sample_trial_configuration(
             trial,
             padded_node_feature_count=self.preprocessor.padded_node_feature_count,
+            active_feature_names=(
+                tuple(self.preprocessor.active_features)
+                if self.preprocessor.active_features is not None
+                else None
+            ),
         )
         print(
             f"  Hyperparameter: lr={trial_config.ppo.learning_rate:.2e}, "

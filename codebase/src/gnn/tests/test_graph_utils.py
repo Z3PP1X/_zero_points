@@ -10,7 +10,6 @@ from graph_utils import (
     NODE_FEATURE_SCHEMA,
     EDGE_FEATURE_SCHEMA,
     CANONICAL_LABEL_VOCAB,
-    signed_log_value,
 )
 from feature_layout import NATIVE_NODE_FEATURE_COUNT, NATIVE_EDGE_FEATURE_COUNT
 
@@ -117,7 +116,9 @@ def test_enriched_graph_features(tmp_path):
     assert child2_features[4] == 1.0
     assert child2_features[5] == 0.0
     assert child2_features[6] == 0.0
-    assert child2_features[7] == pytest.approx(signed_log_value(2.0))
+    # value is now emitted RAW (signed_log normalization removed; the model's
+    # learnable linear embedding handles scaling).
+    assert child2_features[7] == pytest.approx(2.0)
     assert child2_features[8] == 1.0
 
     for idx in range(3):

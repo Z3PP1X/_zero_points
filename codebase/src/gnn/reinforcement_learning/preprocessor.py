@@ -13,11 +13,12 @@ from gnn.reinforcement_learning.feature_layout import (
 from gnn.shared.utils.graph_utils import populate_task_virtual_values
 from gnn.reinforcement_learning.observation_sanitize import finite_float, sanitize_torch_features
 
+# NOTE: `solver` is intentionally NOT a global feature — the chosen solver is the
+# network's action/decision, not an observation. Removing it makes the global vector 8-wide.
 STATE_GLOBAL_FEATURE_KEYS = (
     "currentX",
     "yTarget",
     "lastStepError",
-    "solver",
     "fx",
     "dfx",
     "ddfx",
@@ -119,10 +120,10 @@ class Preprocessor:
         data = self._graph_template_for_problem_id(graph_id)
 
         feat_list = [extracted_features[key] for key in STATE_GLOBAL_FEATURE_KEYS]
+        # Raw (un-normalized) global features; the GlobalEncoder's learnable
+        # LayerNorm + Linear handle scaling. No hand-crafted sign-log transform.
         raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0)
-        data.global_features = sanitize_torch_features(
-            torch.sign(raw_tensor) * torch.log1p(torch.abs(raw_tensor))
-        )
+        data.global_features = sanitize_torch_features(raw_tensor)
 
         populate_task_virtual_values(
             data,

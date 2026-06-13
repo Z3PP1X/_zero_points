@@ -89,7 +89,8 @@ class AsyncMathematicaEnv(gym.Env):
                 ),
                 "global_features": spaces.Box(
                     low=-np.inf, high=np.inf,
-                    shape=(9,), dtype=np.float32,
+                    # 8 global scalars (solver removed — it is the network's action).
+                    shape=(8,), dtype=np.float32,
                 ),
                 "num_nodes": spaces.Box(
                     low=0, high=self.max_nodes, shape=(1,), dtype=np.int64,

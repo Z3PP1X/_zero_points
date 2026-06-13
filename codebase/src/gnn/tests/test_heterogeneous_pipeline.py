@@ -5,8 +5,6 @@ from torch_geometric.data import HeteroData
 from graph_utils import (
     ExpressionGraphConverter,
     populate_task_virtual_values,
-    signed_log_value,
-    fourier_frequency_encoding,
 )
 
 GRAPHML_F = """<?xml version='1.0' encoding='UTF-8'?>
@@ -72,24 +70,21 @@ def test_heterogeneous_converter_shapes_and_types():
     # Let's count variable: x (1)
     # Constants: 5 (from f), 1 (from d1), 0 (from d2).
     # Virtuals: global, f_root, d1_root, d2_root (4 nodes; task virtual nodes removed)
-    # Operator/variable feature dim = len(CANONICAL_LABELS) one-hot + 5 topology + 8 (lpe/rwpe).
-    assert data["operator"].x.shape[1] == 42
-    assert data["variable"].x.shape[1] == 42
-    assert data["constant"].x.shape[1] == 9
+    # Operator/variable feature dim = integer label_id (1) + 5 topology + 8 (lpe/rwpe).
+    # One-hot label encoding removed; the model embeds the integer label_id.
+    assert data["operator"].x.shape[1] == 14
+    assert data["variable"].x.shape[1] == 14
+    # Constant feature = raw value only (fourier encoding removed).
+    assert data["constant"].x.shape[1] == 1
     assert data["virtual"].x.shape[1] == 7
-    
-    # Verify constant feature matches: signed log value + fourier frequency encoding
-    c_val = signed_log_value(5.0)
-    expected_fourier = torch.tensor(fourier_frequency_encoding(c_val), dtype=torch.float)
-    
-    # Search for constant with value c_val
+
+    # Verify constant feature is the RAW value (no signed-log, no fourier).
+    c_val = 5.0
     found = False
     for idx in range(data["constant"].x.shape[0]):
         val = data["constant"].x[idx, 0].item()
         if abs(val - c_val) < 1e-5:
             found = True
-            # Check Sinusoidal features
-            assert torch.allclose(data["constant"].x[idx, 1:], expected_fourier, atol=1e-5)
     assert found, "Constant with value 5.0 not found or mismatch in feature encoding"
 
 
@@ -163,10 +158,11 @@ def test_heterogeneous_state_injection():
     idx_d2_root = v_ids.index("d2_root")
     
     delta_val = yt - fx
-    assert data["virtual"].x[idx_f_root, 0].item() == pytest.approx(signed_log_value(cx))
-    assert data["virtual"].x[idx_f_root, 1].item() == pytest.approx(signed_log_value(delta_val))
-    assert data["virtual"].x[idx_d1_root, 2].item() == pytest.approx(signed_log_value(d1x))
-    assert data["virtual"].x[idx_d2_root, 3].item() == pytest.approx(signed_log_value(d2x))
+    # Virtual values are written RAW now (signed_log removed).
+    assert data["virtual"].x[idx_f_root, 0].item() == pytest.approx(cx)
+    assert data["virtual"].x[idx_f_root, 1].item() == pytest.approx(delta_val)
+    assert data["virtual"].x[idx_d1_root, 2].item() == pytest.approx(d1x)
+    assert data["virtual"].x[idx_d2_root, 3].item() == pytest.approx(d2x)
     
     # Ensure static AST nodes are NOT mutated
     assert torch.allclose(data["operator"].x, op_x_orig)

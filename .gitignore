@@ -18,3 +18,20 @@ _models/
 _safespace/
 mathematica/
 test_pipeline/
+
+# Logs und Datenbanken niemals committen (lokal generiert, teils > 100 MB)
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Trainings-Artefakte / generierte Ergebnisse (Checkpoints, Plots, Metriken; teils GB-gross).
+# run_results/ enthaelt Quellcode (*.py) UND generierte Experiment-Outputs — nur Letztere ignorieren.
+*.ckpt
+codebase/src/gnn/supervised_learning/run_results/**
+!codebase/src/gnn/supervised_learning/run_results/
+!codebase/src/gnn/supervised_learning/run_results/*.py

@@ -77,6 +77,13 @@ CANONICAL_EDGE_TYPE_VOCAB: dict[str, int] = {etype: idx for idx, etype in enumer
 
 VIRTUAL_NODE_TYPES = frozenset(FUNCTION_AGGREGATOR_IDS)
 
+# Categorical vocabulary sizes (embedding-table row counts). node_type ids occupy a
+# fixed 0..10 code space (11 rows, with gaps); label / edge sizes follow their vocabs.
+# Single source of truth — model encoders import these instead of redefining them.
+NUM_NODE_TYPES: int = 11
+NUM_LABELS: int = len(CANONICAL_LABEL_VOCAB)
+NUM_EDGE_TYPES: int = len(CANONICAL_EDGE_TYPE_VOCAB)
+
 
 def signed_log_value(value: float) -> float:
     """sign(v) * log1p(|v|) — same transform as RL global features."""
@@ -1038,7 +1045,7 @@ class ExpressionGraphConverter:
                 node["id"],
                 node_type=self.NODE_TYPES[node["type"]],
                 label_id=self._encode_label(node["label"]),
-                value=signed_log_value(actual_value),
+                value=float(actual_value),
                 has_value=has_val,
                 belongs_to_f=float(belongs_to_f_map.get(node["id"], 0.0)),
                 belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),
@@ -1169,10 +1176,10 @@ def populate_task_virtual_values(
             if node_id_indices is not None:
                 if node_id in node_id_indices:
                     idx = node_id_indices[node_id]
-                    data['virtual'].x[idx, col_idx] = float(signed_log_value(value))
+                    data['virtual'].x[idx, col_idx] = float(value)
             elif node_id in virtual_node_ids:
                 idx = virtual_node_ids.index(node_id)
-                data['virtual'].x[idx, col_idx] = float(signed_log_value(value))
+                data['virtual'].x[idx, col_idx] = float(value)
                 
         try:
             delta_val = yt_val - fx_val
@@ -1208,7 +1215,7 @@ def populate_task_virtual_values(
             idx = node_id_indices[node_id]
         else:
             idx = data.node_ids.index(node_id)
-        data.x[idx, col_idx] = float(signed_log_value(value))
+        data.x[idx, col_idx] = float(value)
         if has_idx is not None:
             data.x[idx, has_idx] = 1.0
 
@@ -1378,7 +1385,7 @@ def create_virtual_global_node(
                 label_id=encode_label(label),
                 label=label,
                 type=type_str,
-                value=signed_log_value(val),
+                value=float(val),
                 has_value=has_val,
                 belongs_to_f=0.0,
                 belongs_to_d1=0.0,
@@ -1696,7 +1703,7 @@ class AugmentedFunctionGraph(nx.DiGraph):
                 label_id=encode_label(label),
                 label=label,
                 type=type_str,
-                value=signed_log_value(val),
+                value=float(val),
                 has_value=has_val,
                 belongs_to_f=0.0,
                 belongs_to_d1=0.0,
@@ -1874,7 +1881,7 @@ def LoadGraphFromLocalStructure(folder: Union[Path, str], id: str) -> AugmentedF
                 node["id"],
                 node_type=ExpressionGraphConverter.NODE_TYPES[node["type"]],
                 label_id=encode_label(node["label"]),
-                value=signed_log_value(actual_value),
+                value=float(actual_value),
                 has_value=has_val,
                 belongs_to_f=float(belongs_to_f_map.get(node["id"], 0.0)),
                 belongs_to_d1=float(belongs_to_d1_map.get(node["id"], 0.0)),

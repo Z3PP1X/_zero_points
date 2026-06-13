@@ -7,90 +7,30 @@ from torch.nn import LeakyReLU
 from torch_geometric.nn import GATv2Conv, GCNConv, GINConv, GINEConv, SAGEConv, global_mean_pool
 
 from gnn.shared.utils.graph_utils import (
-    CANONICAL_EDGE_TYPE_VOCAB,
-    CANONICAL_LABEL_VOCAB,
+    EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
 )
+from gnn.shared.utils.feature_config import (
+    EDGE_CATEGORICAL_REGISTRY,
+    NODE_CATEGORICAL_REGISTRY,
+)
+from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
 
-NUM_NODE_TYPES = 11
-NUM_LABELS = len(CANONICAL_LABEL_VOCAB)
-NUM_EDGE_TYPES = len(CANONICAL_EDGE_TYPE_VOCAB)
+# Column indices into the FULL node schema. Used as defaults when no active-feature
+# subset is configured; NODE_TYPE_COL is also imported by tests.
 NODE_TYPE_COL = NODE_FEATURE_SCHEMA.index("node_type")
 LABEL_ID_COL = NODE_FEATURE_SCHEMA.index("label_id")
 BELONGS_TO_F_COL = NODE_FEATURE_SCHEMA.index("belongs_to_f")
 BELONGS_TO_D1_COL = NODE_FEATURE_SCHEMA.index("belongs_to_d1")
 BELONGS_TO_D2_COL = NODE_FEATURE_SCHEMA.index("belongs_to_d2")
-EDGE_RELATION_TYPE_COL = 2
+EDGE_RELATION_TYPE_COL = EDGE_FEATURE_SCHEMA.index("relation_type")
 
 
-EDGE_RELATION_TYPE_COL = 2
-
-
-class NodeFeatureEncoder(nn.Module):
-    """Embed node_type + label_id; encode remaining continuous columns."""
-
-    def __init__(
-        self,
-        padded_node_feature_count: int,
-        output_dim: int,
-        node_type_emb_dim: int = 8,
-        label_emb_dim: int = 16,
-        activation: nn.Module | None = None,
-    ):
-        super().__init__()
-        self.node_type_col = NODE_TYPE_COL
-        self.label_id_col = LABEL_ID_COL
-        continuous_dim = padded_node_feature_count - 2
-        cont_hidden = max(output_dim - node_type_emb_dim - label_emb_dim, 8)
-        self.continuous_encoder = nn.Linear(continuous_dim, cont_hidden)
-        self.node_type_emb = nn.Embedding(NUM_NODE_TYPES, node_type_emb_dim)
-        self.label_emb = nn.Embedding(NUM_LABELS, label_emb_dim)
-        self.fusion = nn.Linear(cont_hidden + node_type_emb_dim + label_emb_dim, output_dim)
-        self.activation = activation if activation is not None else LeakyReLU()
-
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        node_types = x[:, self.node_type_col].round().long().clamp(0, NUM_NODE_TYPES - 1)
-        label_ids = x[:, self.label_id_col].round().long().clamp(0, NUM_LABELS - 1)
-        continuous_cols = [idx for idx in range(x.size(1)) if idx not in (self.node_type_col, self.label_id_col)]
-        x_cont = x[:, continuous_cols]
-        fused = torch.cat(
-            [
-                self.continuous_encoder(x_cont),
-                self.node_type_emb(node_types),
-                self.label_emb(label_ids),
-            ],
-            dim=-1,
-        )
-        return self.activation(self.fusion(fused)), node_types
-
-
-class EdgeFeatureEncoder(nn.Module):
-    """Embed relation_type; encode remaining continuous edge columns."""
-
-    def __init__(
-        self,
-        padded_edge_feature_count: int,
-        output_dim: int,
-        relation_emb_dim: int = 8,
-        activation: nn.Module | None = None,
-    ):
-        super().__init__()
-        continuous_dim = padded_edge_feature_count - 1
-        cont_hidden = max(output_dim - relation_emb_dim, 4)
-        self.continuous_encoder = nn.Linear(continuous_dim, cont_hidden)
-        self.relation_type_emb = nn.Embedding(NUM_EDGE_TYPES, relation_emb_dim)
-        self.fusion = nn.Linear(cont_hidden + relation_emb_dim, output_dim)
-        self.activation = activation if activation is not None else LeakyReLU()
-
-    def forward(self, edge_attr: torch.Tensor) -> torch.Tensor:
-        relation_ids = edge_attr[:, EDGE_RELATION_TYPE_COL].round().long().clamp(0, NUM_EDGE_TYPES - 1)
-        continuous_cols = [idx for idx in range(edge_attr.size(1)) if idx != EDGE_RELATION_TYPE_COL]
-        edge_cont = edge_attr[:, continuous_cols]
-        fused = torch.cat(
-            [self.continuous_encoder(edge_cont), self.relation_type_emb(relation_ids)],
-            dim=-1,
-        )
-        return self.activation(self.fusion(fused))
+def resolve_node_feature_names(active_feature_names) -> list[str]:
+    """Ordered node-feature names present in x; falls back to the full schema."""
+    if active_feature_names:
+        return list(active_feature_names)
+    return list(NODE_FEATURE_SCHEMA)
 
 
 def split_global_mean_pool(x: torch.Tensor, batch_index: torch.Tensor, is_virtual: torch.Tensor) -> torch.Tensor:
@@ -241,7 +181,7 @@ class GATv2StackNetwork(nn.Module):
         self,
         input_dim: int,
         hidden_dim: int = 128,
-        global_dim: int = 9,
+        global_dim: int = 8,
         heads: int = 4,
         edge_dim: int = 4,
     ):
@@ -273,7 +213,7 @@ class GINEStackNetwork(nn.Module):
         self,
         input_dim: int,
         hidden_dim: int = 128,
-        global_dim: int = 9,
+        global_dim: int = 8,
         heads: int = 4,
         edge_dim: int = 4,
         activation: nn.Module = LeakyReLU(),
@@ -307,7 +247,7 @@ class GINEStackNetwork(nn.Module):
 class GCNStackNetwork(nn.Module):
     """Three GCN layers + pool + MLP."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 9, heads: int = 4, edge_dim: int = 4):
+    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 8, heads: int = 4, edge_dim: int = 4):
         super().__init__()
         _ = heads, edge_dim
         self.conv1 = GCNConv(input_dim, hidden_dim)
@@ -332,7 +272,7 @@ class GCNStackNetwork(nn.Module):
 class SAGEStackNetwork(nn.Module):
     """Three GraphSAGE (mean) layers + pool + MLP."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 9, heads: int = 4, edge_dim: int = 4):
+    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 8, heads: int = 4, edge_dim: int = 4):
         super().__init__()
         _ = heads, edge_dim
         self.conv1 = SAGEConv(input_dim, hidden_dim, aggr="mean")
@@ -357,7 +297,7 @@ class SAGEStackNetwork(nn.Module):
 class GINStackNetwork(nn.Module):
     """Three GIN layers + pool + MLP."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 9, heads: int = 4, edge_dim: int = 4):
+    def __init__(self, input_dim: int, hidden_dim: int = 128, global_dim: int = 8, heads: int = 4, edge_dim: int = 4):
         super().__init__()
         _ = heads, edge_dim
         self.conv1 = GINConv(_gin_mlp(input_dim, hidden_dim))
@@ -383,7 +323,7 @@ def build_gnn(
     architecture: str,
     input_dim: int = 5,
     hidden_dim: int = 128,
-    global_dim: int = 9,
+    global_dim: int = 8,
     heads: int = 4,
     edge_dim: int = 4,
 ) -> nn.Module:
@@ -426,16 +366,25 @@ class GraphPolicyBackbone(nn.Module):
         self.edge_dim = layout.edge_input_dim
         self.activation = get_activation_module(activation)
 
-        self.node_encoder = NodeFeatureEncoder(
-            layout.padded_node_feature_count,
+        self.node_feature_names = resolve_node_feature_names(
+            getattr(layout, "active_feature_names", None)
+        )
+        # name -> column map for the active node-feature ordering (routing index reads).
+        self._node_col = {name: idx for idx, name in enumerate(self.node_feature_names)}
+        self.node_encoder = TwoWayFeatureEncoder(
+            self.node_feature_names,
             layout.node_input_dim,
+            NODE_CATEGORICAL_REGISTRY,
             activation=self.activation,
         )
-        self.edge_encoder = EdgeFeatureEncoder(
-            layout.padded_edge_feature_count,
+        self.edge_encoder = TwoWayFeatureEncoder(
+            list(EDGE_FEATURE_SCHEMA),
             layout.edge_input_dim,
+            EDGE_CATEGORICAL_REGISTRY,
             activation=self.activation,
         )
+        # Globals lost their hand-crafted sign-log; a learnable LayerNorm tames scale.
+        self.global_norm = nn.LayerNorm(layout.padded_global_feature_count)
         self.global_encoder = nn.Linear(
             layout.padded_global_feature_count,
             layout.global_input_dim,
@@ -565,23 +514,20 @@ class GraphPolicyBackbone(nn.Module):
         is_virtual = is_f_root | is_d1_root | is_d2_root
         is_real = ~is_virtual
         is_func_op = (node_types == 1) | (node_types == 4)
-        belongs_to_f = (
-            x[:, BELONGS_TO_F_COL] > 0.5
-            if x.size(1) > BELONGS_TO_F_COL
-            else torch.ones(x.size(0), dtype=torch.bool, device=x.device)
-        )
-        belongs_to_d1 = (
-            x[:, BELONGS_TO_D1_COL] > 0.5
-            if x.size(1) > BELONGS_TO_D1_COL
-            else torch.zeros(x.size(0), dtype=torch.bool, device=x.device)
-        )
-        belongs_to_d2 = (
-            x[:, BELONGS_TO_D2_COL] > 0.5
-            if x.size(1) > BELONGS_TO_D2_COL
-            else torch.zeros(x.size(0), dtype=torch.bool, device=x.device)
-        )
 
-        edge_emb = self.edge_encoder(
+        def belongs_mask(name: str, default_true: bool) -> torch.Tensor:
+            # Resolve the column by NAME so it survives active-feature subset/reorder.
+            col = self._node_col.get(name)
+            if col is not None and x.size(1) > col:
+                return x[:, col] > 0.5
+            fill = torch.ones if default_true else torch.zeros
+            return fill(x.size(0), dtype=torch.bool, device=x.device)
+
+        belongs_to_f = belongs_mask("belongs_to_f", default_true=True)
+        belongs_to_d1 = belongs_mask("belongs_to_d1", default_true=False)
+        belongs_to_d2 = belongs_mask("belongs_to_d2", default_true=False)
+
+        edge_emb, _ = self.edge_encoder(
             coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
         )
 
@@ -627,7 +573,9 @@ class GraphPolicyBackbone(nn.Module):
 
         if global_features is not None:
             global_features = global_features.view(h_pooled.size(0), -1)
-            global_features = self.activation(self.global_encoder(global_features))
+            global_features = self.activation(
+                self.global_encoder(self.global_norm(global_features))
+            )
             h_pooled = torch.cat([h_pooled, global_features], dim=-1)
         else:
             dummy_global = torch.zeros(

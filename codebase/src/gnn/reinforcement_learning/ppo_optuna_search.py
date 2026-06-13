@@ -26,6 +26,7 @@ def sample_trial_configuration(
     *,
     target_rollout: int = 2048,
     padded_node_feature_count: int = 25,
+    active_feature_names: tuple[str, ...] | None = None,
 ) -> TrialConfiguration:
     random_seed = trial.suggest_int("random_seed", 0, 99_999)
     learning_rate = trial.suggest_float("learning_rate", 1e-6, 9e-3, log=True)
@@ -66,6 +67,7 @@ def sample_trial_configuration(
                 "edge_input_dim", EDGE_INPUT_DIM_CHOICES
             ),
             padded_node_feature_count=padded_node_feature_count,
+            active_feature_names=active_feature_names,
         ),
     )
 

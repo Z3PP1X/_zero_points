@@ -216,74 +216,40 @@ register_act("tanh", nn.Tanh)
 
 
 from torch_geometric.graphgym.register import register_node_encoder
-from gnn.shared.models.gnn_backbones import NUM_NODE_TYPES, NUM_LABELS
+from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
+from gnn.shared.utils.feature_config import (
+    NODE_CATEGORICAL_REGISTRY,
+    full_node_schema,
+    parse_csv_list,
+)
 
 
 @register_node_encoder("ExpressionNodeEncoder")
 class ExpressionNodeEncoder(torch.nn.Module):
     """GraphGym node encoder for expression graphs.
 
-    The raw feature matrix stores ``node_type`` (col 0) and ``label_id`` (col 1)
-    as integer codes. Feeding them as continuous values imposes a meaningless
-    ordinal scale (e.g. ``Log=17`` ≈ 17 × ``Plus=3``) and discards the single
-    most discriminative signal: operator / function identity. This encoder embeds
-    both categorical columns and projects the remaining continuous columns
-    (which also normalises their disparate magnitudes), emitting ``dim_emb``
-    (= ``cfg.gnn.dim_inner``) features.
+    Wraps the shared :class:`TwoWayFeatureEncoder`: the categorical columns
+    (``node_type``, ``label_id``) are integer codes — feeding them as continuous
+    values imposes a meaningless ordinal scale (e.g. ``Log=17`` ≈ 17 × ``Plus=3``)
+    and discards operator/function identity, the most discriminative signal. The
+    encoder embeds them and linearly projects the LayerNorm'd continuous columns to
+    ``dim_emb`` (= ``cfg.gnn.dim_inner``).
 
-    When an explicit ``active_features`` subset is configured the categorical
-    column positions are no longer guaranteed, so the encoder falls back to a
-    plain linear projection.
+    Categorical columns are located BY NAME from ``cfg.expression_graph.active_features``
+    (the ordered active-feature subset, or the full schema), so embeddings keep working
+    under any subset/reorder — no plain-linear fallback.
     """
-
-    NODE_TYPE_COL = 0
-    LABEL_ID_COL = 1
 
     def __init__(self, dim_emb: int):
         super().__init__()
         active = getattr(cfg.expression_graph, "active_features", "")
-        self.categorical = not bool(active)
-        self.activation = nn.GELU()
-
-        dim_in = cfg.share.dim_in
-        if self.categorical:
-            node_type_emb_dim = 8
-            label_emb_dim = 16
-            self.node_type_emb = nn.Embedding(NUM_NODE_TYPES, node_type_emb_dim)
-            self.label_emb = nn.Embedding(NUM_LABELS, label_emb_dim)
-            cont_hidden = max(dim_emb - node_type_emb_dim - label_emb_dim, 8)
-            cont_in = max(dim_in - 2, 1)
-            self.continuous_encoder = nn.Linear(cont_in, cont_hidden)
-            self.fusion = nn.Linear(
-                cont_hidden + node_type_emb_dim + label_emb_dim, dim_emb
-            )
-        else:
-            self.proj = nn.Linear(dim_in, dim_emb)
+        names = parse_csv_list(active) or full_node_schema()
+        self.encoder = TwoWayFeatureEncoder(
+            names, dim_emb, NODE_CATEGORICAL_REGISTRY, activation=nn.GELU()
+        )
 
     def forward(self, batch):
-        x = batch.x
-        if self.categorical:
-            node_types = (
-                x[:, self.NODE_TYPE_COL].round().long().clamp(0, NUM_NODE_TYPES - 1)
-            )
-            label_ids = (
-                x[:, self.LABEL_ID_COL].round().long().clamp(0, NUM_LABELS - 1)
-            )
-            cont_cols = [
-                i for i in range(x.size(1)) if i not in (self.NODE_TYPE_COL, self.LABEL_ID_COL)
-            ]
-            x_cont = x[:, cont_cols] if cont_cols else x.new_zeros((x.size(0), 1))
-            fused = torch.cat(
-                [
-                    self.continuous_encoder(x_cont),
-                    self.node_type_emb(node_types),
-                    self.label_emb(label_ids),
-                ],
-                dim=-1,
-            )
-            batch.x = self.activation(self.fusion(fused))
-        else:
-            batch.x = self.activation(self.proj(x))
+        batch.x, _ = self.encoder(batch.x)
         return batch
 
 

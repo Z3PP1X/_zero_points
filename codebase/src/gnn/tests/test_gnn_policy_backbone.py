@@ -37,7 +37,7 @@ def test_virtual_nodes_excluded_from_message_passing():
     edge_index = torch.tensor([[0, 1, 2, 3, 0], [1, 2, 0, 0, 3]], dtype=torch.long)
     edge_attr = torch.randn(edge_index.size(1), layout.padded_edge_feature_count)
     batch_index = torch.zeros(4, dtype=torch.long)
-    global_features = torch.randn(1, 9)
+    global_features = torch.randn(1, 8)
 
     backbone = build_graph_policy_backbone(
         layout=layout,
@@ -73,7 +73,7 @@ def test_backbone_forward_pass_all_combinations():
     num_edges = edge_index.size(1)
     edge_attr = torch.randn(num_edges, layout.padded_edge_feature_count)
     batch_index = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1], dtype=torch.long)
-    global_features = torch.randn(num_graphs, 9)
+    global_features = torch.randn(num_graphs, 8)
     
     # Test all architectures and all activations
     for arch in GNN_ARCHITECTURE_CHOICES:
