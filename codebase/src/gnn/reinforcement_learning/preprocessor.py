@@ -10,7 +10,6 @@ from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.reinforcement_learning.feature_layout import (
     NATIVE_NODE_FEATURE_COUNT,
 )
-from gnn.shared.utils.graph_utils import populate_task_virtual_values
 from gnn.reinforcement_learning.observation_sanitize import finite_float, sanitize_torch_features
 
 # NOTE: `solver` is intentionally NOT a global feature — the chosen solver is the
@@ -128,16 +127,6 @@ class Preprocessor:
         # LayerNorm + Linear handle scaling. No hand-crafted sign-log transform.
         raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0)
         data.global_features = sanitize_torch_features(raw_tensor)
-
-        populate_task_virtual_values(
-            data,
-            cx_val=extracted_features.get("currentX", 0.0),
-            fx_val=extracted_features.get("fx", 0.0),
-            yt_val=extracted_features.get("yTarget", 0.0),
-            d1x_val=extracted_features.get("dfx", 0.0),
-            d2x_val=extracted_features.get("ddfx", 0.0),
-            mode=self.mode,
-        )
 
         data.uuid = message.get("uuid")
         data.state_id = message.get("stateId")

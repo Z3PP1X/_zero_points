@@ -18,7 +18,6 @@ from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
     filter_active_kappa,
-    populate_task_virtual_values,
     slice_active_features,
 )
 from gnn.shared.utils.graph_loader import GraphDataLoader
@@ -388,19 +387,6 @@ class ProblemRunDataset(Dataset):
             [cx_val, yt_val], dtype=torch.float
         )
         data.pid = pid
-
-        # Use the pre-imported populate_task_virtual_values
-        populate_task_virtual_values(
-            data,
-            cx_val=cx_val,
-            fx_val=fx_val,
-            yt_val=yt_val,
-            d1x_val=d1x_val,
-            d2x_val=d2x_val,
-            mode=self.mode,
-            set_has_value=True,
-            node_id_indices=self._node_id_indices.get(pid),
-        )
 
         # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:

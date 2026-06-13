@@ -92,12 +92,11 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         self._last_aux_loss = torch.zeros(())
         self.num_layers = 3
 
-        # Categorical features (node_type, label_id; edge relation_type) are integer
-        # codes. Feeding them as raw floats imposes a spurious ordinal scale (e.g.
-        # Log=17 ≈ 17 × Plus=3), discarding the most discriminative signal —
-        # operator/function identity. The shared TwoWayFeatureEncoder embeds these IDs
-        # (located BY NAME, so it works under any active-feature subset/reorder) and
-        # linearly projects the LayerNorm'd continuous columns.
+        # Categorical features (node_type; edge relation_type) are integer codes.
+        # Feeding them as raw floats imposes a spurious ordinal scale (e.g. Log=17 ≈
+        # 17 × Plus=3), discarding the most discriminative signal — operator identity.
+        # TwoWayFeatureEncoder embeds them BY NAME so it works under any active-feature
+        # subset/reorder and projects the LayerNorm'd continuous columns linearly.
         self.node_feature_names = resolve_node_feature_names(active_features)
         self._node_col = {name: idx for idx, name in enumerate(self.node_feature_names)}
         self.node_encoder = TwoWayFeatureEncoder(

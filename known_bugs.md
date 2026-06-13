@@ -74,6 +74,29 @@ solver compute. Correct for on-policy PPO; recorded as the known throughput limi
 `sys.path` injection in the entry scripts) while siblings use the
 `gnn.reinforcement_learning.` package path. Normalize to the package import.
 
+### RL-10 — RL uses homogeneous mode; edge_attr is always None  [HIGH]
+`UnifiedDataLoader.get_instance` defaults to `heterogeneous=False`. `to_homogeneous()`
+(`shared/utils/homogeneous_converter.py`) calls `from_networkx` without
+`group_edge_attrs`, so `data.edge_attr` is always `None` in the RL observation.
+`CustomGNNFeaturesExtractor` / `GraphPolicyBackbone` coalesces missing edge_attr to
+all-zero tensors of `padded_edge_feature_count` width — the GNN never sees structural
+edge features (child_index, direction, relation_type). Severity: all edge information
+is silently lost; the backbone trains purely on node topology.
+**Fix options**: (a) switch RL to `heterogeneous=True` and wire the hetero edge_attr
+into the observation dict and feature extractor, or (b) add `group_edge_attrs` to
+`to_homogeneous()` and extend the RL observation space to carry edge_attr.
+
+### RL-11 — solver state no longer injected into GNN  [HIGH]
+`populate_task_virtual_values` was removed (it was a no-op after the position-aware
+rewrite dropped its target feature columns). The RL Preprocessor still extracts
+`currentX / fx / dfx / ddfx` into `global_features` (8 scalars), but these are only
+passed through the `GlobalEncoder` linear — the GNN message-passing layers have no
+per-node view of the solver's current iterate. The RL agent cannot condition its graph
+reasoning on where the solver currently is in the function domain.
+**Fix**: redesign solver-state injection — either re-add per-node dynamic columns to
+`NODE_FEATURE_SCHEMA` (requiring a converter change) or concatenate the global state
+to every node's embedding before the first conv layer.
+
 ---
 
 ## Shared data layer (deferred)
@@ -108,9 +131,6 @@ a skill doc — remove carefully with a test run:
 - `sage_stack` / `SAGEStackNetwork` / `_sage_layers` (`shared/models/gnn_backbones.py`) —
   buildable but reachable from no supervised mapping or RL choice; only the deleted
   `time_management/grid.yaml` referenced `sageconv`.
-- Vestigial column constants `EDGE_RELATION_TYPE_COL`, `LABEL_ID_COL`, `BELONGS_TO_*_COL`
-  (`gnn_backbones.py:33-37`) — left over from the pre-"route-by-name" refactor (`NODE_TYPE_COL`
-  is still used by tests; keep it).
 
 ### SH-5 — augmented `.pt` cache key doesn't fingerprint the kappa set  [PERF / correctness]
 `graph_loader.py:225-229` distinguishes augmented vs plain only by the `_augmented.pt` suffix;
@@ -142,12 +162,28 @@ checkpoint; otherwise remove.
 
 ## Fixed in the audit pass (for reference)
 - Non-synthetic `val == test` leakage in `loader_graphgym.py` / `main.py` — fixed (disjoint split).
-- Kappa magnitude dropped from homogeneous `edge_attr` — fixed (added `kappa_weight` edge column).
 - Left/right operand not distinguished in homogeneous `relation_type` — fixed (route through
   `get_relation_type`; operand edge types added to the canonical vocab).
 - Hardcoded fallback dataset names in `run_results/eval.py` — fixed.
 - Dead artifacts removed: `reinforcement_learning/async_collector.py`, `tests_and_archive/`,
   `client.py`, `version_check.py`, `time_management/`, and assorted dead symbols.
 - Result/output artifacts gitignored and untracked.
+- `LABEL_ID_COL` / `BELONGS_TO_F/D1/D2_COL` / `EDGE_RELATION_TYPE_COL` constants removed from
+  `gnn_backbones.py` — they referenced schema columns that no longer exist, causing `ValueError`
+  on module import.
+- `GraphPolicyBackbone._legacy_forward` subtree aggregator (`belongs_mask` + `aggregator_specs`)
+  removed — the `belongs_to_f/d1/d2` columns were dropped from `NODE_FEATURE_SCHEMA`, making the
+  block dead code that always fell back to default-true/false masks.
+- `populate_task_virtual_values` removed from `graph_utils.py` — was a documented no-op; removed
+  the function and all import/call sites in preprocessing.py, rl/preprocessor.py, and tests.
+- `kappa_weight` dropped from `EDGE_FEATURE_SCHEMA` — kappa graph topology is still loaded and
+  the NetworkX attribute remains on kappa edges, but the column is no longer in the feature tensor.
+- `supervised/main.py` switched from `create_graphgym_model` (stock PyG GNN) to
+  `ExpressionClassifierNetwork`; `cfg.expression_graph.active_feature_names` now set before
+  instantiation so the encoder can locate categorical columns by name.
+- `evaluate()` hook guarded with `hasattr(model, "mp")` — Dirichlet energy skipped (0.0) when
+  the model does not expose a `.mp` message-passing submodule.
+- `feature_layout.py` — clarified that `EDGE_INPUT_DIM_CHOICES` are encoder output dims, not
+  raw schema widths.
 </content>
 </invoke>
