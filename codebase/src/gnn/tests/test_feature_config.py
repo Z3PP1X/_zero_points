@@ -2,9 +2,11 @@ import pytest
 
 from gnn.shared.utils.feature_config import (
     FEATURE_CLASSES,
+    PositionalSupernodeConflictError,
     merge_feature_selection,
     parse_feature_selection_from_mapping,
     resolve_active_node_features,
+    validate_positional_supernode_compatibility,
 )
 
 
@@ -14,14 +16,14 @@ def test_default_selection_uses_all_enriched_features():
     assert active is None
 
 
-def test_positional_encoding_lpe_only():
+def test_positional_encoding_subset():
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping(
             {
                 "features": {
                     "node": True,
                     "topology": False,
-                    "positional": ["lpe"],
+                    "positional": ["anchor_periodic"],
                     "edge": True,
                 }
             }
@@ -29,8 +31,8 @@ def test_positional_encoding_lpe_only():
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert "lpe_1" in active
-    assert "rwpe_1" not in active
+    assert "anchor_periodic" in active
+    assert "anchor_additive" not in active
     assert "depth" not in active
 
 
@@ -66,7 +68,8 @@ def test_topology_subset_and_positional_true():
     assert "depth" in active and "height" in active
     assert "subtree_size" not in active  # not selected
     assert "node_type" not in active  # node disabled
-    assert "lpe_1" in active and "rwpe_1" in active  # positional: true -> both
+    # positional: true -> all anchor groups
+    assert "anchor_additive" in active and "anchor_transcendental" in active
 
 
 def test_positional_false_disables_pe():
@@ -75,7 +78,7 @@ def test_positional_false_disables_pe():
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert not any(feature.startswith(("lpe_", "rwpe_")) for feature in active)
+    assert not any(feature.startswith("anchor_") for feature in active)
 
 
 def test_edge_list_coerces_to_enabled():
@@ -90,7 +93,7 @@ def test_edge_list_coerces_to_enabled():
 def test_nested_positional_form_rejected():
     with pytest.raises(ValueError, match="Nested feature config"):
         parse_feature_selection_from_mapping(
-            {"features": {"positional": {"enabled": True, "encodings": ["lpe"]}}}
+            {"features": {"positional": {"enabled": True, "encodings": ["anchor_periodic"]}}}
         )
 
 
@@ -127,20 +130,20 @@ def test_positional_encoding_none_via_cli():
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert not any(feature.startswith(("lpe_", "rwpe_")) for feature in active)
+    assert not any(feature.startswith("anchor_") for feature in active)
 
 
 def test_feature_groups_limit_enabled_classes():
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping({}),
         feature_groups=["node", "positional"],
-        positional_encoding=["rwpe"],
+        positional_encoding=["anchor_periodic"],
     )
     active = resolve_active_node_features(selection)
     assert active is not None
     assert "node_type" in active
-    assert "rwpe_1" in active
-    assert "lpe_1" not in active
+    assert "anchor_periodic" in active
+    assert "anchor_additive" not in active
     assert "depth" not in active
 
 
@@ -167,3 +170,20 @@ def test_feature_classes_cover_catalog():
     assert "topology" in FEATURE_CLASSES
     assert "positional" in FEATURE_CLASSES
     assert "edge" in FEATURE_CLASSES
+
+
+def test_positional_with_supernode_raises():
+    selection = parse_feature_selection_from_mapping({"features": {"positional": True}})
+    with pytest.raises(PositionalSupernodeConflictError):
+        validate_positional_supernode_compatibility(selection, add_virtual_supernode=True)
+
+
+def test_positional_disabled_allows_supernode():
+    selection = parse_feature_selection_from_mapping({"features": {"positional": False}})
+    # Must not raise: no positional encoding means the supernode is fine.
+    validate_positional_supernode_compatibility(selection, add_virtual_supernode=True)
+
+
+def test_positional_without_supernode_ok():
+    selection = parse_feature_selection_from_mapping({"features": {"positional": True}})
+    validate_positional_supernode_compatibility(selection, add_virtual_supernode=False)

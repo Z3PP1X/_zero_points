@@ -18,6 +18,7 @@ from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway
 from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor
 from gnn.reinforcement_learning.ppo_optuna_workflow import PpoOptunaWorkflow
 from gnn.reinforcement_learning.preprocessor import Preprocessor
+from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.rl_config import (
     RL_EXPERIMENT_CHOICES,
     add_shared_graph_args,
@@ -130,6 +131,9 @@ def main() -> None:
         edge_features=args.edge_features,
         active_features=args.active_features,
     )
+
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
 
     mlflow.set_experiment(f"GNN_RL_Optuna_{experiment}")
 

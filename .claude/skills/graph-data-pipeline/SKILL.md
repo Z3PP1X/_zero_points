@@ -37,7 +37,7 @@ Set once and threaded everywhere; controls which subgraphs load and whether virt
 
 ## Feature catalog — change features only via `feature_config.py`
 
-Four feature classes resolved centrally so supervised and RL stay identical: `node`, `topology`, `positional`, `edge`. Positional encodings: `lpe` (Laplacian, `lpe_1..4`) and `rwpe` (random walk, `rwpe_1..4`).
+Four feature classes resolved centrally so supervised and RL stay identical: `node`, `topology`, `positional`, `edge`. Positional encoding is **anchor-based** (replaced the old `lpe`/`rwpe`): 5 columns (`anchor_additive`, `anchor_scaling`, `anchor_periodic`, `anchor_exponential`, `anchor_transcendental`), each `1/(1+hops)` to the nearest operator anchor of that semantic group within the node's own function. Defined in `graph_utils.py` (`ANCHOR_GROUP_FEATURES`, `ANCHOR_GROUP_BY_LABEL`, `_compute_anchor_positional_encoding`). **Mutually exclusive with `add_virtual_supernode`** — combining them raises `PositionalSupernodeConflictError` (`validate_positional_supernode_compatibility`), since the supernode collapses the shortest-path distances the encoding relies on.
 
 The `enrich` flag toggles **basic vs enriched** schemas. Authoritative schema constants live in `graph_utils.py`:
 `BASIC_NODE_FEATURE_SCHEMA`, `ENRICHED_NODE_FEATURE_SCHEMA`, `BASIC_EDGE_FEATURE_SCHEMA`, `ENRICHED_EDGE_FEATURE_SCHEMA`, plus `CANONICAL_LABEL_VOCAB`.

@@ -4,6 +4,43 @@ This document outlines modifications to GNN graph construction, edge-aware backb
 
 ---
 
+## 0. Anchor positional encoding (replaces LPE / RWPE)
+
+The Laplacian (`lpe_1..4`) and random-walk (`rwpe_1..4`) positional encodings — 8 node
+columns — were removed and replaced by a **5-column anchor positional encoding** (net node
+schema 24 → 21).
+
+Each AST node is encoded by its proximity to the nearest *anchor* (an operator/function
+node) of each semantic group, as `1/(1 + d)` where `d` is the undirected shortest-path hop
+count. An anchor scores `1.0` for its own group; a group absent from the node's function
+scores `0.0`. Distances are measured **per function**: the structural connectors
+(`global`/`f_root`/`d1_root`/`d2_root`) are dropped first so f, f' and f'' form independent
+components and a node never sees a sibling function's anchors.
+
+The five groups (columns `anchor_additive`, `anchor_scaling`, `anchor_periodic`,
+`anchor_exponential`, `anchor_transcendental`):
+
+| Group | Members |
+|---|---|
+| additive | `Plus` |
+| scaling | `Times`, `Power`, `Sqrt` |
+| periodic | `Sin`, `Cos`, `Tan`, `Cot`, `Sec`, `Csc` |
+| exponential | `Exp`, `Log` |
+| transcendental | `Sinh`, `Cosh`, `Tanh`, `Abs`, `ArcSin`, `ArcCos`, `ArcTan` + any other operator/function |
+
+Definitions live in `graph_utils.py` (`ANCHOR_GROUP_FEATURES`, `ANCHOR_GROUP_BY_LABEL`,
+`anchor_group_for_node`, `_compute_anchor_positional_encoding`). The `positional` feature
+class now exposes the five groups as independently selectable members (config:
+`features.positional: true | false | [anchor_periodic, ...]`; CLI: `--positional-encoding`).
+
+**Incompatible with the virtual supernode.** A fully-connected supernode collapses every
+pairwise distance to ≤2 hops during message passing, destroying the anchor-distance signal.
+Enabling `add_virtual_supernode` together with the positional group now raises
+`PositionalSupernodeConflictError` (a hard error) at the training entry points — see
+`validate_positional_supernode_compatibility` in `feature_config.py`.
+
+---
+
 ## 1. Native Edge Features (replacing node-projected edge features)
 
 Edge semantics are now consumed directly by edge-aware conv layers instead of being flattened onto node features.

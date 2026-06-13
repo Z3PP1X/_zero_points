@@ -431,7 +431,7 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.features = CN()
     # Uniform flat per-category form: each leaf defaults to None ("all members").
     # YAML may override with a bool (true/false) or a list subset, e.g.
-    #   node: [node_type, value]   topology: false   positional: [lpe]
+    #   node: [node_type, value]   topology: false   positional: [anchor_periodic]
     # None defaults are required so YACS accepts either a bool or a list override.
     cfg.expression_graph.features.node = None
     cfg.expression_graph.features.topology = None
@@ -530,6 +530,10 @@ def load_custom_expression_graphs(format, name, dataset_dir):
             "active_features": getattr(cfg.expression_graph, "active_features", ""),
         },
     )
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
+
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
     # Expose the resolved ordered node-feature names so the custom
     # ExpressionClassifierNetwork (built later by create_model) can locate categorical
     # columns BY NAME. Empty list => the network falls back to the full node schema.

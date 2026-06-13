@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from gnn.shared.utils.graph_utils import (
+    ANCHOR_GROUP_FEATURES,
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
     NUM_EDGE_TYPES,
@@ -15,7 +16,9 @@ from gnn.shared.utils.graph_utils import (
 )
 
 FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional", "edge")
-POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ("lpe", "rwpe")
+# The positional feature class is the anchor-based positional encoding: one independently
+# selectable member per semantic anchor group. (Replaces the former lpe/rwpe encodings.)
+POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ANCHOR_GROUP_FEATURES
 
 NODE_FEATURES: tuple[str, ...] = (
     "node_type",
@@ -39,9 +42,10 @@ TOPOLOGY_FEATURES: tuple[str, ...] = (
     "betweenness_centrality",
 )
 
+# Each anchor group is a single positional-encoding column (identity mapping); the dict is
+# kept so resolution stays uniform with the historical multi-column-per-encoding form.
 POSITIONAL_ENCODING_FEATURES: dict[str, tuple[str, ...]] = {
-    "lpe": ("lpe_1", "lpe_2", "lpe_3", "lpe_4"),
-    "rwpe": ("rwpe_1", "rwpe_2", "rwpe_3", "rwpe_4"),
+    name: (name,) for name in POSITIONAL_ENCODING_CHOICES
 }
 
 EDGE_FEATURES: tuple[str, ...] = tuple(EDGE_FEATURE_SCHEMA)
@@ -211,7 +215,7 @@ class FeatureSelection:
     node: bool | tuple[str, ...] = True
     topology: bool | tuple[str, ...] = True
     positional_enabled: bool = True
-    positional_encodings: tuple[str, ...] = ("lpe", "rwpe")
+    positional_encodings: tuple[str, ...] = POSITIONAL_ENCODING_CHOICES
     edge: bool = True
     explicit_features: list[str] | None = None
 
@@ -238,6 +242,37 @@ class FeatureSelection:
 
 def default_feature_selection() -> FeatureSelection:
     return FeatureSelection()
+
+
+class PositionalSupernodeConflictError(ValueError):
+    """Raised when anchor positional encoding is combined with a virtual supernode."""
+
+
+def validate_positional_supernode_compatibility(
+    selection: FeatureSelection, add_virtual_supernode: bool
+) -> None:
+    """Reject the anchor-PE + virtual-supernode combination.
+
+    The anchor positional encoding measures shortest-path proximity to operator anchors,
+    but a fully-connected virtual supernode collapses every pairwise distance to at most
+    two hops during message passing — destroying the positional signal the encoding is
+    meant to provide. The two options are mutually exclusive; enabling both is almost
+    always a configuration mistake, so we fail fast instead of training on a corrupted
+    positional encoding.
+    """
+    if (
+        add_virtual_supernode
+        and selection.positional_enabled
+        and selection.positional_encodings
+    ):
+        raise PositionalSupernodeConflictError(
+            "Anchor positional encoding is incompatible with the virtual supernode: a "
+            "fully-connected supernode makes every node reachable in <=2 hops, which "
+            "destroys the shortest-path anchor distances the encoding relies on. Disable "
+            "one of them — either drop the positional feature group "
+            "(features.positional: false / --positional-encoding none) or turn off the "
+            "supernode (add_virtual_supernode: false)."
+        )
 
 
 def parse_feature_selection_from_mapping(
@@ -430,8 +465,9 @@ def add_feature_cli_args(parser: argparse.ArgumentParser) -> None:
         metavar="ENCODING",
         choices=[*POSITIONAL_ENCODING_CHOICES, "none"],
         help=(
-            "Positional encodings to use when the positional group is enabled: "
-            "lpe (Laplacian), rwpe (random walk), or none."
+            "Anchor positional-encoding groups to use when the positional group is "
+            f"enabled. Subset of {', '.join(POSITIONAL_ENCODING_CHOICES)}, or 'none'. "
+            "Incompatible with --add-virtual-supernode."
         ),
     )
     parser.add_argument(
