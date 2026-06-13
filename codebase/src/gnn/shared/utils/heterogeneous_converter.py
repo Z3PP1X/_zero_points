@@ -3,7 +3,6 @@ import torch
 from torch_geometric.data import HeteroData
 
 from gnn.shared.utils.graph_utils import (
-    ANCHOR_GROUP_FEATURES,
     NODE_FEATURE_SCHEMA,
     get_hetero_node_type,
     get_relation_type,
@@ -56,30 +55,11 @@ def to_hetero(
         "root": root_idx,
     }
 
-    # AST node index mapping for anchor PE lookup (excludes global/supernode)
-    ast_node_ids = [
-        nid for nid in node_ids
-        if G.nodes[nid].get("type") not in ("global", "supernode")
-    ]
-    ast_id_to_idx = {nid: i for i, nid in enumerate(ast_node_ids)}
-
-    n_anchors = len(ANCHOR_GROUP_FEATURES)
     n_features = len(NODE_FEATURE_SCHEMA)
 
     def _build_feature_vec(nid: str) -> list[float]:
         attrs = G.nodes[nid]
-        vec = []
-        for feat in NODE_FEATURE_SCHEMA:
-            if feat.startswith("anchor_"):
-                ast_idx = ast_id_to_idx.get(nid)
-                anchor_col = ANCHOR_GROUP_FEATURES.index(feat) if feat in ANCHOR_GROUP_FEATURES else -1
-                if ast_idx is not None and anchor_col >= 0 and "anchor_pe" in topo and topo["anchor_pe"] is not None:
-                    vec.append(float(topo["anchor_pe"][ast_idx, anchor_col]))
-                else:
-                    vec.append(0.0)
-            else:
-                vec.append(float(attrs.get(feat, 0.0)))
-        return vec
+        return [float(attrs.get(feat, 0.0)) for feat in NODE_FEATURE_SCHEMA]
 
     # 3. Build feature tensors per type
     def _build_features(nid_list: list) -> torch.Tensor:
