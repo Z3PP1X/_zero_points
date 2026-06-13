@@ -444,14 +444,20 @@ def prepare_hetero_data_list(data_list):
 
     A true heterogeneous run keeps ``HeteroData`` (no homogenization). The only blocker is
     ``InMemoryDataset.collate``, which needs every graph to expose the same stores — so we
-    pad each graph to the dataset-wide union of edge types (empty ``edge_index`` for absent
-    ones) via the shared ``hetero_backbone`` helpers. Returns ``(padded_list, edge_types)``;
-    ``edge_types`` is stashed on the cfg so the network can build its ``to_hetero`` metadata.
+    pad each graph to the dataset-wide union of edge types (empty ``edge_index`` and matching
+    empty ``edge_attr`` for absent ones) via the shared ``hetero_backbone`` helpers.
+    Returns ``(padded_list, edge_types)``; ``edge_types`` is stashed on the cfg so the
+    network can build its ``to_hetero`` metadata.
     """
-    from gnn.shared.models.hetero_backbone import collect_edge_types, pad_edge_types
+    from gnn.shared.models.hetero_backbone import (
+        collect_edge_attr_dims,
+        collect_edge_types,
+        pad_edge_types,
+    )
 
     edge_types = collect_edge_types(data_list)
-    padded = [pad_edge_types(d, edge_types) for d in data_list]
+    edge_attr_dims = collect_edge_attr_dims(data_list)
+    padded = [pad_edge_types(d, edge_types, edge_attr_dims) for d in data_list]
     return padded, edge_types
 
 

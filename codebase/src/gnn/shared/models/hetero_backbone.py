@@ -42,6 +42,23 @@ def collect_edge_types(data_list: list[HeteroData]) -> list[EdgeType]:
     return sorted(seen)
 
 
+def collect_edge_attr_dims(data_list: list[HeteroData]) -> dict[EdgeType, int]:
+    """For each edge type that has ``edge_attr`` anywhere in the dataset, return its dim.
+
+    PyG collation requires every graph that participates in a given edge-type store to
+    carry the same set of attributes. We scan the whole list so that ``pad_edge_types``
+    knows which padded stores need an empty ``edge_attr`` and at what width.
+    """
+    dims: dict[EdgeType, int] = {}
+    for data in data_list:
+        for edge_type in data.edge_types:
+            et = tuple(edge_type)
+            store = data[et]
+            if hasattr(store, "edge_attr") and store.edge_attr is not None and et not in dims:
+                dims[et] = store.edge_attr.size(1) if store.edge_attr.dim() > 1 else 1
+    return dims
+
+
 def build_hetero_metadata(data_list: list[HeteroData]) -> Metadata:
     """PyG ``metadata = (node_types, edge_types)`` for ``to_hetero``, from a dataset.
 
@@ -51,18 +68,27 @@ def build_hetero_metadata(data_list: list[HeteroData]) -> Metadata:
     return list(HETERO_NODE_TYPES), collect_edge_types(data_list)
 
 
-def pad_edge_types(data: HeteroData, edge_types: list[EdgeType]) -> HeteroData:
+def pad_edge_types(
+    data: HeteroData,
+    edge_types: list[EdgeType],
+    edge_attr_dims: dict[EdgeType, int] | None = None,
+) -> HeteroData:
     """Ensure ``data`` carries every edge type in ``edge_types``.
 
-    Missing edge types are added with an empty ``edge_index`` of shape ``[2, 0]`` so a list
-    of graphs has a uniform store layout and collates (the root cause of the original
-    ``InMemoryDataset`` IndexError). Existing edge types and all node stores are untouched.
+    Missing edge types are added with an empty ``edge_index`` of shape ``[2, 0]``.
+    When ``edge_attr_dims`` maps an edge type to a feature width, an empty
+    ``edge_attr`` of shape ``[0, dim]`` is also added so PyG's collator finds a
+    uniform store layout (fixes ``KeyError: 'edge_attr'`` during collation).
+    Existing edge types and all node stores are untouched.
     """
     present = set(data.edge_types)
+    attr_dims = edge_attr_dims or {}
     for edge_type in edge_types:
         edge_type = tuple(edge_type)
         if edge_type not in present:
             data[edge_type].edge_index = torch.empty((2, 0), dtype=torch.long)
+            if edge_type in attr_dims:
+                data[edge_type].edge_attr = torch.empty((0, attr_dims[edge_type]), dtype=torch.float)
     return data
 
 
