@@ -47,6 +47,9 @@ codebase/src/gnn/output_plots/
 codebase/src/gnn/supervised_learning/visualizations/
 *.gexf
 
+# 1-WL distinguishability study outputs (regenerable via weisfeiler_lehman/main.py)
+codebase/src/gnn/weisfeiler_lehman/results/
+
 # Datasets and their archive (bulk input data, unpacked locally — never commit)
 datasets/
 datasets.zip
