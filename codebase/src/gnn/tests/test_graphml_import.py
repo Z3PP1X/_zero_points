@@ -8,7 +8,6 @@ from graph_utils import (
     find_roots,
     create_virtual_global_node,
     ExpressionGraphConverter,
-    signed_log_value,
 )
 
 GRAPHML_F = """<?xml version='1.0' encoding='UTF-8'?>
@@ -94,7 +93,7 @@ def test_create_virtual_global_node():
     assert G_comb.nodes["f_1"]["type"] == "operator"
     assert G_comb.nodes["f_2"]["type"] == "variable"
     assert G_comb.nodes["f_3"]["type"] == "constant"
-    assert G_comb.nodes["f_3"]["value"] == pytest.approx(signed_log_value(5.0))
+    assert G_comb.nodes["f_3"]["value"] == pytest.approx(5.0)
 
     assert "f_root" in G_comb.nodes
     assert "d1_root" in G_comb.nodes

@@ -51,7 +51,6 @@ def test_classifier_forward_with_feature_encoder():
             global_dim=2,
             edge_dim=edge_dim,
             architecture=arch,
-            use_feature_encoder=True,
         )
         model.eval()
         assert model.node_encoder is not None
@@ -74,27 +73,34 @@ def test_label_id_embedding_breaks_ordinal_assumption():
         global_dim=2,
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
-        use_feature_encoder=True,
     )
     # The label embedding table must cover the full canonical vocabulary.
-    assert model.node_encoder.label_emb.num_embeddings >= int(batch.x[:, 1].max().item()) + 1
+    assert (
+        model.node_encoder.embeddings["label_id"].num_embeddings
+        >= int(batch.x[:, 1].max().item()) + 1
+    )
 
 
-def test_classifier_forward_without_feature_encoder():
+def test_classifier_forward_with_feature_subset():
+    """The encoder locates categoricals BY NAME, so a reordered active-feature subset
+    that does not start with node_type/label_id still embeds them and forwards."""
     batch = _build_batch()
+    # Reordered subset: node_type is no longer at column 0.
+    active_features = ["value", "node_type", "label_id", "depth"]
+    sub_x = batch.x[:, [NODE_FEATURE_SCHEMA.index(f) for f in active_features]]
     model = TestGraphNetwork(
-        input_dim=len(NODE_FEATURE_SCHEMA),
+        input_dim=len(active_features),
         hidden_dim=32,
         global_dim=2,
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
-        use_feature_encoder=False,
+        active_features=active_features,
     )
     model.eval()
-    assert model.node_encoder is None
-    assert model.edge_encoder is None
+    # Both categoricals are embedded despite the reorder (no plain-linear fallback).
+    assert set(model.node_encoder.embeddings.keys()) == {"node_type", "label_id"}
     with torch.no_grad():
         out = model(
-            batch.x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr
+            sub_x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr
         )
     assert out.shape == (1, 2)

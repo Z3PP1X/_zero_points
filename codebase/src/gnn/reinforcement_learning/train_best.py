@@ -196,7 +196,7 @@ def load_best_trial_params(db_path: str, study_name: str | None = None) -> dict:
     return best_trial.params
 
 
-def build_trial_configuration(params: dict, override_seed: int | None = None, padded_node_feature_count: int = 25) -> TrialConfiguration:
+def build_trial_configuration(params: dict, override_seed: int | None = None, padded_node_feature_count: int = 25, active_feature_names: tuple[str, ...] | None = None) -> TrialConfiguration:
     """Constructs a structured TrialConfiguration from flat Optuna params."""
     random_seed = override_seed if override_seed is not None else int(params.get("random_seed", 42))
     
@@ -225,6 +225,7 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
         global_input_dim=int(params["global_input_dim"]),
         edge_input_dim=int(params.get("edge_input_dim", EDGE_INPUT_DIM_CHOICES[0])),
         padded_node_feature_count=padded_node_feature_count,
+        active_feature_names=active_feature_names,
     )
     
     policy = GnnPolicySpec(
@@ -382,7 +383,12 @@ def main() -> None:
     # 1. Load and parse hyperparameter configuration
     try:
         best_params = load_best_trial_params(args.db, args.study_name)
-        trial_config = build_trial_configuration(best_params, args.seed, padded_node_feature_count)
+        trial_config = build_trial_configuration(
+            best_params,
+            args.seed,
+            padded_node_feature_count,
+            active_feature_names=tuple(active_features) if active_features is not None else None,
+        )
     except Exception as e:
         print(f"[Error] Failed to load/parse study parameters: {e}")
         sys.exit(1)

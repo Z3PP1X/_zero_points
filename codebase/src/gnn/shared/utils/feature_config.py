@@ -9,6 +9,9 @@ from typing import Any, Iterable
 from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
+    NUM_EDGE_TYPES,
+    NUM_LABELS,
+    NUM_NODE_TYPES,
 )
 
 FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional", "edge")
@@ -42,6 +45,17 @@ POSITIONAL_ENCODING_FEATURES: dict[str, tuple[str, ...]] = {
 }
 
 EDGE_FEATURES: tuple[str, ...] = tuple(EDGE_FEATURE_SCHEMA)
+
+# Categorical features that the model encodes with a learnable nn.Embedding, mapped to
+# (vocab_size, embedding_dim). All other columns are treated as continuous (linear path).
+# `direction` is deliberately NOT here — relation_type already encodes forward/reverse.
+NODE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {
+    "node_type": (NUM_NODE_TYPES, 8),
+    "label_id": (NUM_LABELS, 16),
+}
+EDGE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {
+    "relation_type": (NUM_EDGE_TYPES, 8),
+}
 
 
 def full_node_schema() -> list[str]:

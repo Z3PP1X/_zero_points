@@ -3,8 +3,6 @@ import torch
 from torch_geometric.data import HeteroData
 
 from gnn.shared.utils.graph_utils import (
-    CANONICAL_LABELS,
-    fourier_frequency_encoding,
     get_hetero_node_type,
     get_relation_type,
 )
@@ -123,12 +121,14 @@ def to_hetero(
         node_id: idx for idx, node_id in enumerate(ast_node_ids)
     }
 
+    # Operator / variable features: integer label_id (col 0, for a learnable
+    # embedding on the model side) followed by raw continuous topology + PE columns.
+    # One-hot label encoding is intentionally removed; the model embeds label_id.
+    OP_VAR_FEATURE_DIM = 1 + 5 + 8  # label_id + topology(5) + lpe/rwpe(8) = 14
+
     for nid in operators:
         attrs = G.nodes[nid]
-        label_id = attrs["label_id"]
-        # One-hot label encoding
-        label_oh = torch.zeros(len(CANONICAL_LABELS), dtype=torch.float)
-        label_oh[label_id] = 1.0
+        label_feat = torch.tensor([float(attrs["label_id"])], dtype=torch.float)
 
         # Topology metrics
         topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
@@ -141,20 +141,18 @@ def to_hetero(
         )
 
         # Combine
-        x_ops_list.append(torch.cat([label_oh, topo_feats, struct_feats]))
+        x_ops_list.append(torch.cat([label_feat, topo_feats, struct_feats]))
 
     if x_ops_list:
         x_ops = torch.stack(x_ops_list, dim=0)
     else:
-        x_ops = torch.empty((0, 59), dtype=torch.float)
+        x_ops = torch.empty((0, OP_VAR_FEATURE_DIM), dtype=torch.float)
 
     # 4. Build features for 'variable'
     x_vars_list = []
     for nid in variables:
         attrs = G.nodes[nid]
-        label_id = attrs["label_id"]
-        label_oh = torch.zeros(len(CANONICAL_LABELS), dtype=torch.float)
-        label_oh[label_id] = 1.0
+        label_feat = torch.tensor([float(attrs["label_id"])], dtype=torch.float)
 
         topo_feats = torch.tensor(get_topology(nid), dtype=torch.float)
 
@@ -164,29 +162,24 @@ def to_hetero(
             lpe_vals + rwpe_vals, dtype=torch.float
         )
 
-        x_vars_list.append(torch.cat([label_oh, topo_feats, struct_feats]))
+        x_vars_list.append(torch.cat([label_feat, topo_feats, struct_feats]))
 
     if x_vars_list:
         x_vars = torch.stack(x_vars_list, dim=0)
     else:
-        x_vars = torch.empty((0, 59), dtype=torch.float)
+        x_vars = torch.empty((0, OP_VAR_FEATURE_DIM), dtype=torch.float)
 
-    # 5. Build features for 'constant'
+    # 5. Build features for 'constant': raw value only (fourier encoding removed).
     x_consts_list = []
     for nid in constants:
         attrs = G.nodes[nid]
         val = attrs["value"]
-
-        fourier = torch.tensor(
-            fourier_frequency_encoding(val), dtype=torch.float
-        )
-        val_tensor = torch.tensor([val], dtype=torch.float)
-        x_consts_list.append(torch.cat([val_tensor, fourier]))
+        x_consts_list.append(torch.tensor([float(val)], dtype=torch.float))
 
     if x_consts_list:
         x_consts = torch.stack(x_consts_list, dim=0)
     else:
-        x_consts = torch.empty((0, 9), dtype=torch.float)
+        x_consts = torch.empty((0, 1), dtype=torch.float)
 
     # 6. Build features for 'virtual'
     x_virts_list = []

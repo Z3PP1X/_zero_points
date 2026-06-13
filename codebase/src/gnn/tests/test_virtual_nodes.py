@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 import networkx as nx
 
-from graph_utils import ExpressionGraphConverter, signed_log_value, NODE_FEATURE_SCHEMA
+from graph_utils import ExpressionGraphConverter, NODE_FEATURE_SCHEMA
 from feature_layout import NATIVE_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
@@ -158,8 +158,8 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     cx_idx = NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
     dt_idx = NODE_FEATURE_SCHEMA.index("virtual_delta_target_val")
     
-    assert data_graph.x[idx_f_root, cx_idx].item() == pytest.approx(signed_log_value(1.5))
-    assert data_graph.x[idx_f_root, dt_idx].item() == pytest.approx(signed_log_value(2.7))
+    assert data_graph.x[idx_f_root, cx_idx].item() == pytest.approx(1.5)
+    assert data_graph.x[idx_f_root, dt_idx].item() == pytest.approx(2.7)
 
     # 2. Test Preprocessor in Tree Mode
     preprocessor_tree = Preprocessor(graphs_dir=str(tmp_path), mode="tree")
@@ -167,8 +167,8 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     assert data_tree.num_nodes == 3  # global + f_root + variable
 
     idx_f_root_tree = data_tree.node_ids.index("f_root")
-    assert data_tree.x[idx_f_root_tree, cx_idx].item() == pytest.approx(signed_log_value(1.5))
-    assert data_tree.x[idx_f_root_tree, dt_idx].item() == pytest.approx(signed_log_value(2.7))
+    assert data_tree.x[idx_f_root_tree, cx_idx].item() == pytest.approx(1.5)
+    assert data_tree.x[idx_f_root_tree, dt_idx].item() == pytest.approx(2.7)
 
 
 def test_supervised_learning_preprocessor_static_initialization():
@@ -203,8 +203,8 @@ def test_supervised_learning_preprocessor_static_initialization():
     cx_idx = NODE_FEATURE_SCHEMA.index("virtual_current_x_val")
     dt_idx = NODE_FEATURE_SCHEMA.index("virtual_delta_target_val")
     
-    assert data_no_fx_graph.x[idx_f_root, cx_idx].item() == pytest.approx(signed_log_value(2.5))
-    assert data_no_fx_graph.x[idx_f_root, dt_idx].item() == pytest.approx(signed_log_value(4.0))
+    assert data_no_fx_graph.x[idx_f_root, cx_idx].item() == pytest.approx(2.5)
+    assert data_no_fx_graph.x[idx_f_root, dt_idx].item() == pytest.approx(4.0)
 
     df_with_fx = pd.DataFrame([{
         "problem_id": "P-supervised",
@@ -216,7 +216,7 @@ def test_supervised_learning_preprocessor_static_initialization():
     
     dataset_with_fx_graph = ProblemRunDataset(df_with_fx, base_graphs_graph, mode="graph")
     data_with_fx_graph = dataset_with_fx_graph[0]
-    assert data_with_fx_graph.x[idx_f_root, dt_idx].item() == pytest.approx(signed_log_value(-6.12))
+    assert data_with_fx_graph.x[idx_f_root, dt_idx].item() == pytest.approx(-6.12)
 
 
 def test_dynamic_feature_slicing_and_selection(tmp_path):
@@ -261,4 +261,4 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     assert data.x.shape[1] == 3
     
     idx_f_root_pre = data.node_ids.index("f_root")
-    assert data.x[idx_f_root_pre, 2].item() == pytest.approx(signed_log_value(3.14))
+    assert data.x[idx_f_root_pre, 2].item() == pytest.approx(3.14)
