@@ -190,11 +190,14 @@ class UnifiedDataLoader:
         empty dict if the dataset has no 'kappa' column.
         """
         df = self.dataset_loader.data
-        if "kappa" not in df.columns or "Problem_ID" not in df.columns:
+        # DatasetLoader normalises headers, so the id column arrives as the
+        # lowercase "problem_id"; accept the raw "Problem_ID" too for safety.
+        id_col = next((c for c in ("problem_id", "Problem_ID") if c in df.columns), None)
+        if "kappa" not in df.columns or id_col is None:
             return {}
         return (
             df.dropna(subset=["kappa"])
-            .groupby("Problem_ID")["kappa"]
+            .groupby(id_col)["kappa"]
             .first()
             .apply(float)
             .to_dict()

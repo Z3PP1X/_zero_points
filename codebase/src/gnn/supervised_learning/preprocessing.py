@@ -111,12 +111,15 @@ class GraphPipeline:
             fe_synth = FeatureEngineering(self.synthetic_unified_loader.dataset_loader)
             fe_synth._tag_faster_algorithm()
         
-        # Override graph_loader if explicitly passed (for legacy call sites/tests)
+        # Override graph_loader if explicitly passed (for legacy call sites/tests).
+        # Build the kappa_map either way so each graph merges only its active
+        # h-function; without it load_all() falls back to merging ALL kappas,
+        # inflating every graph ~18x and blocking the pipeline.
+        kappa_map = self.unified_loader.build_kappa_map() if self.add_kappa else None
         if graph_loader is not None:
             self.graph_loader = graph_loader
-            self.graphs = self.graph_loader.load_all()
+            self.graphs = self.graph_loader.load_all(kappa_map=kappa_map)
         else:
-            kappa_map = self.unified_loader.build_kappa_map() if self.add_kappa else None
             self.graphs = self.unified_loader.load_all(kappa_map=kappa_map)
             
         self.graph_pipeline = self
