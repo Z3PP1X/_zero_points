@@ -8,11 +8,86 @@ End-to-end GraphGym grid-search orchestrator.
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+import yaml
+
+
+def _git_provenance(repo_dir: Path) -> dict:
+    """Best-effort git commit + dirty flag; never raises (returns nulls on failure)."""
+
+    def _git(*args) -> str | None:
+        try:
+            out = subprocess.run(
+                ["git", *args],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return out.stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            return None
+
+    commit = _git("rev-parse", "HEAD")
+    status = _git("status", "--porcelain")
+    return {
+        "commit": commit,
+        "dirty": None if status is None else bool(status),
+    }
+
+
+def _package_versions() -> dict:
+    """Versions of the libraries that affect numerics, for the manifest."""
+    import platform
+
+    versions = {"python": platform.python_version()}
+    for mod_name, key in (("torch", "torch"), ("torch_geometric", "torch_geometric")):
+        try:
+            versions[key] = __import__(mod_name).__version__
+        except Exception:
+            versions[key] = None
+    return versions
+
+
+def write_run_manifest(
+    results_dir: Path,
+    experiment_name: str,
+    config_base: Path,
+    grid_path: Path,
+    config_files: list[Path],
+    timestamp: str,
+    repo_dir: Path,
+) -> Path:
+    """Write a single self-contained provenance file for the whole grid run.
+
+    Combines the resolved base config and the grid (the "settings.json" pairing), plus
+    the seed, git commit/dirty flag, package versions, and the expanded config list — so
+    any experiment folder answers "what produced this?" without the transient configs/
+    dir or the source tree at HEAD. Read back by report.py into summary.json.
+    """
+    base_cfg = yaml.safe_load(config_base.read_text(encoding="utf-8")) or {}
+    grid_cfg = yaml.safe_load(grid_path.read_text(encoding="utf-8")) or {}
+
+    manifest = {
+        "experiment": experiment_name,
+        "timestamp": timestamp,
+        "seed": base_cfg.get("seed"),
+        "git": _git_provenance(repo_dir),
+        "versions": _package_versions(),
+        "num_configs": len(config_files),
+        "config_files": [p.name for p in config_files],
+        "base_config": base_cfg,
+        "grid": grid_cfg,
+    }
+    manifest_path = results_dir / "run_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, default=str), encoding="utf-8")
+    return manifest_path
 
 
 def _run_training_job(python_exe: str, train_script: str, cfg_file: str, script_dir: str) -> tuple[str, int]:
@@ -177,6 +252,17 @@ def main():
         results_base_dir=results_dir,
     )
     print(f"[Orchestrator] Generated {len(config_files)} configs.")
+
+    manifest_path = write_run_manifest(
+        results_dir=results_dir,
+        experiment_name=experiment_name,
+        config_base=config_base,
+        grid_path=grid_path,
+        config_files=config_files,
+        timestamp=timestamp,
+        repo_dir=script_dir,
+    )
+    print(f"[Orchestrator] Wrote run manifest: {manifest_path}")
 
     if not args.skip_training:
         _train_configs(
