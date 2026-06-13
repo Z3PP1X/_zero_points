@@ -22,6 +22,10 @@ import torch.nn.functional as F
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import SAGEConv, global_mean_pool, to_hetero
 
+from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
+from gnn.shared.models.gnn_backbones import make_activation, resolve_node_feature_names
+from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
+
 # The fixed heterogeneous node-type vocabulary (mirrors graph_utils.get_hetero_node_type).
 HETERO_NODE_TYPES: tuple[str, ...] = ("global", "operator", "root")
 
@@ -85,24 +89,29 @@ class HeteroExpressionClassifier(nn.Module):
         in_dim: node feature width (the shared ``NODE_FEATURE_SCHEMA`` length).
         hidden_dim / out_dim / num_layers / aggr: backbone hyperparameters.
 
-    A shared input projection runs over *every* node type before message passing. The model
-    also injects a self-loop edge type ``(nt, 'self_loop', nt)`` for each node type, so types
-    that are only ever an edge source (``global``) are still a destination and get updated —
-    ``to_hetero`` otherwise refuses to build a model where a node type is never updated. The
-    real edge metadata stays untouched (self-loops are an internal model detail, not part of
-    ``build_hetero_metadata``). ``aggr`` is the cross-relation aggregation ``to_hetero``
-    applies when a node type is the destination of several edge types. ``forward(data)`` takes
-    a (batched) ``HeteroData`` and returns logits of shape ``[num_graphs, out_dim]``.
+    A shared ``TwoWayFeatureEncoder`` runs over *every* node type before message passing —
+    the same encoder the homogeneous backbone uses, so categorical columns (``node_type`` /
+    ``label_id``) are embedded by name rather than fed as raw ordinal codes, and continuous
+    columns are LayerNorm'd + linearly projected. All node types share the encoder because
+    they share the ``NODE_FEATURE_SCHEMA`` layout. The model also injects a self-loop edge
+    type ``(nt, 'self_loop', nt)`` for each node type, so types that are only ever an edge
+    source (``global``) are still a destination and get updated — ``to_hetero`` otherwise
+    refuses to build a model where a node type is never updated. The real edge metadata stays
+    untouched (self-loops are an internal model detail, not part of ``build_hetero_metadata``).
+    ``aggr`` is the cross-relation aggregation ``to_hetero`` applies when a node type is the
+    destination of several edge types. ``forward(data)`` takes a (batched) ``HeteroData`` and
+    returns logits of shape ``[num_graphs, out_dim]``.
     """
 
     def __init__(
         self,
         metadata: Metadata,
-        in_dim: int,
+        active_features: list[str] | None = None,
         hidden_dim: int = 128,
         out_dim: int = 2,
         num_layers: int = 2,
         aggr: str = "sum",
+        activation: str = "prelu",
     ):
         super().__init__()
         self.node_types = list(metadata[0])
@@ -112,7 +121,15 @@ class HeteroExpressionClassifier(nn.Module):
             self.node_types,
             list(metadata[1]) + self._loop_edge_types,
         )
-        self.lin_in = nn.Linear(in_dim, hidden_dim)
+        # Embed categoricals by name + encode continuous columns, exactly like the
+        # homogeneous TestGraphNetwork. Shared across node types (uniform feature layout).
+        self.node_feature_names = resolve_node_feature_names(active_features)
+        self.node_encoder = TwoWayFeatureEncoder(
+            self.node_feature_names,
+            hidden_dim,
+            NODE_CATEGORICAL_REGISTRY,
+            activation=make_activation(activation),
+        )
         self.gnn = to_hetero(
             _ConvStack(hidden_dim, num_layers, sage_aggr="mean"),
             hetero_metadata,
@@ -136,10 +153,11 @@ class HeteroExpressionClassifier(nn.Module):
 
     def forward(self, data: HeteroData):
         num_graphs = data.num_graphs
-        device = self.lin_in.weight.device
+        device = self.head[0].weight.device
 
-        # Project every node type up front, so even isolated types carry a representation.
-        h0 = {nt: F.relu(self.lin_in(x)) for nt, x in data.x_dict.items()}
+        # Encode every node type up front (categorical embeddings + continuous linear), so
+        # even isolated types carry a learned representation into message passing.
+        h0 = {nt: self.node_encoder(x)[0] for nt, x in data.x_dict.items()}
         h = self.gnn(h0, self._with_self_loops(data, device))
 
         pooled = []

@@ -343,7 +343,7 @@ class ExpressionClassifierNetwork(torch.nn.Module):
             metadata = (list(HETERO_NODE_TYPES), edge_types)
             self.net = HeteroExpressionClassifier(
                 metadata,
-                in_dim=(len(names) or dim_in),
+                active_features=(names or None),
                 hidden_dim=cfg.gnn.dim_inner,
                 out_dim=dim_out,
                 num_layers=getattr(cfg.gnn, "layers_mp", 2),

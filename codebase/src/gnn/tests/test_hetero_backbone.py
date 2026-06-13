@@ -150,9 +150,20 @@ def test_padded_graphs_share_layout_and_batch():
 # --------------------------------------------------------------------------- #
 def _build_model(data_list, **kw):
     metadata = build_hetero_metadata(data_list)
+    # active_features=None -> full NODE_FEATURE_SCHEMA, matching the converter's x layout.
     return HeteroExpressionClassifier(
-        metadata, in_dim=len(NODE_FEATURE_SCHEMA), hidden_dim=16, **kw
+        metadata, active_features=None, hidden_dim=16, **kw
     )
+
+
+def test_categoricals_are_embedded_not_raw_ordinal():
+    """The hetero model embeds node_type via nn.Embedding (parity with the homo backbone)."""
+    model = _build_model(_dataset())
+    # node_type is embedded by name, not fed as a raw ordinal code through a plain Linear.
+    assert "node_type" in model.node_encoder.embeddings
+    assert isinstance(model.node_encoder.embeddings["node_type"], torch.nn.Embedding)
+    # The old plain input projection is gone.
+    assert not hasattr(model, "lin_in")
 
 
 def test_classifier_forward_single_graph():
