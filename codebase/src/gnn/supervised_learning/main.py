@@ -24,7 +24,6 @@ if str(src_root) not in sys.path:
 from gnn.supervised_learning.supervised_config import (
     apply_expression_graph_overrides,
     bootstrap_graphgym_cfg,
-    create_graphgym_model,
     load_yaml_config,
     read_supervised_settings,
     resolve_edge_dim,
@@ -83,12 +82,14 @@ def evaluate(model, loader):
     all_true = []
     all_pred_score = []
 
-    # Register forward hook to capture embeddings from model.mp
+    # Capture per-batch node embeddings for Dirichlet energy if the model exposes
+    # a .mp message-passing submodule (stock GraphGym GNN only).
     mp_embeddings = []
-    def hook_fn(module, inputs, outputs):
-        mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
-        
-    hook_handle = model.mp.register_forward_hook(hook_fn)
+    hook_handle = None
+    if hasattr(model, "mp"):
+        def hook_fn(module, inputs, outputs):
+            mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, "edge_attr", None)))
+        hook_handle = model.mp.register_forward_hook(hook_fn)
 
     with torch.no_grad():
         for batch in loader:
@@ -101,7 +102,8 @@ def evaluate(model, loader):
             all_true.append(true.detach().cpu())
             all_pred_score.append(pred_score.detach().cpu())
 
-    hook_handle.remove()
+    if hook_handle is not None:
+        hook_handle.remove()
 
     if not all_true:
         empty_metrics = compute_binary_metrics(
@@ -357,8 +359,12 @@ def main(
     )
     set_pos_label_from_train_labels(train_labels)
 
-    print("Initializing GraphGym GNN model (same stack as main_graphgym.py)...")
-    model = create_graphgym_model(cfg, dim_in=dim_in, device=DEVICE)
+    # Expose resolved names so ExpressionClassifierNetwork.__init__ can locate
+    # categorical columns by name under any active-feature subset.
+    cfg.expression_graph.active_feature_names = resolved_active_features or []
+    from gnn.supervised_learning.loader_graphgym import ExpressionClassifierNetwork
+    print("Initializing ExpressionClassifierNetwork...")
+    model = ExpressionClassifierNetwork(dim_in=dim_in, dim_out=1).to(DEVICE)
     optimizer = create_optimizer(model.parameters(), cfg.optim)
     scheduler = create_scheduler(optimizer, cfg.optim)
 
@@ -386,7 +392,7 @@ def main(
                 "test_size": TEST_SIZE,
                 "device": DEVICE,
                 "num_threads": NUM_CORES,
-                "model": "GraphGym GNN",
+                "model": "ExpressionClassifierNetwork",
                 "input_dim": dim_in,
                 "edge_dim": int(cfg.dataset.edge_dim),
                 "layer_type": cfg.gnn.layer_type,

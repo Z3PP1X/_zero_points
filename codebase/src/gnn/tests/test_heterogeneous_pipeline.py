@@ -2,10 +2,7 @@ import pytest
 import torch
 import math
 from torch_geometric.data import HeteroData
-from graph_utils import (
-    ExpressionGraphConverter,
-    populate_task_virtual_values,
-)
+from graph_utils import ExpressionGraphConverter
 
 GRAPHML_F = """<?xml version='1.0' encoding='UTF-8'?>
 <graphml>
@@ -103,37 +100,6 @@ def test_heterogeneous_local_index_boundaries():
             assert torch.all(edge_index[1] >= 0)
             assert torch.all(edge_index[1] < num_dst)
 
-
-def test_heterogeneous_state_injection():
-    raw_container = {
-        "id": "P-hetero-test",
-        "x0": 0.0,
-        "yRange": [-10.0, 8.0],
-        "graphml_f": GRAPHML_F,
-        "graphml_derivative1": GRAPHML_D1,
-        "graphml_derivative2": GRAPHML_D2
-    }
-
-    converter = ExpressionGraphConverter()
-    data = converter.convert(raw_container, heterogeneous=True, mode="graph")
-
-    # Keep copies to verify populate_task_virtual_values is a no-op
-    op_x_orig = data["operator"].x.clone()
-    root_x_orig = data["root"].x.clone()
-
-    populate_task_virtual_values(
-        data,
-        cx_val=2.5,
-        fx_val=4.7,
-        yt_val=1.2,
-        d1x_val=0.5,
-        d2x_val=9.9,
-        mode="graph",
-    )
-
-    # Task-value embedding has been removed from the schema; call is a no-op.
-    assert torch.allclose(data["operator"].x, op_x_orig)
-    assert torch.allclose(data["root"].x, root_x_orig)
 
 
 def test_regression_homogeneous_mode():

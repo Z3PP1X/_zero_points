@@ -8,11 +8,10 @@ from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA, NODE_FEATURE_SCHEM
 
 current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# Derived from the shared node schema (21 columns: removed lpe/rwpe, added the 5 anchor
-# positional-encoding columns) so it stays in sync with feature changes automatically.
+# Derived from the shared node schema so it stays in sync with feature changes automatically.
 NATIVE_NODE_FEATURE_COUNT = len(NODE_FEATURE_SCHEMA)
-# Must equal the shared edge schema width: the policy backbone coalesces edge_attr to this
-# count before the edge encoder (which expects len(EDGE_FEATURE_SCHEMA) columns).
+# Raw edge-feature count from the shared schema — the backbone coalesces edge_attr to this
+# width before passing it into the TwoWayFeatureEncoder.
 NATIVE_EDGE_FEATURE_COUNT = len(EDGE_FEATURE_SCHEMA)
 # 8 global state scalars (solver removed — it is the network's action, not a feature).
 NATIVE_GLOBAL_FEATURE_COUNT = 8
@@ -20,6 +19,9 @@ PADDED_NODE_FEATURE_COUNT = NATIVE_NODE_FEATURE_COUNT
 PADDED_EDGE_FEATURE_COUNT = NATIVE_EDGE_FEATURE_COUNT
 PADDED_GLOBAL_FEATURE_COUNT = NATIVE_GLOBAL_FEATURE_COUNT
 
+# These are ENCODER OUTPUT dimensions (not raw schema widths).
+# The TwoWayFeatureEncoder maps NATIVE_*_FEATURE_COUNT raw columns → *_INPUT_DIM output,
+# which is what the GATv2/GINE conv layers receive as their *_dim argument.
 NODE_INPUT_DIM_CHOICES = (4, 5)
 EDGE_INPUT_DIM_CHOICES = (4, 8)
 GLOBAL_INPUT_DIM_CHOICES = (6, 8)

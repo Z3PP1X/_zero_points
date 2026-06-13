@@ -27,14 +27,8 @@ from gnn.shared.utils.feature_config import (
 )
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
 
-# Column indices into the FULL node schema. Used as defaults when no active-feature
-# subset is configured; NODE_TYPE_COL is also imported by tests.
+# Column index of node_type in the FULL node schema; imported by tests.
 NODE_TYPE_COL = NODE_FEATURE_SCHEMA.index("node_type")
-LABEL_ID_COL = NODE_FEATURE_SCHEMA.index("label_id")
-BELONGS_TO_F_COL = NODE_FEATURE_SCHEMA.index("belongs_to_f")
-BELONGS_TO_D1_COL = NODE_FEATURE_SCHEMA.index("belongs_to_d1")
-BELONGS_TO_D2_COL = NODE_FEATURE_SCHEMA.index("belongs_to_d2")
-EDGE_RELATION_TYPE_COL = EDGE_FEATURE_SCHEMA.index("relation_type")
 
 
 def resolve_node_feature_names(active_feature_names) -> list[str]:
@@ -829,41 +823,12 @@ class GraphPolicyBackbone(UniformPoolMixin, nn.Module):
         is_d2_root = (node_types == 10)
         is_virtual = is_f_root | is_d1_root | is_d2_root
         is_real = ~is_virtual
-        is_func_op = (node_types == 1) | (node_types == 4)
-
-        def belongs_mask(name: str, default_true: bool) -> torch.Tensor:
-            # Resolve the column by NAME so it survives active-feature subset/reorder.
-            col = self._node_col.get(name)
-            if col is not None and x.size(1) > col:
-                return x[:, col] > 0.5
-            fill = torch.ones if default_true else torch.zeros
-            return fill(x.size(0), dtype=torch.bool, device=x.device)
-
-        belongs_to_f = belongs_mask("belongs_to_f", default_true=True)
-        belongs_to_d1 = belongs_mask("belongs_to_d1", default_true=False)
-        belongs_to_d2 = belongs_mask("belongs_to_d2", default_true=False)
 
         edge_emb, _ = self.edge_encoder(
             coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
         )
 
         num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
-
-        aggregator_specs = (
-            (is_f_root, belongs_to_f),
-            (is_d1_root, belongs_to_d1),
-            (is_d2_root, belongs_to_d2),
-        )
-        for is_agg, belongs_mask in aggregator_specs:
-            if is_func_op.any() and is_agg.any():
-                is_func_op_subtree = is_func_op & belongs_mask
-                if is_func_op_subtree.any():
-                    fo_mean = global_mean_pool(
-                        x_enc[is_func_op_subtree],
-                        batch_index[is_func_op_subtree],
-                        size=num_graphs,
-                    )
-                    x_enc[is_agg] = x_enc[is_agg] + fo_mean[batch_index[is_agg]]
 
         real_edge_index, real_edge_emb, _ = filter_real_subgraph(edge_index, edge_emb, is_real)
 

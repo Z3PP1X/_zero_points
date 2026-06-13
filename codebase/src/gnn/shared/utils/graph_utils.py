@@ -341,9 +341,6 @@ EDGE_FEATURE_SCHEMA = [
     "child_index",
     "direction",
     "relation_type",
-    # kappa (h-function) edge weight: the parsed kappa value on GlobalToKappa/KappaToGlobal
-    # edges, 0.0 on all other edges. Continuous column (not in EDGE_CATEGORICAL_REGISTRY).
-    "kappa_weight",
 ]
 
 EDGE_DIRECTIONS: tuple[str, ...] = ("top_down", "bottom_up", "bidirectional")
@@ -411,7 +408,6 @@ def inject_virtual_supernode(
             "child_index": 0.0,
             "direction": direction,
             "relation_type": relation_type,
-            "kappa_weight": 0.0,
             "etype": etype,
         }
 
@@ -1013,18 +1009,16 @@ class ExpressionGraphConverter:
                 if key not in G_enriched.nodes[nid]:
                     G_enriched.nodes[nid][key] = None
 
-        # Ensure all edges have exactly the same set of attribute keys. Seed with the
-        # full edge schema so columns that only appear on some edges (e.g. kappa_weight,
-        # which is set on kappa edges only) are still present — and default to 0.0 — on
-        # graphs that lack those edges. Otherwise from_networkx(group_edge_attrs=...)
-        # raises a KeyError on the missing column.
+        # Ensure all edges have exactly the same set of attribute keys so
+        # from_networkx(group_edge_attrs=EDGE_FEATURE_SCHEMA) doesn't raise KeyError on
+        # edges that are missing a schema column.
         all_edge_keys = set(EDGE_FEATURE_SCHEMA)
         for u, v in G_enriched.edges:
             all_edge_keys.update(G_enriched.edges[u, v].keys())
         for u, v in G_enriched.edges:
             for key in all_edge_keys:
                 if key not in G_enriched.edges[u, v]:
-                    if key in ("child_index", "direction", "relation_type", "kappa_weight", "edge_type"):
+                    if key in ("child_index", "direction", "relation_type", "edge_type"):
                         G_enriched.edges[u, v][key] = 0.0
                     else:
                         G_enriched.edges[u, v][key] = None
@@ -1165,43 +1159,6 @@ class GraphConversionPipeline:
     def get_edge_feature_schema(self) -> list[str]:
         return list(EDGE_FEATURE_SCHEMA)
 
-
-def populate_task_virtual_values(
-    data,
-    *,
-    cx_val: float,
-    fx_val: float,
-    yt_val: float,
-    d1x_val: float = 0.0,
-    d2x_val: float = 0.0,
-    mode: str = "graph",
-    set_has_value: bool = False,
-    node_id_indices: dict[str, int] | None = None,
-) -> None:
-    """Write current iterate / function values onto task virtual and aggregator nodes.
-    
-    Arguments:
-        data: The PyG Data or HeteroData object to populate values on.
-        cx_val: The current value of x.
-        fx_val: The value of function f(x).
-        yt_val: The target y value.
-        d1x_val: The value of first derivative f'(x).
-        d2x_val: The value of second derivative f''(x).
-        mode: The graph conversion mode (graph, tree, or tree_derivatives).
-        set_has_value: Whether to set has_value flag to 1.0.
-        node_id_indices: Optional precomputed node ID to index mapping.
-        
-    Returns:
-        None
-        
-    Exceptions:
-        None
-    """
-    # Task-value slots (virtual_current_x_val, virtual_delta_target_val, …) were removed
-    # from NODE_FEATURE_SCHEMA in the position-aware GNN rewrite. The RL workflow will be
-    # redesigned to convey solver state via a separate mechanism. This function is kept as
-    # a graceful no-op so call sites don't need to be updated immediately.
-    pass
 
 
 def slice_active_features(x: torch.Tensor, active_features: list[str] | None) -> torch.Tensor:
