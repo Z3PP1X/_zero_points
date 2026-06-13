@@ -109,7 +109,8 @@ def test_supernode_heterogeneous(sample_raw):
         edge_direction="top_down",
         add_virtual_supernode=True,
     )
-    assert SUPERNODE_NODE_ID in data["virtual"].node_ids
+    # Supernode maps to "global" type in the heterogeneous graph
+    assert SUPERNODE_NODE_ID in data["global"].node_ids
     metapaths = [rel for (_, rel, _) in data.edge_types]
     assert "supernode_connection" in metapaths
     assert "supernode_connection_reverse" in metapaths

@@ -8,7 +8,6 @@ from graph_utils import (
     ExpressionGraphConverter,
     TopologicalFeatureExtractor,
     NODE_FEATURE_SCHEMA,
-    CANONICAL_LABEL_VOCAB,
 )
 from feature_layout import NATIVE_NODE_FEATURE_COUNT
 
@@ -95,29 +94,27 @@ def test_enriched_graph_features(tmp_path):
     child1_idx = 1
     child2_idx = 2
 
+    st_size = NODE_FEATURE_SCHEMA.index("subtree_size")
+    st_depth = NODE_FEATURE_SCHEMA.index("subtree_depth")
+    hist_add = NODE_FEATURE_SCHEMA.index("hist_additive")
+    hist_var = NODE_FEATURE_SCHEMA.index("hist_variables")
+    hist_const = NODE_FEATURE_SCHEMA.index("hist_constants")
+
     root_features = data.x[root_idx].tolist()
-    assert root_features[0] == 1.0
-    assert root_features[1] == float(CANONICAL_LABEL_VOCAB["Plus"])
-    assert root_features[2] == 0.0
-    assert root_features[3] == 1.0
-    assert root_features[4] == 3.0
-    assert root_features[5] == 2.0
-    assert root_features[6] > 0.0
-    assert root_features[7] == 0.0
-    assert root_features[8] == 0.0
+    assert root_features[0] == 1.0           # node_type=1 (operator; no global → Plus not marked root)
+    assert root_features[1] == 0.0           # root_color=0 (none)
+    assert root_features[st_size] == 3.0     # subtree_size: Plus + x + 2
+    assert root_features[st_depth] == 1.0    # subtree_depth=1 (height)
+    assert root_features[hist_add] == 1.0    # hist_additive: Plus
+    assert root_features[hist_var] == 1.0    # hist_variables: x
+    assert root_features[hist_const] == 1.0  # hist_constants: 2
 
     child2_features = data.x[child2_idx].tolist()
-    assert child2_features[0] == 2.0
-    assert child2_features[1] == float(CANONICAL_LABEL_VOCAB["<CONSTANT>"])
-    assert child2_features[2] == 1.0
-    assert child2_features[3] == 0.0
-    assert child2_features[4] == 1.0
-    assert child2_features[5] == 0.0
-    assert child2_features[6] == 0.0
-    # value is now emitted RAW (signed_log normalization removed; the model's
-    # learnable linear embedding handles scaling).
-    assert child2_features[7] == pytest.approx(2.0)
-    assert child2_features[8] == 1.0
+    assert child2_features[0] == 1.0         # node_type=1 (all non-global/non-root → operator)
+    assert child2_features[1] == 0.0         # root_color=0
+    assert child2_features[st_size] == 1.0   # subtree_size=1 (leaf)
+    assert child2_features[st_depth] == 0.0  # subtree_depth=0
+    assert child2_features[hist_const] == 1.0  # hist_constants: constant leaf
 
     # Anchor positional encoding (the 5 anchor_* columns): proximity 1/(1+hops) to the
     # nearest operator anchor of each semantic group, within the node's own function.

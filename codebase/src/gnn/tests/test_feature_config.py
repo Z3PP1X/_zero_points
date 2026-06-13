@@ -40,7 +40,7 @@ def test_node_category_subset_list():
     selection = parse_feature_selection_from_mapping(
         {
             "features": {
-                "node": ["node_type", "value"],
+                "node": ["node_type", "root_color"],
                 "topology": False,
                 "positional": False,
                 "edge": True,
@@ -49,7 +49,7 @@ def test_node_category_subset_list():
     )
     active = resolve_active_node_features(selection)
     # Only the two listed node features survive; topology/positional dropped.
-    assert active == ["node_type", "value"]
+    assert active == ["node_type", "root_color"]
 
 
 def test_topology_subset_and_positional_true():
@@ -57,7 +57,7 @@ def test_topology_subset_and_positional_true():
         {
             "features": {
                 "node": False,
-                "topology": ["depth", "height"],
+                "topology": ["subtree_size", "subtree_depth"],
                 "positional": True,
                 "edge": True,
             }
@@ -65,8 +65,8 @@ def test_topology_subset_and_positional_true():
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert "depth" in active and "height" in active
-    assert "subtree_size" not in active  # not selected
+    assert "subtree_size" in active and "subtree_depth" in active
+    assert "hist_additive" not in active  # not selected
     assert "node_type" not in active  # node disabled
     # positional: true -> all anchor groups
     assert "anchor_additive" in active and "anchor_transcendental" in active
@@ -151,10 +151,10 @@ def test_explicit_active_features_override_groups():
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping({}),
         feature_groups=["node"],
-        active_features=["node_type", "label_id"],
+        active_features=["node_type", "root_color"],
     )
     active = resolve_active_node_features(selection)
-    assert active == ["node_type", "label_id"]
+    assert active == ["node_type", "root_color"]
 
 
 def test_unknown_feature_group_raises():
