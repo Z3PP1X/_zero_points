@@ -48,6 +48,12 @@ def parse_args():
         default=None,
         help="Path to save the output CSV",
     )
+    parser.add_argument(
+        "--add-kappa",
+        action="store_true",
+        help="Merge kappa (h-function) subgraphs from datasets/kappas/ "
+        "(overrides expression_graph.add_kappa in the config).",
+    )
     return parser.parse_args()
 
 
@@ -62,7 +68,12 @@ def main():
         opts = []
     
     load_cfg(cfg, GymArgs())
-    
+
+    # Opt-in CLI override: --add-kappa can only turn augmentation ON (the YAML
+    # default stays off), mirroring the store_true semantics in the RL workflow.
+    if args.add_kappa:
+        cfg.expression_graph.add_kappa = True
+
     # Force CPU accelerator
     cfg.accelerator = "cpu"
     device = torch.device("cpu")
@@ -74,11 +85,13 @@ def main():
     
     # 2. Load curated dataset (always run_20260603_123013/parallel_benchmark_results)
     edge_direction = getattr(cfg.expression_graph, "edge_direction", "top_down")
+    add_kappa = getattr(cfg.expression_graph, "add_kappa", False)
     loader = GraphDataLoader(
         name="run_20260603_123013/parallel_benchmark_results",
         mode=cfg.expression_graph.mode,
         heterogeneous=False,
         edge_direction=edge_direction,
+        add_kappa=add_kappa,
     )
     pipeline = GraphPipeline(
         dataset_name="run_20260603_123013/parallel_benchmark_results",
@@ -86,6 +99,7 @@ def main():
         mode=cfg.expression_graph.mode,
         graph_loader=loader,
         synthetic=False,
+        add_kappa=add_kappa,
     )
     pipeline.pipe(test_size=0.2, batch_size=cfg.train.batch_size, stratify=False)
     df = pipeline.loader.data
