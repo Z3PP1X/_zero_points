@@ -6,7 +6,7 @@ warnings.filterwarnings("ignore", message=".*InMemoryDataset.*")
 from pathlib import Path
 import torch
 from torch_geometric.graphgym.cmd_args import parse_args
-from torch_geometric.graphgym.config import cfg, set_cfg, load_cfg, set_run_dir
+from torch_geometric.graphgym.config import cfg, set_cfg, load_cfg, set_run_dir, dump_cfg
 from torch_geometric.graphgym.model_builder import create_model
 from torch_geometric.graphgym.train import GraphGymDataModule
 from torch_geometric.graphgym.checkpoint import get_ckpt_dir
@@ -502,9 +502,22 @@ def main():
 
     set_run_dir(cfg.out_dir)
 
+    # Reproducibility: seed weight init, dropout masks, and loader shuffling — not just
+    # the data split (which loader_graphgym.py already seeds). Without this the GraphGym
+    # grid path is non-deterministic and identical configs diverge. workers=True also
+    # seeds DataLoader worker processes. (deterministic=True on the Trainer is left off:
+    # several PyG scatter kernels lack deterministic GPU implementations and would raise.)
+    pl.seed_everything(cfg.seed, workers=True)
+
+    # Snapshot the fully-resolved config next to this run's outputs so the experiment is
+    # recoverable from its own folder, independent of the transient shared configs/ dir
+    # (which configs_gen.py overwrites on the next run). Writes <out_dir>/config.yaml.
+    dump_cfg(cfg)
+
     print("\n[GraphGym Command Center] Launching training run...")
     print(f"[GraphGym] Architecture layer_type={layer_type} (from config YAML)")
     print(f"[GraphGym] Edge dim={cfg.dataset.edge_dim}")
+    print(f"[GraphGym] Random seed: {cfg.seed} (seeded weight init / shuffling / split)")
     print(f"[GraphGym] Best-model selection: monitor=val_pr_auc, mode=max")
     print(f"[GraphGym] Final test (curated real data) will use the BEST saved checkpoint.\n")
     datamodule = GraphGymDataModule()

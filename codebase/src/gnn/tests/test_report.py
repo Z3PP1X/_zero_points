@@ -84,6 +84,54 @@ def test_generate_report_with_prediction_dumps(tmp_path):
     assert summary["significance"]["best_ci"]["lo"] > 0.5
 
 
+def test_report_provenance_from_manifest(tmp_path):
+    """run_manifest.json provenance surfaces in summary.md and summary.json."""
+    exp = _make_experiment(tmp_path)
+    manifest = {
+        "experiment": "exp",
+        "seed": 42001,
+        "git": {"commit": "abcdef1234567890", "dirty": True},
+        "versions": {"python": "3.12.0", "torch": "2.4.0"},
+        "base_config": {
+            "dataset": {"name": "run_X/parallel_benchmark_results"},
+            "expression_graph": {
+                "mode": "graph",
+                "edge_direction": "top_down",
+                "add_kappa": False,
+                "synthetic_dataset": "run_Y/parallel_benchmark_results",
+            },
+            "train": {"epochs": 25, "batch_size": 2048},
+        },
+        "grid": {"gnn.layer_type": ["gatv2conv"]},
+    }
+    (exp / "run_manifest.json").write_text(json.dumps(manifest))
+
+    generate_report(exp, top_k=5)
+    summary = json.loads((exp / "eval_plots" / "summary.json").read_text())
+    prov = summary["provenance"]
+    assert prov["seed"] == 42001
+    assert prov["git_commit"] == "abcdef1234567890"
+    assert prov["git_dirty"] is True
+    assert prov["dataset"] == "run_X/parallel_benchmark_results"
+    assert prov["epochs"] == 25
+
+    text = (exp / "eval_plots" / "summary.md").read_text()
+    assert "Reproducibility provenance" in text
+    assert "42001" in text
+    assert "abcdef1234" in text  # commit truncated to 10 chars
+    assert "(dirty)" in text
+    assert "run_manifest.json" in text
+
+
+def test_report_provenance_without_manifest_is_graceful(tmp_path):
+    """Older experiments without a manifest still produce a report with a note."""
+    exp = _make_experiment(tmp_path)
+    generate_report(exp, top_k=5)
+    summary = json.loads((exp / "eval_plots" / "summary.json").read_text())
+    assert summary["provenance"] == {}
+    assert "No run_manifest.json" in (exp / "eval_plots" / "summary.md").read_text()
+
+
 def test_generate_report_missing_agg_is_graceful(tmp_path):
     exp = tmp_path / "empty"
     (exp / "agg").mkdir(parents=True)

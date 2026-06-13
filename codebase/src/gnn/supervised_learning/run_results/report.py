@@ -293,6 +293,70 @@ def _significance_section(eval_dir: Path) -> tuple[str, dict]:
     return "\n".join(lines), record
 
 
+def _provenance_section(results_dir: Path) -> tuple[str, dict]:
+    """Pull reproducibility provenance from run_manifest.json (written by run_all.py).
+
+    Surfaces in the eval artifact the context the leaderboard alone hides: seed, git
+    commit, dataset/feature schema, and key fixed training knobs. Without the manifest
+    (older experiments) the section degrades to a note rather than failing.
+    """
+    manifest_path = results_dir / "run_manifest.json"
+    if not manifest_path.exists():
+        return (
+            "_No run_manifest.json — experiment predates manifest emission or was not "
+            "launched via run_all.py; full config/seed/git provenance unavailable._",
+            {},
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "_run_manifest.json present but unreadable._", {}
+
+    base = manifest.get("base_config", {}) or {}
+    expr = base.get("expression_graph", {}) or {}
+    dataset = base.get("dataset", {}) or {}
+    train = base.get("train", {}) or {}
+    git = manifest.get("git", {}) or {}
+
+    record = {
+        "manifest": "../run_manifest.json",
+        "seed": manifest.get("seed"),
+        "git_commit": git.get("commit"),
+        "git_dirty": git.get("dirty"),
+        "dataset": dataset.get("name"),
+        "synthetic_dataset": expr.get("synthetic_dataset"),
+        "mode": expr.get("mode"),
+        "edge_direction": expr.get("edge_direction"),
+        "add_kappa": expr.get("add_kappa"),
+        "add_virtual_supernode": expr.get("add_virtual_supernode"),
+        "features": expr.get("features"),
+        "active_features": expr.get("active_features"),
+        "epochs": train.get("epochs"),
+        "batch_size": train.get("batch_size"),
+        "versions": manifest.get("versions"),
+    }
+
+    commit = git.get("commit")
+    commit_str = (commit[:10] if isinstance(commit, str) else "—") + (
+        " (dirty)" if git.get("dirty") else ""
+    )
+    rows = [
+        ["Seed", _fmt(record["seed"])],
+        ["Git commit", commit_str],
+        ["Dataset", _fmt(record["dataset"])],
+        ["Synthetic dataset", _fmt(record["synthetic_dataset"])],
+        ["Graph mode", _fmt(record["mode"])],
+        ["Edge direction", _fmt(record["edge_direction"])],
+        ["add_kappa", _fmt(record["add_kappa"])],
+        ["add_virtual_supernode", _fmt(record["add_virtual_supernode"])],
+        ["Epochs", _fmt(record["epochs"])],
+        ["Batch size", _fmt(record["batch_size"])],
+    ]
+    md = _md_table(["Field", "Value"], rows)
+    md += "\n\nFull resolved config, grid, and package versions: [`run_manifest.json`](../run_manifest.json)."
+    return md, record
+
+
 def _plots_section(eval_dir: Path) -> tuple[str, dict]:
     rows, record = [], {}
     for label, fname in LINKED_PLOTS.items():
@@ -356,8 +420,10 @@ def generate_report(
     calib_md, calib_json = _calibration_section(agg_dir)
     baseline_md, baseline_json = _baseline_section(agg_dir, best_row)
     sig_md, sig_json = _significance_section(eval_dir)
+    provenance_md, provenance_json = _provenance_section(results_dir)
     plots_md, plots_json = _plots_section(eval_dir)
 
+    summary["provenance"] = provenance_json
     summary["leaderboard"] = leaderboard_json
     summary["generalization_gap"] = gap_json
     summary["calibration"] = calib_json
@@ -368,6 +434,10 @@ def generate_report(
     md = f"""# Experiment summary — {experiment}
 
 {best_block}
+
+## Reproducibility provenance
+
+{provenance_md}
 
 ## Top configurations (Val Synthetic PR-AUC)
 

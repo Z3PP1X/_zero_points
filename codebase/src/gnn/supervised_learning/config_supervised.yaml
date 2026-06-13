@@ -4,6 +4,12 @@
 # Output directory for checkpoints, stats, and tensorboard logs
 out_dir: results
 
+# Global RNG seed. Drives the train/val/test split AND (via pl.seed_everything in
+# main_graphgym.py) weight init, dropout masks, and loader shuffling, so two runs of
+# the same config reproduce. Propagated into every generated grid config and snapshotted
+# per run as config.yaml. Keep explicit — GraphGym's unset default is 0, not 42001.
+seed: 42001
+
 # --- Dataset Section ---
 # Demontrates Dependency Injection (DI) by passing properties that are read in loader_graphgym.py
 dataset:
