@@ -1,0 +1,23 @@
+# grid.yaml — STUFE 3 (Graphen + Supernode + Kappa + erweiterte/Anchor-Features)
+# 2 x 2 x 2 x 2 x 2 = 32 Grid-Punkte; nach Filterung der ungültigen
+# (supernode=true & positional=true)-Kombinationen bleiben 24 Konfigurationen.
+
+gnn.dim_inner:
+  - 128
+  - 256
+
+gnn.layers_mp:
+  - 2
+  - 3
+
+expression_graph.add_virtual_supernode:    # NEU: Virtual Node an/aus
+  - false
+  - true
+
+expression_graph.add_kappa:                 # NEU: Kappa (h-function) Augmentierung an/aus
+  - false
+  - true
+
+expression_graph.features.positional:       # NEU: Anchor-basierte Positional-Features an/aus
+  - false
+  - true

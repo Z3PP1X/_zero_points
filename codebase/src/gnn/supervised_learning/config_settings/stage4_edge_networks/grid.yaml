@@ -1,0 +1,12 @@
+# grid.yaml — STUFE 4 (Edge-Networks)
+# 2 x 2 = 4 Konfigurationen.
+# Nur wirksame Achsen: layer_type (die neue Edge-Network-Wahl) und dim_inner.
+# layers_mp/dropout sind im homogenen TestGraphNetwork inert -> nicht gesweept.
+
+gnn.layer_type:        # NEU: edge-aware Backbones (nur diese beiden erlaubt)
+  - gatv2conv
+  - gineconv
+
+gnn.dim_inner:
+  - 128
+  - 256

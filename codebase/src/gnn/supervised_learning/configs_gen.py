@@ -53,6 +53,33 @@ def validate_grid_keys(base_config: dict, grid_config: dict) -> None:
     raise ValueError("\n".join(lines))
 
 
+def _is_valid_config(config: dict) -> bool:
+    """Reject semantically invalid combinations a grid can emit before they cost a run.
+
+    The anchor positional encoding and the fully-connected virtual supernode are mutually
+    exclusive: the supernode collapses every pairwise distance to <=2 hops, destroying the
+    shortest-path anchor distances, so the trainer raises ``PositionalSupernodeConflictError``
+    (``validate_positional_supernode_compatibility`` in ``feature_config.py``). A stage grid
+    that sweeps ``add_virtual_supernode`` and ``features.positional`` independently would
+    otherwise generate configs that crash at load time. Mirror that rule here.
+    """
+    eg = config.get("expression_graph", {}) or {}
+    supernode = bool(eg.get("add_virtual_supernode", False))
+    features = eg.get("features", {}) if isinstance(eg.get("features"), dict) else {}
+    # Mirror the runtime resolver (feature_config._resolve_category_value): a missing key
+    # OR an explicit ``None`` both mean "all anchor members enabled" (positional ON). Only
+    # ``False`` / an empty list mean OFF. Getting this wrong would let a supernode + None
+    # config slip past the filter and then crash at load with PositionalSupernodeConflictError.
+    positional = features.get("positional", None)
+    if positional is None:
+        positional_on = True
+    elif isinstance(positional, list):
+        positional_on = len(positional) > 0
+    else:
+        positional_on = bool(positional)
+    return not (supernode and positional_on)
+
+
 def _canonical_signature(config: dict, swept_keys: list[str]) -> tuple:
     """Signature of a config over the swept axes, nullifying inert combinations.
 
@@ -122,23 +149,31 @@ def generate_configs(
         except OSError:
             pass
 
+    # Run folders nest directly under the results root. When run_all passes a
+    # results_base_dir it IS the experiment dir that aggregation later scans, so the run
+    # folders must be its children — do NOT strip it. (A previous startswith("run_"/"grid-")
+    # strip orphaned run folders as siblings whenever the experiment used the default
+    # ``run_<ts>`` name, leaving aggregation with nothing to read.)
     results_root = (
         Path(results_base_dir)
         if results_base_dir is not None
         else Path(base_config.get("out_dir", "results"))
     )
-    if results_root.name.startswith(("grid-", "run_")):
-        results_root = results_root.parent
 
     timestamp = run_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
     created = []
     seen_signatures: set[tuple] = set()
+    invalid_skipped = 0
     index = 0
     for combination in combinations:
         config = copy.deepcopy(base_config)
         for key, val in zip(keys, combination):
             set_nested_value(config, key, val)
+
+        if not _is_valid_config(config):
+            invalid_skipped += 1
+            continue  # would crash at load time (e.g. supernode + positional)
 
         signature = _canonical_signature(config, keys)
         if signature in seen_signatures:
@@ -154,11 +189,17 @@ def generate_configs(
         created.append(dest_path)
         index += 1
 
-    skipped = len(combinations) - len(created)
-    if skipped:
+    if invalid_skipped:
         print(
-            f"  Deduplicated {skipped} inert pooling combination(s) "
-            f"({len(combinations)} grid points -> {len(created)} distinct configs)."
+            f"  Skipped {invalid_skipped} invalid supernode+positional combination(s) "
+            f"(mutually exclusive)."
+        )
+    dedup_skipped = len(combinations) - invalid_skipped - len(created)
+    if dedup_skipped:
+        valid_points = len(combinations) - invalid_skipped
+        print(
+            f"  Deduplicated {dedup_skipped} inert pooling combination(s) "
+            f"({valid_points} valid grid points -> {len(created)} distinct configs)."
         )
 
     return created
