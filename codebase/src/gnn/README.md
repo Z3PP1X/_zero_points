@@ -135,6 +135,41 @@ python main.py --experiment kein_inv --n_trials 50 --timesteps 16384 --continue-
 
 ---
 
+## 🗂️ Graphrepräsentation (NODE_FEATURE_SCHEMA — 16 Features)
+
+Seit der Position-Aware-GNN-Rewrite (Änderung 18) verwendet die Pipeline ein einheitliches
+16-dimensionales Knotenfeature-Schema für alle Knotentypen:
+
+| Index | Name | Beschreibung |
+|---|---|---|
+| 0 | `node_type` | 0=global, 1=operator, 2=root, 5=supernode |
+| 1 | `root_color` | 0=kein, 1=f, 2=f'(d1), 3=f''(d2), 4=kappa |
+| 2 | `subtree_size` | Anzahl Knoten im Teilbaum (einschl. sich selbst) |
+| 3 | `subtree_depth` | Höhe des Teilbaums (max. Tiefe bis Blatt) |
+| 4 | `hist_additive` | Häufigkeit additiver Operatoren (Plus) im Teilbaum |
+| 5 | `hist_multiplicative` | Häufigkeit multiplikativer Ops (Times, Power, Sqrt) |
+| 6 | `hist_trigonometric` | Häufigkeit trigonometrischer Ops |
+| 7 | `hist_exponential` | Häufigkeit von Exp/Log |
+| 8 | `hist_transcendental` | Häufigkeit transzendentaler/sonstiger Ops |
+| 9 | `hist_variables` | Anzahl Variablenknoten im Teilbaum |
+| 10 | `hist_constants` | Anzahl Konstantenknoten im Teilbaum |
+| 11 | `anchor_additive` | Anker-PE: Nähe zum nächsten additiven Anker |
+| 12 | `anchor_scaling` | Anker-PE: Nähe zum nächsten skalierenden Anker |
+| 13 | `anchor_periodic` | Anker-PE: Nähe zum nächsten periodischen Anker |
+| 14 | `anchor_exponential` | Anker-PE: Nähe zum nächsten exp. Anker |
+| 15 | `anchor_transcendental` | Anker-PE: Nähe zum nächsten transz. Anker |
+
+Die Wurzelknoten der einzelnen Funktionsbäume (f, f', f'', kappa) erhalten `node_type=2`
+(root) und `root_color` ≥ 1 — so kann das GNN durch ein lernbares `nn.Embedding(5, 4)`
+unterschiedliche Anfangsrepräsentationen pro Funktion lernen. Alle anderen Ausdrucksknoten
+(Operatoren, Variablen, Konstanten) erhalten `node_type=1` (operator). Virtuelle
+Aggregatorknoten (`f_root`, `d1_root`, `d2_root`) wurden entfernt; `global` zeigt direkt
+auf den Wurzelknoten jedes Teilbaums.
+
+**Heterogene Graphtypen**: `global` / `operator` / `root`
+
+---
+
 ## 📂 Wichtige Modul-Dateien
 
 * `main.py`: Haupteinstiegspunkt für Phase 1 (Optuna-Tuning).
