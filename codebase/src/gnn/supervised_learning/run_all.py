@@ -250,6 +250,7 @@ def main():
         grid_path,
         configs_dir,
         results_base_dir=results_dir,
+        run_timestamp=timestamp,
     )
     print(f"[Orchestrator] Generated {len(config_files)} configs.")
 

@@ -32,6 +32,11 @@ CONFIG_COLS = (
     "graph_pooling",
     "act",
     "base_lr",
+    "variant",
+    "pool_type",
+    "aux_loss_weight",
+    "mode",
+    "edge_direction",
 )
 def _setup_import_paths():
     script_dir = Path(__file__).resolve().parent
@@ -71,6 +76,13 @@ def _find_best_checkpoint(run_dir: Path) -> Path | None:
 
 
 def _find_config_for_run(run_dir: Path, configs_dir: Path | None) -> Path | None:
+    # Prefer the per-run config.yaml snapshot (written by main_graphgym.dump_cfg). It is
+    # the exact resolved config and removes the dependency on the transient configs/ dir.
+    snapshot = run_dir / "config.yaml"
+    if snapshot.exists():
+        return snapshot
+
+    # Legacy fallback: match a generated config by its out_dir against this run folder.
     if configs_dir is None or not configs_dir.exists():
         return None
     run_name = run_dir.name
@@ -103,6 +115,13 @@ class DiagnosticPlotter:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     def _resolve_run_dir(self, row: pd.Series, config_cols: list) -> Path | None:
+        # Datetime-named runs carry their folder name in the run_name column.
+        if "run_name" in row.index and pd.notna(row["run_name"]):
+            direct = self.results_dir / str(row["run_name"])
+            if direct.exists():
+                return direct
+
+        # Legacy: reconstruct the grid-key=value folder name from the config columns.
         run_name = "grid-" + "-".join(
             f"{col}={row[col]}" for col in config_cols if col in row and pd.notna(row[col])
         )
@@ -302,6 +321,7 @@ class DiagnosticPlotter:
                 for c in ranked.columns
                 if c
                 not in {
+                    "run_name",
                     "epoch",
                     "loss",
                     "accuracy",

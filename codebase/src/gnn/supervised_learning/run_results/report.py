@@ -29,6 +29,11 @@ CONFIG_COLS = (
     "graph_pooling",
     "act",
     "base_lr",
+    "variant",
+    "pool_type",
+    "aux_loss_weight",
+    "mode",
+    "edge_direction",
 )
 METRIC_COLS = {
     "epoch", "loss", "accuracy", "precision", "recall", "f1", "auc", "pr_auc",
@@ -74,6 +79,7 @@ def _read_csv(agg_dir: Path, stem: str) -> pd.DataFrame | None:
 
 def _config_columns(df: pd.DataFrame) -> list[str]:
     skip = set(METRIC_COLS)
+    skip.add("run_name")  # run identity column, not a hyperparameter
     skip.update(c for c in df.columns if c.endswith("_std"))
     known = [c for c in CONFIG_COLS if c in df.columns]
     extra = [c for c in df.columns if c not in skip and c not in known]
