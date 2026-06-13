@@ -45,7 +45,8 @@ def _register_mp_hook(pl_module, hook_fn):
     The Dirichlet-energy callbacks hook ``pl_module.model.mp`` — the message-passing
     stage of PyG's stock ``GNN``. The custom ``expression_classifier`` backbone has no
     ``.mp`` stage (and node embeddings are pooled away under DiffPool), so we skip the
-    hook and report energy 0.0 rather than crash. Returns the handle or ``None``.
+    hook and report energy NaN (not measured) rather than crash. Returns the handle or
+    ``None``.
     """
     mp = getattr(getattr(pl_module, "model", None), "mp", None)
     if mp is None:
@@ -149,7 +150,7 @@ class CuratedEvalCallback(pl.callbacks.Callback):
                 "pr_auc": 0.0,
                 "true": None,
                 "pred": None,
-                "dirichlet_energy": 0.0,
+                "dirichlet_energy": float("nan"),
             }
 
         true = torch.cat(true_parts)
@@ -161,7 +162,8 @@ class CuratedEvalCallback(pl.callbacks.Callback):
         for x, edge_index, edge_attr in mp_embeddings:
             energy = compute_normalized_dirichlet_energy(x, edge_index)
             energies.append(energy)
-        avg_energy = sum(energies) / len(energies) if energies else 0.0
+        # Empty => no .mp stage hooked (custom backbone): not measured, not a real 0.0.
+        avg_energy = sum(energies) / len(energies) if energies else float("nan")
 
         return {
             "loss": loss_sum / count,
@@ -232,7 +234,10 @@ class DirichletLoggerCallback(LoggerCallback):
 
     def _get_dirichlet_energy_for_batch(self):
         if not self._embeddings:
-            return 0.0
+            # No embeddings means the model has no .mp stage (e.g. the custom
+            # expression_classifier backbone): the metric was NOT measured. Report
+            # NaN so it stays distinguishable from a genuinely measured energy of 0.0.
+            return float("nan")
         x, edge_index = self._embeddings.pop(0)
         from gnn.shared.utils.graph_utils import compute_normalized_dirichlet_energy
         return compute_normalized_dirichlet_energy(x, edge_index)
@@ -312,8 +317,9 @@ class ValMetricLogger(pl.callbacks.Callback):
         for x, edge_index, edge_attr in self._embeddings:
             energy = compute_normalized_dirichlet_energy(x, edge_index)
             energies.append(energy)
-        avg_energy = sum(energies) / len(energies) if energies else 0.0
-        
+        # Empty => no .mp stage hooked (custom backbone): not measured, not a real 0.0.
+        avg_energy = sum(energies) / len(energies) if energies else float("nan")
+
         for idx, data in self._val_data.items():
             if data['count'] == 0:
                 continue
