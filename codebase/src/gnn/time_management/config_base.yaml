@@ -14,6 +14,7 @@ dataset:
 expression_graph:
   mode: graph
   edge_direction: top_down
+  add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
   features:

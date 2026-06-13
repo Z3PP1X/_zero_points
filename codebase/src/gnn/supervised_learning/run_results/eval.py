@@ -177,6 +177,7 @@ class GNNResultEvaluator:
                 config_file = self.base_dir.parent / "config_supervised.yaml"
                 dataset_name = "run_20260603_123013/parallel_benchmark_results"
                 synthetic_dataset_name = "run_20260604_154509/parallel_benchmark_results"
+                add_kappa = False
 
                 if config_file.exists():
                     import yaml
@@ -186,6 +187,9 @@ class GNNResultEvaluator:
                     dataset_name = cfg_data.get("dataset", {}).get("name", dataset_name)
                     synthetic_dataset_name = cfg_data.get("expression_graph", {}).get(
                         "synthetic_dataset", synthetic_dataset_name
+                    )
+                    add_kappa = bool(
+                        cfg_data.get("expression_graph", {}).get("add_kappa", False)
                     )
 
                 src_path = str(self.base_dir.parents[2])
@@ -199,7 +203,9 @@ class GNNResultEvaluator:
                     f"  Loading dataset for class balance: "
                     f"{dataset_name} / {synthetic_dataset_name}"
                 )
-                loader = GraphDataLoader(name=dataset_name, mode="graph")
+                loader = GraphDataLoader(
+                    name=dataset_name, mode="graph", add_kappa=add_kappa
+                )
                 pipeline = GraphPipeline(
                     dataset_name=dataset_name,
                     seed=42001,
@@ -207,6 +213,7 @@ class GNNResultEvaluator:
                     graph_loader=loader,
                     synthetic=True,
                     synthetic_dataset_name=synthetic_dataset_name,
+                    add_kappa=add_kappa,
                 )
                 pipeline.pipe(test_size=0.2, batch_size=256, stratify=True)
 

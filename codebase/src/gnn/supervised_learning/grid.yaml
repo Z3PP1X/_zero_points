@@ -9,19 +9,17 @@
 #   pool_type: topk          -> TopKPooling (readout = mean || max)
 #              diffpool      -> DenseSAGE soft clustering (clusters 16,4) + link+entropy aux loss
 #
-# Cartesian product = 6 runs. legacy x topk and legacy x diffpool are behaviourally
-# identical (legacy ignores pool_type) -- keep one as a reproducibility duplicate or
-# prune a config_grid_variant_legacy_pool_type_diffpool_*.yaml after generation.
-# layer_type is held fixed (gatv2conv) for a clean single-axis study; add it back below
-# to cross pooling with layer type.
-gnn.variant:
-  - legacy
-  - pooling
-  - pooling_skip
-
-gnn.pool_type:
-  - topk
-  - diffpool
-
+# NOTE: gnn.variant and gnn.pool_type are deliberately NOT swept here. The grid is a
+# blind Cartesian product (configs_gen.py), and `legacy` ignores pool_type, so sweeping
+# variant x pool_type emits a behaviourally identical `legacy x diffpool` duplicate that
+# wastes a full training run. Instead, pick one arm per run by setting gnn.variant /
+# gnn.pool_type directly in config_supervised.yaml, e.g.:
+#   - legacy            (pool_type ignored)
+#   - pooling      + topk | diffpool
+#   - pooling_skip + topk | diffpool
+# -> 5 distinct arms, zero duplicates.
+#
+# layer_type is the only swept axis (edge-aware stacks only for expression_classifier).
+# Add gineconv below to cross the chosen pooling arm with layer type.
 gnn.layer_type:
   - gatv2conv
