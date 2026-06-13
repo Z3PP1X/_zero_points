@@ -23,6 +23,7 @@ expression_graph:
   mode: graph
   edge_direction: top_down  # top_down | bottom_up | bidirectional
   add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
+  add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
 

@@ -43,6 +43,9 @@ def read_rl_settings(config: dict[str, Any]) -> dict[str, Any]:
             experiment.get("edge_direction", "top_down")
         ),
         "add_kappa": bool(experiment.get("add_kappa", False)),
+        "add_virtual_supernode": bool(
+            experiment.get("add_virtual_supernode", False)
+        ),
         "active_features": active_features,
         "feature_selection": feature_selection,
         "timesteps": int(optuna.get("timesteps", 10000)),
@@ -125,5 +128,13 @@ def add_shared_graph_args(parser: argparse.ArgumentParser) -> None:
         "--add-kappa",
         action="store_true",
         help="Merge kappa (h-function) subgraphs from datasets/kappas/ into each graph.",
+    )
+    parser.add_argument(
+        "--add-virtual-supernode",
+        action="store_true",
+        help=(
+            "Add a fully-connected virtual supernode (bidirectional edges to every node) "
+            "to shorten message-passing paths across the graph."
+        ),
     )
     add_feature_cli_args(parser)

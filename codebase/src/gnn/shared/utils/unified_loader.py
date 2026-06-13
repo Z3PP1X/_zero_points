@@ -29,6 +29,7 @@ class UnifiedDataLoader:
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
         add_kappa: bool = False,
+        add_virtual_supernode: bool = False,
     ) -> UnifiedDataLoader:
         """
         Retrieves a cached singleton/multiton instance matching the parameter configuration.
@@ -50,6 +51,7 @@ class UnifiedDataLoader:
             is_synthetic,
             edge_direction,
             add_kappa,
+            add_virtual_supernode,
         )
         if key not in cls._instances:
             cls._instances[key] = cls(
@@ -62,6 +64,7 @@ class UnifiedDataLoader:
                 is_synthetic=is_synthetic,
                 edge_direction=edge_direction,
                 add_kappa=add_kappa,
+                add_virtual_supernode=add_virtual_supernode,
             )
         return cls._instances[key]
 
@@ -81,6 +84,7 @@ class UnifiedDataLoader:
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
         add_kappa: bool = False,
+        add_virtual_supernode: bool = False,
     ):
         self.dataset_name = dataset_name
         self.run_key = run_key
@@ -91,6 +95,7 @@ class UnifiedDataLoader:
         self.is_synthetic = is_synthetic
         self.edge_direction = edge_direction
         self.add_kappa = add_kappa
+        self.add_virtual_supernode = add_virtual_supernode
 
         # Unified lookup name for GraphDataLoader
         # For compatibility with GraphDataLoader's parsing, if run_key differs from dataset_name, pass "run_key/dataset_name"
@@ -111,6 +116,7 @@ class UnifiedDataLoader:
             is_synthetic=self.is_synthetic,
             edge_direction=self.edge_direction,
             add_kappa=self.add_kappa,
+            add_virtual_supernode=self.add_virtual_supernode,
         )
 
         # Automatically enrich missing x0/startwert values from graph data

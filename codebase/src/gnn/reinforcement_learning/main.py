@@ -96,6 +96,12 @@ def main() -> None:
     add_kappa = resolve_rl_setting(
         None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
     )
+    add_virtual_supernode = resolve_rl_setting(
+        None,
+        settings["add_virtual_supernode"],
+        is_flag=True,
+        flag_set=args.add_virtual_supernode,
+    )
     timesteps = int(resolve_rl_setting(args.timesteps, settings["timesteps"]))
     n_trials = int(resolve_rl_setting(args.n_trials, settings["n_trials"]))
     n_envs = int(resolve_rl_setting(args.n_envs, settings["n_envs"]))
@@ -144,7 +150,7 @@ def main() -> None:
     print(
         f"Optuna: {n_trials} Trials × {timesteps} Schritte | "
         f"Experiment: {experiment} | Mode: {mode} | Edge direction: {edge_direction} | "
-        f"Add kappa: {add_kappa} | "
+        f"Add kappa: {add_kappa} | Add supernode: {add_virtual_supernode} | "
         f"Parallel-Envs: {n_envs} | Continue Study: {continue_study} | Config: {config_path.name}"
     )
     print(f"Feature groups: {feature_selection.enabled_groups()}")
@@ -158,6 +164,7 @@ def main() -> None:
         mode=mode,
         edge_direction=edge_direction,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
     loader = unified_loader.graph_loader
 

@@ -3,12 +3,13 @@
 # Values here are defaults; command-line flags override them at runtime.
 
 # Dataset / graph experiment
-# CLI: --experiment, --mode, --edge-direction, --add-kappa, --feature-groups, --positional-encoding
+# CLI: --experiment, --mode, --edge-direction, --add-kappa, --add-virtual-supernode, --feature-groups, --positional-encoding
 experiment:
   name: nur_f  # nur_f | f_fp_roh | kein_inv
   mode: graph  # graph | tree | tree_derivatives
   edge_direction: top_down  # top_down | bottom_up | bidirectional (virtual nodes always bidirectional)
   add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
+  add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
 
   # Feature classes: node | topology | positional | edge
   # Each category: true -> all members | false -> none | [a, b] -> only these

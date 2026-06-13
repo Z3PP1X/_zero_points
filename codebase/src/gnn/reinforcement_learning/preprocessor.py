@@ -36,6 +36,7 @@ class Preprocessor:
         mode: str = "graph",
         active_features: list[str] | None = None,
         add_kappa: bool = False,
+        add_virtual_supernode: bool = False,
     ):
         """
         Initialisiert den Preprocessor.
@@ -62,6 +63,7 @@ class Preprocessor:
                 heterogeneous=False,
                 base_dir=graphs_dir,
                 add_kappa=add_kappa,
+                add_virtual_supernode=add_virtual_supernode,
             )
             self.graphs_dir = Path(graphs_dir)
             self.converter = self.loader.converter
