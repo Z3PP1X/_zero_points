@@ -66,13 +66,13 @@ python main.py --dry-run
 # 2. Spezifisches Dataset laden (Dry-Run oder Training):
 python main.py --dataset run_20260408_160456/dataset_4 --dry-run
 
-# 3. Standard GNN-Lauf im Graph-Modus (mit virtuellen Knoten):
+# 3. Standard GNN-Lauf im Graph-Modus (mit augmentierten graph-bildenden Kanten):
 python main.py --config config_supervised.yaml --mode graph
 
-# 4. GNN-Lauf im Tree-Modus mit angereicherten (Enriched) Features:
+# 4. GNN-Lauf im Tree-Modus (reiner Funktionstree f, ohne augmentierte Kanten):
 python main.py --config config_supervised.yaml --mode tree
 
-# 5. Bottom-up Message Passing auf AST-Kanten (virtuelle Knoten bleiben bidirektional):
+# 5. Bottom-up Message Passing auf AST-Kanten:
 python main.py --config config_supervised.yaml --edge-direction bottom_up
 
 # 6. Nur Laplacian-Positional-Encoding (LPE), ohne Random-Walk-PE (RWPE):
@@ -83,6 +83,9 @@ python main.py --config config_supervised.yaml --feature-groups node topology --
 
 # 8. Explizite Feature-Liste (überschreibt Gruppen-Toggles):
 python main.py --config config_supervised.yaml --active-features "node_type,depth,value,virtual_current_x_val"
+
+# 9. Kappa- (h-Funktions-) Subgraphen aus datasets/kappas/ einbinden:
+python main.py --config config_supervised.yaml --add-kappa
 ```
 
 #### 📋 CLI-Optionen
@@ -91,8 +94,9 @@ python main.py --config config_supervised.yaml --active-features "node_type,dept
 | `--config` | `config_supervised.yaml` | String | GraphGym-YAML mit Architektur-, Feature- und Graph-Einstellungen. |
 | `--dataset` | aus Config | String | Pfad zum Dataset (z. B. `run_key/dataset_name`). |
 | `--dry-run` | *aus* | Flag | Lädt den Datensatz kurz, um die Struktur zu validieren (ohne volles Training). |
-| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` | Bestimmt das Graphen- und Features-Layout:<br>• `graph`: f, f' und f'' verbunden über den globalen Knoten + alle 3 virtuellen Knoten für dynamische Solver-Werte.<br>• `tree`: Nur der Funktionstree f (keine Ableitungen, keine Ableitungsknoten geladen) ohne virtuelle Knoten; dynamische Werte werden direkt als Slots auf dem globalen Knoten platziert.<br>• `tree_derivatives`: f, f' und f'' verbunden über den globalen Knoten (ohne virtuelle Knoten); dynamische Werte werden direkt auf dem globalen Knoten platziert. |
-| `--edge-direction` | `top_down` | `top_down`, `bottom_up`, `bidirectional` | AST-Message-Passing-Richtung (parent→child, child→parent oder beides). Kanten an virtuellen Knoten (`virtual_current_x`, `virtual_y_target`, `virtual_supernode`) bleiben immer bidirektional. |
+| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` | Bestimmt, welche Teilgraphen kompiliert werden und ob die augmentierten (graph-bildenden) Kanten hinzugefügt werden:<br>• `graph`: f, f' und f'' verbunden über den `global`-Knoten + Aggregator-Knoten, **plus** augmentierte Kanten (`NextUse`, `OuterToInner`/`InnerToOuter`), die aus dem Tree einen Graphen machen.<br>• `tree`: Nur der Funktionstree f (keine Ableitungen), reiner Tree ohne augmentierte Kanten.<br>• `tree_derivatives`: f, f' und f'' verbunden über `global` + Aggregatoren, reine (Multi-)Tree-Struktur **ohne** augmentierte Kanten. |
+| `--edge-direction` | `top_down` | `top_down`, `bottom_up`, `bidirectional` | AST-Message-Passing-Richtung (parent→child, child→parent oder beides). |
+| `--add-kappa` | *aus* | Flag | Fügt Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` über `GlobalToKappa`/`KappaToGlobal`-Kanten in jeden Graphen ein. Standardmäßig deaktiviert (Opt-in). |
 | `--feature-groups` | alle (aus Config) | Liste | Aktiviert nur bestimmte Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
 | `--positional-encoding` | `lpe rwpe` | Liste | Positional Encodings: `lpe` (Laplacian), `rwpe` (Random Walk), oder `none`. |
 | `--active-features` | `None` | String (Komma-separiert) | Explizite Teilmenge an Knoten-Features; überschreibt `--feature-groups` und `--positional-encoding`. |
@@ -253,6 +257,7 @@ Sie können Parameter direkt in `config_supervised.yaml` modifizieren:
     mode: graph
     enrich: True
     edge_direction: top_down   # top_down | bottom_up | bidirectional
+    add_kappa: false           # Kappa-Subgraphen aus datasets/kappas/ einbinden (Opt-in)
     features:
       node: true               # node_type, label_id, value, virtual_*, belongs_to_*
       topology: true           # depth, height, subtree_size, out_degree, betweenness
@@ -293,6 +298,9 @@ python main.py --config config_rl.yaml --experiment kein_inv --n_trials 50 --tim
 # Bidirektionales AST-Message-Passing:
 python main.py --config config_rl.yaml --edge-direction bidirectional
 
+# Kappa- (h-Funktions-) Subgraphen einbinden:
+python main.py --config config_rl.yaml --add-kappa
+
 # Nur LPE, ohne RWPE:
 python main.py --config config_rl.yaml --positional-encoding lpe
 
@@ -305,8 +313,9 @@ python main.py --config config_rl.yaml --experiment kein_inv --continue-study --
 | :--- | :--- | :--- |
 | `--config` | `config_rl.yaml` | Zentrale YAML mit allen RL-Defaults (Experiment, Optuna, Gateway, train_best). |
 | `--experiment` | aus Config | Graph-Ordner: `nur_f`, `f_fp_roh`, `kein_inv`. |
-| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives`. |
-| `--edge-direction` | `top_down` | AST-Kantenrichtung; virtuelle Knoten bleiben bidirektional. |
+| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` (augmentierte Kanten nur im `graph`-Modus). |
+| `--edge-direction` | `top_down` | AST-Kantenrichtung (parent→child, child→parent oder beides). |
+| `--add-kappa` | *aus* | Flag: Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` einbinden (Opt-in). |
 | `--feature-groups` | alle | Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
 | `--positional-encoding` | `lpe rwpe` | `lpe`, `rwpe`, oder `none`. |
 | `--active-features` | — | Explizite Knoten-Feature-Liste (überschreibt Gruppen). |
@@ -334,7 +343,7 @@ python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps
 #### 📋 CLI-Optionen
 * `--db`: **Erforderlich**. Pfad zur SQLite-Optuna-Datenbankdatei.
 * `--config`: YAML-Defaults (`config_rl.yaml`); explizite CLI-Flags überschreiben YAML-Werte.
-* `--edge-direction`, `--feature-groups`, `--positional-encoding`, `--active-features`: wie im Supervised-Workflow.
+* `--edge-direction`, `--add-kappa`, `--feature-groups`, `--positional-encoding`, `--active-features`: wie im Supervised-Workflow.
 * `--timesteps`: Gesamte Anzahl der Trainingsschritte (Standard aus `config_rl.yaml`: `250000`).
 * `--save-dir` / `--model-name`: Ausgabeordner und Modellname.
 * `--dry-run`: Lädt nur die Hyperparameter und initialisiert das Modell zu Testzwecken.
@@ -371,6 +380,8 @@ Beim Einlesen wird das Python-Modul `create_virtual_global_node` aufgerufen:
 
 ### Graphen-Kompilierung basierend auf `--mode`
 Welche Teilgraphen geladen und wie sie strukturiert werden, hängt direkt vom `--mode` Argument ab (gilt gleichermaßen für Supervised Learning und Reinforcement Learning):
-* **`tree`**: Es wird ausschließlich der Funktionstree $f$ (`graphml_f`) geladen. Ableitungsgraphen werden ignoriert, und es werden keine virtuellen Knoten injiziert.
-* **`tree_derivatives`**: Es werden alle drei mathematischen Trees ($f$, $f'$, $f''$) geladen und über den `global`-Knoten verknüpft, jedoch ohne virtuelle Knoten.
-* **`graph`**: Es werden alle drei mathematischen Trees ($f$, $f'$, $f''$) geladen und über den `global`-Knoten verknüpft, zusätzlich werden die drei virtuellen Knoten (`virtual_current_x`, `virtual_f_x`, `virtual_y_target`) und ihre bidirektionalen Verbindungen erzeugt.
+* **`tree`**: Es wird ausschließlich der Funktionstree $f$ (`graphml_f`) geladen. Ableitungsgraphen werden ignoriert; reine Tree-Struktur ohne augmentierte Kanten.
+* **`tree_derivatives`**: Es werden alle drei mathematischen Trees ($f$, $f'$, $f''$) geladen und über den `global`-Knoten (plus Aggregator-Knoten `f_root`/`d1_root`/`d2_root`) verknüpft. Reine (Multi-)Tree-Struktur **ohne** augmentierte Kanten.
+* **`graph`**: Wie `tree_derivatives`, **zusätzlich** werden die augmentierten, graph-bildenden Kanten erzeugt: Variablen-Datenfluss (`NextUse`/`NextUseBackward`) und positionsbewusste Funktionsverschachtelung (`OuterToInner_Arg{i}`/`InnerToOuter_Arg{i}`). Diese verwandeln den Tree in einen echten Graphen.
+
+> **Kappa-Augmentierung (`--add-kappa`)** ist orthogonal zum `--mode`: Ist sie aktiviert, werden zusätzlich Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` über `GlobalToKappa`/`KappaToGlobal`-Kanten an den `global`-Knoten angebunden. Standardmäßig deaktiviert.

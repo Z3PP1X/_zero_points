@@ -42,6 +42,7 @@ def read_rl_settings(config: dict[str, Any]) -> dict[str, Any]:
         "edge_direction": validate_edge_direction(
             experiment.get("edge_direction", "top_down")
         ),
+        "add_kappa": bool(experiment.get("add_kappa", False)),
         "active_features": active_features,
         "feature_selection": feature_selection,
         "timesteps": int(optuna.get("timesteps", 10000)),
@@ -119,5 +120,10 @@ def add_shared_graph_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         choices=list(RL_EDGE_DIRECTION_CHOICES),
         help="AST message-passing direction (virtual-node edges stay bidirectional).",
+    )
+    parser.add_argument(
+        "--add-kappa",
+        action="store_true",
+        help="Merge kappa (h-function) subgraphs from datasets/kappas/ into each graph.",
     )
     add_feature_cli_args(parser)
