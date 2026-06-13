@@ -2,21 +2,48 @@
 """
 visualize_dataset_graph.py
 
-A tool to visualize expression graphs from the dataset under different modes:
-- graph: Full directed graph with ASTs for f, f', f'' and virtual aggregator nodes/connections.
-- tree: AST representation of function f only.
-- tree_derivatives: AST representations of f, f', and f'' connected via their roots.
+A tool to visualize expression graphs from the dataset, mirroring the *current*
+graph-generation pipeline in ``gnn.shared.utils.graph_utils``.
 
-Supports rendering to PDF, SVG, and GEXF (for Gephi).
+The graph for a single problem is assembled from up to three abstract syntax
+trees — the function ``f`` and its derivatives ``f'`` and ``f''`` — joined through
+a ``global`` node. On top of that base structure the pipeline offers a number of
+independent, toggleable augmentations, all of which this tool can render:
+
+Modes (``--mode``)
+    tree                only f
+    tree_derivatives    f, f', f'' (no augmented edges)
+    graph               f, f', f'' (augmented edges available)
+
+Augmentations
+    --supernode         inject a fully-connected ``virtual_supernode``
+    --kappa             merge the kappa (h-function) subgraph(s) via
+                        LoadAugmentedFunctionGraph
+    --func-var-edges    add the augmented NextUse (variable reuse) and
+                        OuterToInner/InnerToOuter (function nesting) edges
+    --edge-direction    top_down | bottom_up | bidirectional (AST edges only;
+                        virtual / kappa edges stay bidirectional)
+
+When *no* augmentation/mode/direction flag is supplied, every sensible
+combination is rendered for the chosen problem graph, written into a nested
+sub-directory tree so the output stays organised. Function/variable edges are
+only enumerated for ``graph`` mode (the only mode in which the real pipeline
+adds them); for other modes they are off unless explicitly requested.
+
+Supports rendering to PDF, SVG, PNG and GEXF (for Gephi).
 """
 
-import os
 import sys
 import json
+import math
 import argparse
+import itertools
+from collections import deque
 from pathlib import Path
+
 import networkx as nx
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 
 # Add the codebase paths
 script_dir = Path(__file__).resolve().parent
@@ -31,446 +58,677 @@ from gnn.shared.utils.graph_utils import (
     ExpressionGraphConverter,
     parse_graphml_to_nodes_and_edges,
     find_roots,
-    compute_belongs_to_f,
-    compute_belongs_to_d1,
-    compute_belongs_to_d2,
-    TopologicalFeatureExtractor,
-    get_hetero_node_type
+    build_augmented_math_graph,
+    inject_virtual_supernode,
+    validate_edge_direction,
+    LoadAugmentedFunctionGraph,
+    _mark_function_roots,
+    ROOT_COLOR_VOCAB,
+    SUPERNODE_NODE_ID,
 )
 
+# Reverse map: root_color code -> name ("f"/"d1"/"d2"/"kappa"/"none").
+_COLOR_TO_NAME = {int(v): k for k, v in ROOT_COLOR_VOCAB.items()}
 
-def build_networkx_graph(raw_dict, mode):
+# Structural AST relation types (forward direction) produced by _add_ast_edges.
+_STRUCTURAL_FORWARD = {"child_of", "left_operand", "right_operand"}
+
+# Canonical graph modes accepted by the converter.
+ALL_MODES = ["tree", "tree_derivatives", "graph"]
+ALL_DIRECTIONS = ["top_down", "bottom_up", "bidirectional"]
+
+# Colour palette (group -> fill colour).
+GROUP_COLORS = {
+    "f": "#2ecc71",          # green
+    "d1": "#3498db",         # blue
+    "d2": "#e67e22",         # orange
+    "kappa": "#e74c3c",      # red
+    "global": "#9b59b6",     # purple
+    "supernode": "#8e44ad",  # darker purple
+    "other": "#bdc3c7",      # silver
+}
+
+
+# --------------------------------------------------------------------------- #
+# Graph construction (mirrors ExpressionGraphConverter.convert, sans tensors)  #
+# --------------------------------------------------------------------------- #
+def _normalize_mode(mode: str) -> str:
+    """Accept user-friendly spellings (e.g. 'tree-derivative')."""
+    if mode is None:
+        return None
+    m = mode.strip().lower().replace("-", "_")
+    if m in ("tree_derivative", "tree_derivatives", "derivatives"):
+        return "tree_derivatives"
+    if m in ("tree", "f"):
+        return "tree"
+    if m in ("graph", "full"):
+        return "graph"
+    raise ValueError(f"Unknown mode {mode!r}; expected one of {ALL_MODES}")
+
+
+def _build_raw_for_mode(raw_dict: dict, mode: str) -> dict:
+    """Normalize a raw graph dict the same way convert() does for the dict path.
+
+    Parses the GraphML container (or legacy node/edge lists), marks AST roots with
+    ``root_color`` and wires ``global -> root`` child_of edges. ``tree`` mode keeps
+    only ``f``; the derivative subtrees are parsed for the other two modes.
     """
-    Constructs a NetworkX graph from raw graph dictionary matching the dataset loader's modes.
-    """
-    converter = ExpressionGraphConverter()
     raw = dict(raw_dict)
-    
-    # Check GraphML container vs legacy format
+
     if "graphml_f" in raw:
         nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
-        
-        if mode in ["tree_derivatives", "graph"]:
+
+        if mode in ("tree_derivatives", "graph"):
             nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
             nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
         else:
             nodes_d1, edges_d1 = [], []
             nodes_d2, edges_d2 = [], []
-        
+
         combined_nodes = nodes_f + nodes_d1 + nodes_d2
-        combined_nodes.insert(0, {
-            "id": "global",
-            "label": "GLOBAL",
-            "type": "global",
-            "value": None
-        })
-        
+        combined_nodes.insert(0, {"id": "global", "label": "GLOBAL", "type": "global", "value": None})
+
         roots_f = find_roots(nodes_f, edges_f)
         roots_d1 = find_roots(nodes_d1, edges_d1)
         roots_d2 = find_roots(nodes_d2, edges_d2)
 
+        for color, roots, nodes_list in [
+            ("f", roots_f, nodes_f),
+            ("d1", roots_d1, nodes_d1),
+            ("d2", roots_d2, nodes_d2),
+        ]:
+            root_set = set(roots)
+            for node in nodes_list:
+                if node["id"] in root_set:
+                    node["type"] = "root"
+                    node["root_color"] = ROOT_COLOR_VOCAB[color]
+
         combined_edges = edges_f + edges_d1 + edges_d2
-        if roots_f:
-            combined_nodes.append({
-                "id": "f_root", "label": "f_root", "type": "f_root", "value": None
-            })
-            combined_edges.append({"source": "f_root", "target": "global", "type": "belongs_to_f"})
-            for root in roots_f:
-                combined_edges.append({"source": root, "target": "f_root", "type": "child_of"})
-        if roots_d1:
-            combined_nodes.append({
-                "id": "d1_root", "label": "d1_root", "type": "d1_root", "value": None
-            })
-            combined_edges.append({"source": "d1_root", "target": "global", "type": "belongs_to_d1"})
-            for root in roots_d1:
-                combined_edges.append({"source": root, "target": "d1_root", "type": "child_of"})
-        if roots_d2:
-            combined_nodes.append({
-                "id": "d2_root", "label": "d2_root", "type": "d2_root", "value": None
-            })
-            combined_edges.append({"source": "d2_root", "target": "global", "type": "belongs_to_d2"})
-            for root in roots_d2:
-                combined_edges.append({"source": root, "target": "d2_root", "type": "child_of"})
+        for color, roots in [("f", roots_f), ("d1", roots_d1), ("d2", roots_d2)]:
+            for root in roots:
+                combined_edges.append({"source": "global", "target": root, "type": "child_of"})
 
         raw["nodes"] = combined_nodes
         raw["edges"] = combined_edges
     else:
+        # Legacy node/edge list format: provenance edges -> root_color marking.
         raw["nodes"] = list(raw.get("nodes", []))
         raw["edges"] = list(raw.get("edges", []))
-        from gnn.shared.utils.graph_utils import _insert_function_aggregators
-        _insert_function_aggregators(raw)
-        
-    belongs_to_f_map = compute_belongs_to_f(raw)
-    belongs_to_d1_map = compute_belongs_to_d1(raw)
-    belongs_to_d2_map = compute_belongs_to_d2(raw)
+        _mark_function_roots(raw)
 
-    # Build Directed Graph with node attributes
-    G = converter._build_networkx(
-        raw,
-        belongs_to_f_map=belongs_to_f_map,
-        belongs_to_d1_map=belongs_to_d1_map,
-        belongs_to_d2_map=belongs_to_d2_map,
-    )
-    
-    # Store clean attributes for exporters/drawers
-    for u, v in list(G.edges):
-        # Resolve edge labels
-        edge_data = raw_dict.get("edges", [])
-        etype = "child_of"
-        for e in edge_data:
-            if e["source"] == u and e["target"] == v:
-                etype = e.get("type", "child_of")
-                break
-        G.edges[u, v]["etype"] = etype
-
-        # Reverse edge (single schema always has bidirectional AST edges)
-        G.add_edge(v, u, etype=etype + "_reverse")
-
-    return G
+    return raw
 
 
-def compute_hierarchical_layout(G):
+def build_visual_graph(source, mode, edge_direction, func_var_edges, add_supernode):
+    """Build an enriched NetworkX graph for visualization.
+
+    Mirrors the relevant parts of ``ExpressionGraphConverter.convert`` but stops
+    before tensorization, keeping human-readable node/edge attributes (``label``,
+    ``type``, ``root_color``, ``etype``) for drawing.
+
+    ``source`` is either a raw graph dict (no-kappa path) or an ``nx.DiGraph``
+    already merged with kappa subgraphs (kappa path).
+
+    Returns ``(G_enriched, children_dict)`` where ``children_dict`` maps each
+    parent to its child_of children (independent of the drawn edge direction).
     """
-    Computes a clean hierarchical layout for expression trees:
-    - Vertical position (y) is node depth (inverted so root is at top).
-    - Horizontal position (x) separates f, f', and f'' subtrees.
-    """
-    # Exclude global and virtual nodes to extract pure AST topology
-    ast_nodes = [
-        node for node in G.nodes 
-        if node not in ["global", "f_root", "d1_root", "d2_root", "virtual_current_x", "virtual_y_target", "virtual_supernode"]
-    ]
-    
-    # Build clean directed graph for depth extraction (filtering out reverse edges and reversing directions to get top-down depth)
-    G_ast_clean = nx.DiGraph()
-    G_ast_clean.add_nodes_from(ast_nodes)
-    for u, v, d in G.edges(data=True):
-        if u in ast_nodes and v in ast_nodes:
-            if "reverse" not in d.get("etype", ""):
-                G_ast_clean.add_edge(v, u)
-    
-    if len(G_ast_clean) > 0:
-        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast_clean)
-        depths = topo["depths"]
+    converter = ExpressionGraphConverter()
+    edge_direction = validate_edge_direction(edge_direction)
+
+    G_enriched = nx.DiGraph()
+    children_dict: dict[str, list] = {}
+
+    if isinstance(source, nx.DiGraph):
+        # --- Kappa-augmented path (source is an AugmentedFunctionGraph) ---------
+        node_ids = list(source.nodes)
+        for node in node_ids:
+            attrs = dict(source.nodes[node])
+            attrs.setdefault("root_color", float(ROOT_COLOR_VOCAB["none"]))
+            G_enriched.add_node(node, **attrs)
+
+        child_counters: dict[str, int] = {}
+        for u, v, attrs in source.edges(data=True):
+            etype = attrs.get("type") or attrs.get("etype") or "child_of"
+            if etype == "child_of":
+                children_dict.setdefault(u, []).append(v)
+
+            # Kappa / supernode edges already carry their relation attributes; copy
+            # them verbatim so we draw the real connection (GlobalToKappa, ...).
+            if "relation_type" in attrs or "child_index" in attrs or "direction" in attrs:
+                G_enriched.add_edge(u, v, **attrs)
+                continue
+
+            child_idx = child_counters.get(u, 0)
+            child_counters[u] = child_idx + 1
+            converter._add_ast_edges(G_enriched, u, v, child_idx, etype, edge_direction)
     else:
-        depths = {}
-        
-    pos = {}
-    
-    # Group nodes by function category and depth level
-    group_depth_nodes = {}
-    for node in G.nodes:
-        attrs = G.nodes[node]
-        if node == "global":
-            group = "global"
-        elif node in ["f_root", "d1_root", "d2_root"]:
-            group = node
-        elif node in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-            group = "virtual"
-        elif attrs.get("belongs_to_f", 0.0) == 1.0:
-            group = "f"
-        elif attrs.get("belongs_to_d1", 0.0) == 1.0:
-            group = "d1"
-        elif attrs.get("belongs_to_d2", 0.0) == 1.0:
-            group = "d2"
+        # --- Plain (no-kappa) path (source is a raw dict) ----------------------
+        raw = _build_raw_for_mode(source, mode)
+        G_directed = converter._build_networkx(raw)
+        node_ids = list(G_directed.nodes)
+        for node in node_ids:
+            G_enriched.add_node(node, **dict(G_directed.nodes[node]))
+
+        child_counters = {}
+        for edge in raw.get("edges", []):
+            u, v, etype = edge["source"], edge["target"], edge["type"]
+            if etype == "child_of":
+                children_dict.setdefault(u, []).append(v)
+            child_idx = child_counters.get(u, 0)
+            child_counters[u] = child_idx + 1
+            converter._add_ast_edges(G_enriched, u, v, child_idx, etype, edge_direction)
+
+    # Augmented NextUse / function-nesting edges (turn the tree into a graph).
+    if func_var_edges:
+        if "global" in G_enriched:
+            build_augmented_math_graph(G_enriched, "global", {}, children_dict, edge_direction)
         else:
-            group = "other"
-            
-        depth = depths.get(node, 0) if node in depths else 0
-        key = (group, depth)
-        if key not in group_depth_nodes:
-            group_depth_nodes[key] = []
-        group_depth_nodes[key].append(node)
-        
-    # Horizontal center of groups
-    group_x_centers = {
-        "global": 0.0,
-        "f_root": -1.5,
-        "d1_root": 0.0,
-        "d2_root": 1.5,
-        "f": -1.5,
-        "d1": 0.0,
-        "d2": 1.5,
-        "virtual": 0.0,
-        "other": 0.0
-    }
-    
-    # Lay out nodes level by level
-    for (group, depth), nodes in group_depth_nodes.items():
-        center_x = group_x_centers.get(group, 0.0)
-        num_nodes = len(nodes)
-        
-        if num_nodes == 1:
-            pos[nodes[0]] = (center_x, -depth)
+            for r in [n for n, d in G_enriched.in_degree() if d == 0]:
+                build_augmented_math_graph(G_enriched, r, {}, children_dict, edge_direction)
+
+    # Optional fully-connected virtual supernode.
+    if add_supernode:
+        # inject_virtual_supernode mutates both graphs + node_ids; a throwaway
+        # directed graph is enough since we only need it applied to G_enriched.
+        inject_virtual_supernode(G_enriched, nx.DiGraph(), node_ids)
+
+    # tree mode: keep only f (drop the derivative subtrees that the kappa loader
+    # always pulls in) so every mode is consistent across the kappa toggle.
+    groups = compute_node_groups(G_enriched, children_dict)
+    if mode == "tree":
+        keep = [n for n in G_enriched.nodes if groups.get(n) not in ("d1", "d2")]
+        G_enriched = G_enriched.subgraph(keep).copy()
+
+    return G_enriched, children_dict
+
+
+def compute_node_groups(G: nx.DiGraph, children_dict: dict) -> dict:
+    """Assign every node a colour group: f / d1 / d2 / kappa / global / supernode / other.
+
+    Function membership is propagated from the coloured AST roots down the
+    child_of adjacency (every AST node is a descendant of exactly one root).
+    """
+    group: dict[str, str] = {}
+    queue = deque()
+
+    for n in G.nodes:
+        sn = str(n)
+        if sn == "global":
+            group[n] = "global"
+        elif sn == SUPERNODE_NODE_ID:
+            group[n] = "supernode"
+        elif sn.startswith("kappa_"):
+            group[n] = "kappa"
+
+    for n in G.nodes:
+        if n in group:
+            continue
+        rc = G.nodes[n].get("root_color")
+        name = _COLOR_TO_NAME.get(int(rc), "none") if rc is not None else "none"
+        if name in ("f", "d1", "d2", "kappa"):
+            group[n] = name
+            queue.append(n)
+
+    while queue:
+        parent = queue.popleft()
+        for child in children_dict.get(parent, []):
+            if child not in group:
+                group[child] = group[parent]
+                queue.append(child)
+
+    for n in G.nodes:
+        group.setdefault(n, "other")
+    return group
+
+
+# --------------------------------------------------------------------------- #
+# Layout                                                                       #
+# --------------------------------------------------------------------------- #
+def _compute_depths(G: nx.DiGraph, children_dict: dict, groups: dict) -> dict:
+    """Depth of each node (global=0, roots=1, ...) over the child_of adjacency."""
+    depth: dict[str, int] = {}
+    queue = deque()
+
+    if "global" in G:
+        depth["global"] = 0
+    # Seed every AST/kappa root at depth 1, then sweep their subtrees.
+    for n in G.nodes:
+        rc = G.nodes[n].get("root_color")
+        if rc is not None and int(rc) != 0:
+            depth[n] = 1
+            queue.append(n)
+
+    while queue:
+        parent = queue.popleft()
+        for child in children_dict.get(parent, []):
+            if child not in depth:
+                depth[child] = depth.get(parent, 1) + 1
+                queue.append(child)
+
+    for n in G.nodes:
+        depth.setdefault(n, 0)
+    return depth
+
+
+def compute_hierarchical_layout(G: nx.DiGraph, children_dict: dict, groups: dict) -> dict:
+    """Lay out f / f' / f'' (and kappa) as separate vertical columns."""
+    depths = _compute_depths(G, children_dict, groups)
+
+    column_x = {"f": -3.0, "d1": 0.0, "d2": 3.0, "kappa": 6.0,
+                "global": 0.0, "supernode": -5.5, "other": 0.0}
+
+    # Bucket nodes by (group, depth) so we can spread siblings horizontally.
+    buckets: dict[tuple, list] = {}
+    for n in G.nodes:
+        key = (groups.get(n, "other"), depths.get(n, 0))
+        buckets.setdefault(key, []).append(n)
+
+    pos: dict[str, tuple] = {}
+    for (group, depth), nodes in buckets.items():
+        center = column_x.get(group, 0.0)
+        if len(nodes) == 1:
+            pos[nodes[0]] = (center, -float(depth))
         else:
-            # Spread nodes evenly horizontally
-            width = 0.8
-            xs = [center_x - width/2 + i * (width / (num_nodes - 1)) for i in range(num_nodes)]
-            # Sort nodes by ID to keep layouts deterministic
-            for node, x in zip(sorted(nodes), xs):
-                pos[node] = (x, -depth)
-                
-    # Fine-tune vertical position of structural/virtual nodes
+            width = 2.2
+            step = width / (len(nodes) - 1)
+            for i, node in enumerate(sorted(nodes, key=str)):
+                pos[node] = (center - width / 2 + i * step, -float(depth))
+
+    # Pin the structural anchors.
     if "global" in pos:
-        pos["global"] = (0.0, 1.2)
-    if "f_root" in pos:
-        pos["f_root"] = (-1.5, 0.6)
-    if "d1_root" in pos:
-        pos["d1_root"] = (0.0, 0.6)
-    if "d2_root" in pos:
-        pos["d2_root"] = (1.5, 0.6)
-    if "virtual_current_x" in pos:
-        pos["virtual_current_x"] = (-2.8, -2.0)
-    if "virtual_y_target" in pos:
-        pos["virtual_y_target"] = (0.0, 2.0)
-    if "virtual_supernode" in pos:
-        pos["virtual_supernode"] = (2.8, -2.0)
-        
+        pos["global"] = (1.5, 1.4)
+    if SUPERNODE_NODE_ID in pos:
+        pos[SUPERNODE_NODE_ID] = (-5.5, 0.5)
+
+    for n in G.nodes:
+        pos.setdefault(n, (0.0, 0.0))
     return pos
 
 
-def visualize_graph(G, output_path, fmt, layout_name="hierarchical"):
-    """
-    Renders the NetworkX graph and saves it as PDF or SVG.
-    """
-    fig, ax = plt.subplots(figsize=(10, 8), dpi=300)
+# --------------------------------------------------------------------------- #
+# Edge categorisation + drawing                                                #
+# --------------------------------------------------------------------------- #
+def _edge_category(etype: str) -> str:
+    if etype is None:
+        return "structural"
+    if etype.startswith("supernode_connection"):
+        return "supernode"
+    if etype in ("GlobalToKappa", "KappaToGlobal"):
+        return "kappa"
+    if etype in ("NextUse", "NextUseBackward"):
+        return "variable"
+    if etype.startswith("OuterToInner") or etype.startswith("InnerToOuter"):
+        return "function"
+    if etype.endswith("_reverse"):
+        base = etype[:-len("_reverse")]
+        if base in _STRUCTURAL_FORWARD:
+            return "structural_reverse"
+        return "structural_reverse"
+    if etype in _STRUCTURAL_FORWARD:
+        return "structural"
+    return "structural"
+
+
+# (color, alpha, width, style, arrowsize) per edge category.
+_EDGE_STYLE = {
+    "structural":         ("#7f8c8d", 0.85, 1.2, "solid",  10),
+    "structural_reverse": ("#d5dbdb", 0.40, 0.8, "dotted",  6),
+    "supernode":          ("#9b59b6", 0.15, 0.5, "dashed",  5),
+    "variable":           ("#16a085", 0.55, 1.0, "dashed",  8),
+    "function":           ("#2980b9", 0.55, 1.0, "dashed",  8),
+    "kappa":              ("#e74c3c", 0.70, 1.4, "solid",  10),
+}
+
+_EDGE_LEGEND = {
+    "structural": "AST edge (child_of)",
+    "structural_reverse": "AST edge (reverse)",
+    "supernode": "Supernode link",
+    "variable": "Variable reuse (NextUse)",
+    "function": "Function nesting",
+    "kappa": "Global <-> Kappa",
+}
+
+
+def visualize_graph(G, children_dict, groups, output_path, fmt, meta, layout_name="hierarchical"):
+    """Render the NetworkX graph and save it as PDF / SVG / PNG."""
+    fig, ax = plt.subplots(figsize=(13, 9), dpi=200)
     ax.axis("off")
-    
-    # 1. Compute Node Layout
+
     if layout_name == "hierarchical":
-        pos = compute_hierarchical_layout(G)
+        pos = compute_hierarchical_layout(G, children_dict, groups)
     elif layout_name == "kamada_kawai":
         pos = nx.kamada_kawai_layout(G)
     else:
         pos = nx.spring_layout(G, seed=42)
-        
-    # Fill in any missing positions
     for node in G.nodes:
-        if node not in pos:
-            pos[node] = (0.0, 0.0)
-            
-    # 2. Extract Colors & Sizes
-    node_colors = []
-    node_sizes = []
-    labels = {}
-    is_hetero = (G.graph.get("mode") == "graph_hetero")
-    
-    for node in G.nodes:
-        attrs = G.nodes[node]
-        ntype = attrs.get("type", "")
-        labels[node] = attrs.get("label") or str(node)
-        
-        # Determine node size based on its structural role
-        if node == "global":
-            size = 650
-        elif node in ["f_root", "d1_root", "d2_root"]:
-            size = 500
-        elif ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-            size = 450
-        else:
-            size = 300
-        node_sizes.append(size)
-        
-        if is_hetero:
-            h_type = get_hetero_node_type(ntype)
-            if h_type == "operator":
-                node_colors.append("#3498db")  # Vibrant Blue
-            elif h_type == "variable":
-                node_colors.append("#2ecc71")  # Vibrant Green
-            elif h_type == "constant":
-                node_colors.append("#e67e22")  # Vibrant Orange
-            else:  # virtual
-                node_colors.append("#9b59b6")  # Vibrant Purple
-        else:
-            if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-                node_colors.append("#9b59b6")  # Uniform Purple for all Virtual/Structural Nodes
-            elif attrs.get("belongs_to_f", 0.0) == 1.0:
-                node_colors.append("#2ecc71")  # Vibrant Green (f)
-            elif attrs.get("belongs_to_d1", 0.0) == 1.0:
-                node_colors.append("#3498db")  # Vibrant Blue (f')
-            elif attrs.get("belongs_to_d2", 0.0) == 1.0:
-                node_colors.append("#e67e22")  # Vibrant Orange (f'')
-            else:
-                node_colors.append("#bdc3c7")  # Silver
+        pos.setdefault(node, (0.0, 0.0))
 
-    # 3. Categorize and color edges
-    ast_edges = []
-    virtual_edges = []
-    reverse_edges = []
-    
-    for u, v in G.edges:
-        etype = G.edges[u, v].get("etype", "child_of")
-        # Any edge connected to a virtual node is categorized as a virtual edge
-        if u in ["virtual_current_x", "virtual_y_target", "virtual_supernode"] or \
-           v in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-            virtual_edges.append((u, v))
-        elif "reverse" in etype:
-            reverse_edges.append((u, v))
+    # Node colours / sizes / labels.
+    node_colors, node_sizes, labels = [], [], {}
+    for node in G.nodes:
+        grp = groups.get(node, "other")
+        node_colors.append(GROUP_COLORS.get(grp, GROUP_COLORS["other"]))
+        if grp in ("global", "supernode"):
+            node_sizes.append(620)
+        elif G.nodes[node].get("type") == "root":
+            node_sizes.append(440)
         else:
-            ast_edges.append((u, v))
-            
-    # Draw AST edges (solid, soft dark grey)
-    nx.draw_networkx_edges(
-        G, pos, edgelist=ast_edges, ax=ax, edge_color="#7f8c8d",
-        alpha=0.8, width=1.2, arrows=True, arrowsize=10
-    )
-    
-    # Draw Virtual coupling edges (very thin, dashed, transparent purple)
-    nx.draw_networkx_edges(
-        G, pos, edgelist=virtual_edges, ax=ax, edge_color="#9b59b6",
-        alpha=0.15, width=0.5, style="dashed", arrows=True, arrowsize=5
-    )
-    
-    # Draw Reverse message-passing edges (dotted, very light grey)
-    nx.draw_networkx_edges(
-        G, pos, edgelist=reverse_edges, ax=ax, edge_color="#d5dbdb",
-        alpha=0.4, width=0.8, style="dotted", arrows=True, arrowsize=6
-    )
-    
-    # 4. Draw Nodes with thin border
+            node_sizes.append(300)
+        labels[node] = str(G.nodes[node].get("label") or node)
+
+    # Bucket edges by category.
+    edges_by_cat: dict[str, list] = {}
+    for u, v in G.edges:
+        cat = _edge_category(G.edges[u, v].get("etype"))
+        edges_by_cat.setdefault(cat, []).append((u, v))
+
+    present_edge_cats = []
+    for cat in ("structural", "structural_reverse", "variable", "function", "kappa", "supernode"):
+        edgelist = edges_by_cat.get(cat)
+        if not edgelist:
+            continue
+        present_edge_cats.append(cat)
+        color, alpha, width, style, arrowsize = _EDGE_STYLE[cat]
+        nx.draw_networkx_edges(
+            G, pos, edgelist=edgelist, ax=ax, edge_color=color, alpha=alpha,
+            width=width, style=style, arrows=True, arrowsize=arrowsize,
+        )
+
     nx.draw_networkx_nodes(
         G, pos, ax=ax, node_color=node_colors, node_size=node_sizes,
-        edgecolors="#2c3e50", linewidths=0.8
+        edgecolors="#2c3e50", linewidths=0.7,
     )
-    
-    # 5. Draw Labels only for virtual/structural nodes, offset slightly above
-    virtual_labels = {}
-    for node in G.nodes:
-        attrs = G.nodes[node]
-        ntype = attrs.get("type", "")
-        if node == "global" or node in ["f_root", "d1_root", "d2_root"] or ntype in ["virtual_current_x", "virtual_y_target", "virtual_supernode"]:
-            virtual_labels[node] = attrs.get("label") or str(node)
-    label_pos = {node: (x, y + 0.12) for node, (x, y) in pos.items() if node in virtual_labels}
-    
+
     nx.draw_networkx_labels(
-        G, label_pos, labels=virtual_labels, ax=ax, font_size=8,
-        font_family="sans-serif", font_color="black", font_weight="bold",
-        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8)
+        G, pos, labels=labels, ax=ax, font_size=6,
+        font_family="sans-serif", font_color="#2c3e50",
     )
-    
-    # 6. Add Color-Coordinated Legend
-    from matplotlib.patches import Patch
-    if is_hetero:
-        legend_elements = [
-            Patch(facecolor="#3498db", edgecolor="#2980b9", label="Operator"),
-            Patch(facecolor="#2ecc71", edgecolor="#27ae60", label="Variable"),
-            Patch(facecolor="#e67e22", edgecolor="#d35400", label="Constant"),
-            Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual"),
-        ]
-    else:
-        legend_elements = [
-            Patch(facecolor="#2ecc71", edgecolor="#27ae60", label="Function f(x)"),
-            Patch(facecolor="#3498db", edgecolor="#2980b9", label="1st Derivative f'(x)"),
-            Patch(facecolor="#e67e22", edgecolor="#d35400", label="2nd Derivative f''(x)"),
-            Patch(facecolor="#9b59b6", edgecolor="#8e44ad", label="Virtual / Structural"),
-        ]
+
+    # Legend: node groups + edge categories actually present.
+    present_groups = sorted({groups.get(n, "other") for n in G.nodes})
+    group_label = {
+        "f": "Function f(x)", "d1": "1st Derivative f'(x)", "d2": "2nd Derivative f''(x)",
+        "kappa": "Kappa (h-function)", "global": "Global", "supernode": "Supernode",
+        "other": "Other",
+    }
+    legend_elements = [
+        Patch(facecolor=GROUP_COLORS[g], edgecolor="#2c3e50", label=group_label.get(g, g))
+        for g in present_groups
+    ]
+    from matplotlib.lines import Line2D
+    for cat in present_edge_cats:
+        color, alpha, width, style, _ = _EDGE_STYLE[cat]
+        legend_elements.append(
+            Line2D([0], [0], color=color, lw=1.6, linestyle=style, label=_EDGE_LEGEND[cat])
+        )
     leg = ax.legend(
-        handles=legend_elements,
-        loc="upper center",
-        ncol=4,
-        bbox_to_anchor=(0.5, -0.02),
-        frameon=True,
-        facecolor="white",
-        edgecolor="#bdc3c7",
-        fontsize=8
+        handles=legend_elements, loc="upper center", ncol=4,
+        bbox_to_anchor=(0.5, -0.02), frameon=True, facecolor="white",
+        edgecolor="#bdc3c7", fontsize=8,
     )
-    
-    # Add title
-    plt.title(f"Expression Graph (Mode: {G.graph.get('mode', 'N/A')}, ID: {G.graph.get('id', 'N/A')})",
-              fontsize=12, fontweight="bold", pad=15)
-    
-    # Save the output
-    plt.savefig(
-        output_path,
-        format=fmt,
-        bbox_inches="tight",
-        bbox_extra_artists=(leg,),
-        transparent=True,
-        dpi=300
+
+    title = (
+        f"Graph {meta['graph_id']} | mode={meta['mode']} | dir={meta['edge_direction']}\n"
+        f"supernode={meta['supernode']}  kappa={meta['kappa']}  "
+        f"func/var-edges={meta['func_var_edges']}  "
+        f"(nodes={G.number_of_nodes()}, edges={G.number_of_edges()})"
     )
+    plt.title(title, fontsize=11, fontweight="bold", pad=14)
+
+    plt.savefig(output_path, format=fmt, bbox_inches="tight",
+                bbox_extra_artists=(leg,), dpi=200)
     plt.close(fig)
-    print(f"[Visualizer] Plot saved: {output_path}")
+    print(f"[Visualizer] Saved: {output_path}")
 
 
+def export_gexf(G, output_path):
+    """Export to Gephi GEXF, sanitising None/unsupported attribute values."""
+    G_export = G.copy()
+    for _, attrs in G_export.nodes(data=True):
+        for k, val in list(attrs.items()):
+            if val is None:
+                attrs[k] = ""
+    for _, _, attrs in G_export.edges(data=True):
+        for k, val in list(attrs.items()):
+            if val is None:
+                attrs[k] = ""
+    nx.write_gexf(G_export, str(output_path))
+    print(f"[Visualizer] Gephi GEXF exported: {output_path}")
+
+
+# --------------------------------------------------------------------------- #
+# Source loading                                                               #
+# --------------------------------------------------------------------------- #
+def load_raw_dict(loader: GraphDataLoader, graph_id: str) -> dict:
+    raw_val = loader._raw_sources[graph_id]
+    if isinstance(raw_val, Path):
+        with open(raw_val, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    return raw_val
+
+
+def load_kappa_source(loader: GraphDataLoader, graph_id: str, kappa_value):
+    """Load the kappa-augmented nx.DiGraph (or None if no kappas are available)."""
+    kappas_dir = loader.kappas_dir
+    if not kappas_dir.exists() or not any(kappas_dir.glob("**/*.json")):
+        return None
+    return LoadAugmentedFunctionGraph(
+        graphId=str(graph_id),
+        graphsFolder=loader.source_path,
+        kappasFolder=kappas_dir,
+        kappa_value=kappa_value,
+    )
+
+
+def available_kappa_values(kappas_dir: Path) -> list:
+    """All kappa 'value' entries found under the kappas directory, as floats."""
+    values = []
+    for path in kappas_dir.glob("**/*.json"):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            if isinstance(item, dict) and "value" in item:
+                try:
+                    values.append(float(item["value"]))
+                except (TypeError, ValueError):
+                    pass
+    return sorted(set(values))
+
+
+def resolve_kappa_value(args, loader, dataset_name, graph_id, is_synthetic):
+    """Pick which single kappa to merge for the visualization.
+
+    The current pipeline merges exactly one kappa per problem (selective merge),
+    so the representative view shows a single h-function rather than all of them.
+    Resolution order: explicit ``--kappa-value`` -> the problem's own kappa (from
+    the tabular dataset) -> the first available kappa as a stand-in example. When
+    ``--kappa-value`` is the sentinel ``inf`` we merge *all* kappas.
+    """
+    if args.kappa_value is not None:
+        return args.kappa_value  # honour explicit choice (incl. inf == merge all)
+
+    available = available_kappa_values(loader.kappas_dir)
+    if not available:
+        return None
+
+    try:
+        from gnn.shared.utils.unified_loader import UnifiedDataLoader
+        unified = UnifiedDataLoader.get_instance(
+            dataset_name=dataset_name, is_synthetic=is_synthetic,
+        )
+        kappa_map = unified.build_kappa_map()
+        own = kappa_map.get(str(graph_id))
+        if own is not None and float(own) in available:
+            return float(own)
+    except Exception as exc:
+        print(f"[Visualizer] Could not resolve problem kappa from dataset ({exc}); "
+              f"using a representative kappa instead.")
+
+    chosen = available[0]
+    print(f"[Visualizer] No specific kappa for graph '{graph_id}'; "
+          f"showing representative kappa value {chosen}.")
+    return chosen
+
+
+# --------------------------------------------------------------------------- #
+# Rendering one combination                                                    #
+# --------------------------------------------------------------------------- #
+def render_combination(loader, graph_id, mode, edge_direction, supernode, kappa,
+                       func_var_edges, formats, out_root, layout, kappa_value):
+    """Build and render one full configuration. Returns True on success."""
+    # inf is the "merge all kappas" sentinel; otherwise merge the single value.
+    merge_value = None if (kappa_value is not None and math.isinf(kappa_value)) else kappa_value
+    if kappa:
+        source = load_kappa_source(loader, graph_id, merge_value)
+        if source is None:
+            print(f"[Visualizer] Skipping kappa=True for graph {graph_id}: "
+                  f"no kappas found in {loader.kappas_dir}")
+            return False
+    else:
+        source = load_raw_dict(loader, graph_id)
+
+    G, children_dict = build_visual_graph(
+        source, mode=mode, edge_direction=edge_direction,
+        func_var_edges=func_var_edges, add_supernode=supernode,
+    )
+    groups = compute_node_groups(G, children_dict)
+
+    if not kappa:
+        kappa_label = "False"
+    elif merge_value is None:
+        kappa_label = "all"
+    else:
+        kappa_label = f"{merge_value:g}"
+    meta = {
+        "graph_id": graph_id, "mode": mode, "edge_direction": edge_direction,
+        "supernode": supernode, "kappa": kappa_label, "func_var_edges": func_var_edges,
+    }
+
+    # Nested sub-directories keep the (potentially dozens of) outputs organised.
+    out_dir = Path(out_root) / f"graph_{graph_id}" / mode / edge_direction
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = (f"{mode}_dir-{edge_direction}_sn-{int(supernode)}"
+            f"_kappa-{int(kappa)}_fve-{int(func_var_edges)}")
+
+    for fmt in formats:
+        filepath = out_dir / f"{base}.{fmt}"
+        if fmt == "gexf":
+            export_gexf(G, filepath)
+        else:
+            visualize_graph(G, children_dict, groups, str(filepath), fmt, meta, layout)
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# CLI                                                                          #
+# --------------------------------------------------------------------------- #
 def main():
-    parser = argparse.ArgumentParser(description="Visualize expression graphs from dataset.")
+    parser = argparse.ArgumentParser(
+        description="Visualize expression graphs from the dataset under the current pipeline.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("--dataset-name", "-d", type=str, default="graphs",
-                        help="Dataset name (e.g. 'graphs', 'synthetic_graphs', or 'run_XXXX_XXXX/graphs')")
+                        help="Dataset name (e.g. 'graphs', 'synthetic_graphs', 'run_XXXX/graphs')")
     parser.add_argument("--graph-id", "-i", type=str, default="0",
-                        help="ID of the graph to visualize (e.g. '0', '1')")
-    parser.add_argument("--mode", "-m", type=str, default="graph",
-                        choices=["graph", "tree", "tree_derivatives", "graph_bidirectional", "graph_hetero"],
-                        help="Graph mode layout representation")
+                        help="ID of the problem graph to visualize")
+
+    parser.add_argument("--mode", "-m", type=str, default=None,
+                        help="Graph mode: tree | tree_derivatives (tree-derivative) | graph. "
+                             "Omit to render all modes.")
+    parser.add_argument("--edge-direction", "-e", type=str, default=None,
+                        choices=ALL_DIRECTIONS,
+                        help="AST edge direction. Omit to render all directions.")
+
+    parser.add_argument("--supernode", action=argparse.BooleanOptionalAction, default=None,
+                        help="Inject a fully-connected virtual supernode. "
+                             "Omit (no --supernode/--no-supernode) to render both.")
+    parser.add_argument("--kappa", action=argparse.BooleanOptionalAction, default=None,
+                        help="Merge the kappa (h-function) subgraph(s). "
+                             "Omit to render both with and without.")
+    parser.add_argument("--func-var-edges", action=argparse.BooleanOptionalAction, default=None,
+                        help="Add augmented function-nesting + variable-reuse edges. "
+                             "Omit to enumerate (graph mode only).")
+    parser.add_argument("--kappa-value", type=float, default=None,
+                        help="Merge only this kappa value. Default: the problem's own "
+                             "kappa (selective merge, as in training). Pass 'inf' to "
+                             "merge all 50 kappas at once.")
+
     parser.add_argument("--format", "-f", type=str, default="pdf",
                         choices=["pdf", "svg", "gexf", "png", "all"],
-                        help="Output format (pdf, svg, gexf for Gephi, png, or all)")
+                        help="Output format (or 'all').")
     parser.add_argument("--output-dir", "-o", type=str, default="visualizations",
-                        help="Subdirectory to save the visualization results")
+                        help="Base directory for the (sub-foldered) results.")
     parser.add_argument("--layout", type=str, default="hierarchical",
                         choices=["hierarchical", "spring", "kamada_kawai"],
-                        help="Graph layout algorithm (hierarchical matches f/f'/f'')")
+                        help="Graph layout algorithm.")
     parser.add_argument("--is-synthetic", action="store_true",
-                        help="Set flag if loading a synthetic dataset file")
+                        help="Set when loading a synthetic dataset file.")
     args = parser.parse_args()
-    
-    # Map visualizer modes to loader configurations
-    if args.mode in ("graph", "graph_bidirectional", "graph_hetero"):
-        loader_mode = "graph"
-    elif args.mode in ("tree", "tree_derivatives"):
-        loader_mode = args.mode
-    else:
-        loader_mode = args.mode
 
-    # Initialize unified graph loader
+    mode_arg = _normalize_mode(args.mode) if args.mode else None
+
+    # A single loader instance is enough: it only provides raw sources, the source
+    # path and the kappas directory. Conversion happens here in the visualizer.
     loader = GraphDataLoader(
         name=args.dataset_name,
-        mode=loader_mode,
-        is_synthetic=args.is_synthetic or "synthetic" in args.dataset_name
+        mode=mode_arg or "graph",
+        is_synthetic=args.is_synthetic or "synthetic" in args.dataset_name,
     )
-    
+
     if not loader.has_graph(args.graph_id):
         print(f"Error: Graph ID '{args.graph_id}' not found in dataset '{args.dataset_name}'.")
-        print(f"Available Graph IDs: {sorted(list(loader.list_graph_ids()))[:20]}...")
+        available = sorted(loader.list_graph_ids())[:20]
+        print(f"Available Graph IDs (first 20): {available}")
         sys.exit(1)
-        
-    # Retrieve raw graph JSON
-    raw_val = loader._raw_sources[args.graph_id]
-    if isinstance(raw_val, Path):
-        with open(raw_val, "r", encoding="utf-8") as file:
-            raw_dict = json.load(file)
-    else:
-        raw_dict = raw_val
-        
-    # Build the NetworkX graph with mode layout
-    G = build_networkx_graph(raw_dict, loader_mode)
-    G.graph["mode"] = args.mode
-    G.graph["id"] = args.graph_id
-    
-    # Resolve output directory
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
-    base_filename = f"graph_{args.graph_id}_{args.mode}"
-    
-    # Save selected formats
-    formats = [args.format] if args.format != "all" else ["pdf", "svg", "gexf", "png"]
-    
-    for fmt in formats:
-        filepath = out_dir / f"{base_filename}.{fmt}"
-        if fmt == "gexf":
-            # Strip networkx unsupported edge attributes or convert to string for GEXF export
-            G_export = G.copy()
-            for u, v, data in G_export.edges(data=True):
-                if "relation_type" in data:
-                    data["relation_type"] = str(data["relation_type"])
-                if "child_index" in data:
-                    data["child_index"] = str(data["child_index"])
-                    
-            # Export to Gephi GEXF format
-            nx.write_gexf(G_export, str(filepath))
-            print(f"[Visualizer] Gephi GEXF exported: {filepath}")
+
+    # Expand each axis: a fixed value if supplied, else every option.
+    modes = [mode_arg] if mode_arg else list(ALL_MODES)
+    directions = [args.edge_direction] if args.edge_direction else list(ALL_DIRECTIONS)
+    supernodes = [args.supernode] if args.supernode is not None else [False, True]
+    kappas = [args.kappa] if args.kappa is not None else [False, True]
+    formats = [args.format] if args.format != "all" else ["pdf", "svg", "png", "gexf"]
+
+    # Resolve the single kappa to merge once (shared across every kappa combo).
+    resolved_kappa = None
+    if True in kappas:
+        resolved_kappa = resolve_kappa_value(
+            args, loader, args.dataset_name, args.graph_id,
+            args.is_synthetic or "synthetic" in args.dataset_name,
+        )
+
+    combos = []
+    for mode, direction, supernode, kappa in itertools.product(modes, directions, supernodes, kappas):
+        if args.func_var_edges is not None:
+            fve_values = [args.func_var_edges]
         else:
-            visualize_graph(G, str(filepath), fmt, args.layout)
+            # The real pipeline only adds these edges in graph mode; enumerate
+            # both there, and keep them off for tree / tree_derivatives.
+            fve_values = [False, True] if mode == "graph" else [False]
+        for fve in fve_values:
+            combos.append((mode, direction, supernode, kappa, fve))
+
+    print(f"[Visualizer] Rendering {len(combos)} configuration(s) for graph "
+          f"'{args.graph_id}' into '{args.output_dir}/graph_{args.graph_id}/' ...")
+
+    rendered = skipped = 0
+    for mode, direction, supernode, kappa, fve in combos:
+        try:
+            ok = render_combination(
+                loader, args.graph_id, mode, direction, supernode, kappa, fve,
+                formats, args.output_dir, args.layout, resolved_kappa,
+            )
+            rendered += int(ok)
+            skipped += int(not ok)
+        except Exception as exc:  # keep going through the rest of the matrix
+            skipped += 1
+            print(f"[Visualizer] FAILED mode={mode} dir={direction} sn={supernode} "
+                  f"kappa={kappa} fve={fve}: {exc}")
+
+    print(f"[Visualizer] Done. Rendered {rendered}, skipped {skipped}.")
 
 
 if __name__ == "__main__":
