@@ -70,13 +70,8 @@ def resolve_edge_dim() -> int:
 
 
 def get_batch_edge_attr(batch):
-    """Return edge attributes for a PyG batch; edge_attr is always required."""
-    edge_attr = getattr(batch, "edge_attr", None)
-    if edge_attr is None:
-        raise ValueError(
-            "edge_attr is required on every graph batch, but edge_attr is missing"
-        )
-    return edge_attr
+    """Return edge attributes for a PyG batch, or None for homogeneous graphs."""
+    return getattr(batch, "edge_attr", None)
 
 
 def bootstrap_graphgym_cfg(config_path: Path | str, seed: int | None = None):
@@ -138,6 +133,7 @@ def apply_expression_graph_overrides(
     edge_direction: str | None = None,
     heterogeneous: bool | None = None,
     add_kappa: bool | None = None,
+    add_virtual_supernode: bool | None = None,
 ) -> FeatureSelection:
     """Apply CLI overrides onto a loaded GraphGym cfg."""
     if mode is not None:
@@ -167,6 +163,8 @@ def apply_expression_graph_overrides(
         cfg.expression_graph.heterogeneous = heterogeneous
     if add_kappa is not None:
         cfg.expression_graph.add_kappa = add_kappa
+    if add_virtual_supernode is not None:
+        cfg.expression_graph.add_virtual_supernode = add_virtual_supernode
     return selection
 
 
@@ -198,6 +196,9 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
             expression_graph.get("edge_direction", "top_down")
         ),
         "add_kappa": bool(expression_graph.get("add_kappa", False)),
+        "add_virtual_supernode": bool(
+            expression_graph.get("add_virtual_supernode", False)
+        ),
         "layer_type": layer_type,
         "architecture": architecture_from_layer_type(layer_type),
         "edge_dim": resolve_edge_dim(),

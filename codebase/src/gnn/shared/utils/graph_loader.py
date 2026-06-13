@@ -31,6 +31,7 @@ class GraphDataLoader:
         edge_direction: str = "top_down",
         kappas_dir: Union[Path, str, None] = None,
         add_kappa: bool = False,
+        add_virtual_supernode: bool = False,
     ):
         self.name = name
         self.mode = mode
@@ -38,6 +39,7 @@ class GraphDataLoader:
         self.is_synthetic = is_synthetic
         self.edge_direction = validate_edge_direction(edge_direction)
         self.add_kappa = add_kappa
+        self.add_virtual_supernode = add_virtual_supernode
         self.converter = ExpressionGraphConverter()
 
         # Resolve the source path (root graphs vs legacy fallbacks)
@@ -222,7 +224,10 @@ class GraphDataLoader:
         # Check disk cache
         # Clean graph_id to prevent path issues
         clean_gid = "".join(c for c in gid_str if c.isalnum() or c in ('_', '-'))
-        suffix = "_augmented.pt" if use_augmented else ".pt"
+        # The supernode marker is part of the cache key so supernode-augmented graphs
+        # never collide with their plain counterparts on disk.
+        sn_marker = "_sn" if self.add_virtual_supernode else ""
+        suffix = f"{sn_marker}_augmented.pt" if use_augmented else f"{sn_marker}.pt"
         cache_file = self.cache_dir / (
             f"{clean_gid}_{self.mode}_"
             f"{self.heterogeneous}_{self.edge_direction}{suffix}"
@@ -249,6 +254,7 @@ class GraphDataLoader:
                 heterogeneous=self.heterogeneous,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
+                add_virtual_supernode=self.add_virtual_supernode,
             )
         else:
             # Retrieve and parse raw data
@@ -265,6 +271,7 @@ class GraphDataLoader:
                 heterogeneous=self.heterogeneous,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
+                add_virtual_supernode=self.add_virtual_supernode,
             )
 
         # Save to disk cache

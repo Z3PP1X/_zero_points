@@ -431,7 +431,7 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.features = CN()
     # Uniform flat per-category form: each leaf defaults to None ("all members").
     # YAML may override with a bool (true/false) or a list subset, e.g.
-    #   node: [node_type, value]   topology: false   positional: [lpe]
+    #   node: [node_type, value]   topology: false   positional: [anchor_periodic]
     # None defaults are required so YACS accepts either a bool or a list override.
     cfg.expression_graph.features.node = None
     cfg.expression_graph.features.topology = None
@@ -443,6 +443,7 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
     cfg.expression_graph.heterogeneous = False  # heterogeneous or homogeneous graph representation
     cfg.expression_graph.add_kappa = False  # merge kappa (h-function) subgraphs from datasets/kappas/
+    cfg.expression_graph.add_virtual_supernode = False  # add a fully-connected virtual supernode
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
     # Resolved ordered node-feature names, stashed by the loader so the custom
     # ExpressionClassifierNetwork (built later by create_model) can locate categorical
@@ -519,6 +520,9 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     )
     heterogeneous = getattr(cfg.expression_graph, "heterogeneous", False)
     add_kappa = getattr(cfg.expression_graph, "add_kappa", False)
+    add_virtual_supernode = getattr(
+        cfg.expression_graph, "add_virtual_supernode", False
+    )
 
     feature_selection, active_features = resolve_expression_graph_features(
         {
@@ -526,6 +530,10 @@ def load_custom_expression_graphs(format, name, dataset_dir):
             "active_features": getattr(cfg.expression_graph, "active_features", ""),
         },
     )
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
+
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
     # Expose the resolved ordered node-feature names so the custom
     # ExpressionClassifierNetwork (built later by create_model) can locate categorical
     # columns BY NAME. Empty list => the network falls back to the full node schema.
@@ -553,6 +561,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
     print(f"  Injected Heterogeneous:  {heterogeneous}")
     print(f"  Injected Add Kappa:      {add_kappa}")
+    print(f"  Injected Add Supernode:  {add_virtual_supernode}")
     print(f"  Injected Feature Groups: {feature_selection.enabled_groups()}")
     print(f"  Injected Positional:     {list(feature_selection.positional_encodings)}")
     print(f"  Injected Features:       {feature_selection.summary()}")
@@ -566,6 +575,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         heterogeneous=heterogeneous,
         edge_direction=edge_direction,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
 
     pipeline = GraphPipeline(
@@ -577,6 +587,7 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
         layer_type=layer_type,
         heterogeneous=heterogeneous,
     )

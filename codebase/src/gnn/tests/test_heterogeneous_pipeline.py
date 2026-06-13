@@ -63,29 +63,18 @@ def test_heterogeneous_converter_shapes_and_types():
     
     # 1. Integrity Check
     assert isinstance(data, HeteroData)
-    assert set(data.node_types) == {"operator", "variable", "constant", "virtual"}
-    
-    # 2. Shape & Dimension Verification
-    # Operators: Plus (from f), 1 (d1 is constant, 0 is constant). Wait, Plus is the only operator!
-    # Let's count variable: x (1)
-    # Constants: 5 (from f), 1 (from d1), 0 (from d2).
-    # Virtuals: global, f_root, d1_root, d2_root (4 nodes; task virtual nodes removed)
-    # Operator/variable feature dim = integer label_id (1) + 5 topology + 8 (lpe/rwpe).
-    # One-hot label encoding removed; the model embeds the integer label_id.
-    assert data["operator"].x.shape[1] == 14
-    assert data["variable"].x.shape[1] == 14
-    # Constant feature = raw value only (fourier encoding removed).
-    assert data["constant"].x.shape[1] == 1
-    assert data["virtual"].x.shape[1] == 7
+    # New node types: global (1), root (f_1, d1_1, d2_1 = 3), operator (f_2=x, f_3=5 = 2)
+    assert set(data.node_types) == {"global", "operator", "root"}
 
-    # Verify constant feature is the RAW value (no signed-log, no fourier).
-    c_val = 5.0
-    found = False
-    for idx in range(data["constant"].x.shape[0]):
-        val = data["constant"].x[idx, 0].item()
-        if abs(val - c_val) < 1e-5:
-            found = True
-    assert found, "Constant with value 5.0 not found or mismatch in feature encoding"
+    # 2. Shape & Dimension Verification — all types share the same 16-feature schema
+    n_feats = 16  # len(NODE_FEATURE_SCHEMA)
+    assert data["global"].x.shape == (1, n_feats)
+    assert data["root"].x.shape == (3, n_feats)    # f_1, d1_1, d2_1
+    assert data["operator"].x.shape == (2, n_feats)  # f_2 (x), f_3 (5)
+
+    # Root nodes have root_color > 0 (encoded at feature index 1)
+    root_colors = data["root"].x[:, 1].tolist()
+    assert all(c > 0 for c in root_colors), "All root nodes must have non-zero root_color"
 
 
 def test_heterogeneous_local_index_boundaries():
@@ -127,47 +116,24 @@ def test_heterogeneous_state_injection():
 
     converter = ExpressionGraphConverter()
     data = converter.convert(raw_container, heterogeneous=True, mode="graph")
-    
-    # Keep copy of variable, constant, and operator feature matrix
+
+    # Keep copies to verify populate_task_virtual_values is a no-op
     op_x_orig = data["operator"].x.clone()
-    var_x_orig = data["variable"].x.clone()
-    const_x_orig = data["constant"].x.clone()
-    
-    # Inject values
-    cx = 2.5
-    fx = 4.7
-    yt = 1.2
-    d1x = 0.5
-    d2x = 9.9
-    
+    root_x_orig = data["root"].x.clone()
+
     populate_task_virtual_values(
         data,
-        cx_val=cx,
-        fx_val=fx,
-        yt_val=yt,
-        d1x_val=d1x,
-        d2x_val=d2x,
+        cx_val=2.5,
+        fx_val=4.7,
+        yt_val=1.2,
+        d1x_val=0.5,
+        d2x_val=9.9,
         mode="graph",
     )
-    
-    # Verify that virtual node feature values are injected correctly in data['virtual'].x
-    v_ids = data["virtual"].node_ids
-    
-    idx_f_root = v_ids.index("f_root")
-    idx_d1_root = v_ids.index("d1_root")
-    idx_d2_root = v_ids.index("d2_root")
-    
-    delta_val = yt - fx
-    # Virtual values are written RAW now (signed_log removed).
-    assert data["virtual"].x[idx_f_root, 0].item() == pytest.approx(cx)
-    assert data["virtual"].x[idx_f_root, 1].item() == pytest.approx(delta_val)
-    assert data["virtual"].x[idx_d1_root, 2].item() == pytest.approx(d1x)
-    assert data["virtual"].x[idx_d2_root, 3].item() == pytest.approx(d2x)
-    
-    # Ensure static AST nodes are NOT mutated
+
+    # Task-value embedding has been removed from the schema; call is a no-op.
     assert torch.allclose(data["operator"].x, op_x_orig)
-    assert torch.allclose(data["variable"].x, var_x_orig)
-    assert torch.allclose(data["constant"].x, const_x_orig)
+    assert torch.allclose(data["root"].x, root_x_orig)
 
 
 def test_regression_homogeneous_mode():
@@ -182,9 +148,9 @@ def test_regression_homogeneous_mode():
 
     converter = ExpressionGraphConverter()
     data = converter.convert(raw_container, heterogeneous=False, mode="graph")
-    
-    # Ensure legacy homogeneous structure is correct and contains 9 nodes (no task virtual nodes)
-    assert data.num_nodes == 9
+
+    # 6 nodes: global + f_1/f_2/f_3 + d1_1 + d2_1 (no aggregator nodes)
+    assert data.num_nodes == 6
     assert not isinstance(data, HeteroData)
-    assert data.x.shape[1] == 24
+    assert data.x.shape[1] == 16  # 16 node features (new position-aware schema)
     assert hasattr(data, "node_ids")

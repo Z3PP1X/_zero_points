@@ -30,6 +30,7 @@ from gnn.supervised_learning.supervised_config import (
     resolve_edge_dim,
     validate_layer_type,
 )
+from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.supervised_learning.loader_graphgym import (
     compute_binary_metrics,
     configure_class_weights,
@@ -257,6 +258,7 @@ def main(
     edge_direction: str = "top_down",
     heterogeneous: bool = False,
     add_kappa: bool = False,
+    add_virtual_supernode: bool = False,
 ):
     seed = DEFAULT_SEED
     cfg = bootstrap_graphgym_cfg(config_path, seed=seed)
@@ -274,7 +276,10 @@ def main(
         edge_direction=edge_direction,
         heterogeneous=heterogeneous,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
+    # Anchor positional encoding and the fully-connected supernode are mutually exclusive.
+    validate_positional_supernode_compatibility(feature_selection, add_virtual_supernode)
     resolved_active_features = (
         None
         if not cfg.expression_graph.active_features
@@ -302,6 +307,7 @@ def main(
         heterogeneous=heterogeneous,
         edge_direction=edge_direction,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
 
     pipeline = GraphPipeline(
@@ -315,6 +321,7 @@ def main(
         layer_type=layer_type,
         heterogeneous=heterogeneous,
         add_kappa=add_kappa,
+        add_virtual_supernode=add_virtual_supernode,
     )
 
     train_loader, val_loader, class_weights = pipeline.pipe(
@@ -650,6 +657,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Merge kappa (h-function) subgraphs from datasets/kappas/ into each graph.",
     )
+    parser.add_argument(
+        "--add-virtual-supernode",
+        action="store_true",
+        help=(
+            "Add a fully-connected virtual supernode (bidirectional edges to every node) "
+            "to shorten message-passing paths across the graph."
+        ),
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -667,6 +682,24 @@ if __name__ == "__main__":
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
     heterogeneous = args.heterogeneous or settings["heterogeneous"]
     add_kappa = args.add_kappa or settings["add_kappa"]
+    add_virtual_supernode = (
+        args.add_virtual_supernode or settings["add_virtual_supernode"]
+    )
+
+    # Fail fast (outside the data-loading try/except below, which only logs) if anchor
+    # positional encoding is requested together with the fully-connected supernode.
+    from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
+
+    _guard_selection, _ = resolve_expression_graph_features(
+        load_yaml_config(config_path).get("expression_graph"),
+        feature_groups=args.feature_groups,
+        node_features=args.node_features,
+        topology_features=args.topology_features,
+        positional_encoding=args.positional_encoding,
+        edge_features=args.edge_features,
+        active_features=args.active_features,
+    )
+    validate_positional_supernode_compatibility(_guard_selection, add_virtual_supernode)
 
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
@@ -677,6 +710,7 @@ if __name__ == "__main__":
             heterogeneous=heterogeneous,
             edge_direction=edge_direction,
             add_kappa=add_kappa,
+            add_virtual_supernode=add_virtual_supernode,
         )
         print("Curated dataset loaded successfully!")
         print(loader.data.tail())
@@ -692,6 +726,7 @@ if __name__ == "__main__":
                 heterogeneous=heterogeneous,
                 edge_direction=edge_direction,
                 add_kappa=add_kappa,
+                add_virtual_supernode=add_virtual_supernode,
             )
             print("Synthetic dataset loaded successfully!")
             print(synth_loader.data.tail())
@@ -734,6 +769,7 @@ if __name__ == "__main__":
                 edge_direction=edge_direction,
                 heterogeneous=heterogeneous,
                 add_kappa=add_kappa,
+                add_virtual_supernode=add_virtual_supernode,
             )
         except Exception as e:
             print(

@@ -56,10 +56,11 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     features_dict = {
         "node": True,
         "topology": True,
-        "positional": ["lpe"],  # lpe only (4 features), no rwpe (4 features)
+        # one anchor group only -> the other 4 anchor columns are dropped
+        "positional": ["anchor_periodic"],
         "edge": True
     }
-    
+
     cfg.expression_graph.features = features_dict
     cfg.expression_graph.items = lambda: [
         ("enrich", True),
@@ -68,7 +69,8 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     ]
 
     feature_names = resolve_feature_names(cfg)
-    # Total enriched schema has 24 features. Since rwpe (4 features) is disabled, it should resolve to 20 features.
-    assert len(feature_names) == 20
-    assert "lpe_1" in feature_names
-    assert "rwpe_1" not in feature_names
+    # New schema: 2 node + 9 topology + 5 anchor PE = 16 features.
+    # Selecting a single anchor group drops the other 4, leaving 12.
+    assert len(feature_names) == 12
+    assert "anchor_periodic" in feature_names
+    assert "anchor_additive" not in feature_names

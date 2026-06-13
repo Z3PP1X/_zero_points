@@ -23,6 +23,7 @@ expression_graph:
   mode: graph
   edge_direction: top_down  # top_down | bottom_up | bidirectional
   add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
+  add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
   synthetic: True
   synthetic_dataset: run_20260604_154509/parallel_benchmark_results
 
@@ -34,7 +35,10 @@ expression_graph:
   features:
     node: true        # or e.g. [node_type, label_id, value, has_value, virtual_current_x_val, ...]
     topology: true    # or e.g. [depth, height, subtree_size, out_degree, betweenness_centrality]
-    positional: [lpe, rwpe]  # lpe = Laplacian PE, rwpe = random-walk PE (true = both, false = none)
+    # Anchor positional encoding: 1/(1+hops) to nearest operator anchor per semantic group.
+    # Members: anchor_additive, anchor_scaling, anchor_periodic, anchor_exponential,
+    # anchor_transcendental. true = all, false = none. INCOMPATIBLE with add_virtual_supernode.
+    positional: true
     edge: true        # child_index, direction, relation_type, edge_betweenness_centrality
                       # (edge: a subset is accepted but currently enables all edge columns)
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from gnn.reinforcement_learning.rl_config import load_yaml_config, read_rl_settings
+from gnn.shared.utils.graph_utils import ANCHOR_GROUP_FEATURES
 
 
 def test_read_rl_settings_includes_edge_direction():
@@ -10,4 +11,4 @@ def test_read_rl_settings_includes_edge_direction():
     assert settings["mode"] == "graph"
     assert settings["experiment"] == "nur_f"
     assert settings["active_features"] is None
-    assert settings["feature_selection"].positional_encodings == ("lpe", "rwpe")
+    assert settings["feature_selection"].positional_encodings == ANCHOR_GROUP_FEATURES

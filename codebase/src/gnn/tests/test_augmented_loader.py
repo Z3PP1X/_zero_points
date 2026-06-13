@@ -110,9 +110,10 @@ def test_augmented_function_graph_merge_disjoint(sample_kappa_dict):
 
     # Check that attributes on merged nodes are normalized
     root_attrs = aug.nodes["kappa_1_k_root"]
-    assert root_attrs["type"] == "function"
+    # Kappa root is marked as "root" type with root_color=4 (kappa)
+    assert root_attrs["type"] == "root"
     assert root_attrs["label"] == "Log"
-    assert "virtual_current_x_val" in root_attrs
+    assert root_attrs["root_color"] == 4.0   # ROOT_COLOR_VOCAB["kappa"] = 4
 
     # Check that edges were correctly added with shifted IDs
     assert aug.has_edge("kappa_1_k_root", "kappa_1_k_var")
@@ -131,7 +132,7 @@ def test_augmented_function_graph_merge_graphml(sample_kappa_graphml):
     assert aug.has_edge("kappa_1_1", "kappa_1_2")
 
     root_attrs = aug.nodes["kappa_1_1"]
-    assert root_attrs["type"] == "function"
+    assert root_attrs["type"] == "root"
     assert root_attrs["label"] == "Log"
 
 
