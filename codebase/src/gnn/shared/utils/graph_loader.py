@@ -294,6 +294,9 @@ class GraphDataLoader:
         """
         result = {}
         for gid in self._raw_sources.keys():
-            kv = kappa_map.get(gid) if kappa_map else None
+            # In selective mode (a map was supplied) a graph with no kappa entry
+            # gets NO h-function (default 0.0 -> not in the kappa file -> no merge),
+            # matching a kappa=0 row. Only the no-map case falls back to merging all.
+            kv = kappa_map.get(gid, 0.0) if kappa_map else None
             result[gid] = self.get_graph(gid, kappa_value=kv)
         return result
