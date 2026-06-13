@@ -1417,6 +1417,106 @@ def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tenso
 # Augmented Graph Dataloader Enhancement (kappa h-functions integration)
 # ==============================================================================
 
+# Module-level cache: resolved kappas folder path -> list of (kappa_value, root_id, normalized_graph).
+# Populated once on the first call to _load_normalized_kappas(); all subsequent graph loads reuse it.
+_kappa_graph_cache: dict[str, list[tuple[float, str, nx.DiGraph]]] = {}
+
+
+def _parse_kappa_raw(raw) -> nx.DiGraph:
+    """Parse a raw kappa subgraph (GraphML str, dict, or DiGraph) into a bare nx.DiGraph."""
+    if isinstance(raw, str):
+        content = raw.replace("attr.type='String'", "attr.type='string'")
+        content = content.replace('attr.type="String"', 'attr.type="string"')
+        return nx.parse_graphml(content)
+    if isinstance(raw, nx.DiGraph):
+        return raw
+    if isinstance(raw, dict):
+        g = nx.DiGraph()
+        for node in raw.get("nodes", []):
+            g.add_node(node["id"], **node)
+        for edge in raw.get("edges", []):
+            g.add_edge(edge["source"], edge["target"], **edge)
+        return g
+    raise TypeError(f"Unsupported kappa subgraph type: {type(raw)}")
+
+
+def _normalize_kappa_graph(g_raw: nx.DiGraph) -> tuple:
+    """Normalize a raw kappa DiGraph, identify its root, and pre-mark root attributes.
+
+    Returns:
+        (original_root_id, normalized_nx.DiGraph) or (None, empty DiGraph) if the
+        subgraph is empty.  The root node already has node_type/root_color/type set
+        to the kappa-root values so the per-graph copy loop needs no special case.
+    """
+    normalized = nx.DiGraph()
+    for nid, attrs in g_raw.nodes(data=True):
+        name_val = attrs.get("Name") or attrs.get("nodeKey1") or attrs.get("label") or str(nid)
+        label = parse_graphml_node_name(name_val) if isinstance(name_val, str) else str(name_val)
+        type_str = attrs.get("type") or _determine_node_type_from_label(label)
+        ntype_code = ExpressionGraphConverter.NODE_TYPES.get(type_str, 1)
+        normalized.add_node(
+            nid,
+            node_type=ntype_code,
+            root_color=float(ROOT_COLOR_VOCAB["none"]),
+            label_id=encode_label(label),
+            label=label,
+            type=type_str,
+        )
+    for u, v, attrs in g_raw.edges(data=True):
+        etype = attrs.get("type") or attrs.get("etype") or "child_of"
+        normalized.add_edge(u, v, edge_type=encode_edge_type(etype), etype=etype)
+
+    roots = [n for n, d in normalized.in_degree() if d == 0]
+    original_root = roots[0] if roots else (list(normalized.nodes)[0] if normalized.nodes else None)
+
+    if original_root is not None:
+        normalized.nodes[original_root]["node_type"] = ExpressionGraphConverter.NODE_TYPES["root"]
+        normalized.nodes[original_root]["root_color"] = float(ROOT_COLOR_VOCAB["kappa"])
+        normalized.nodes[original_root]["type"] = "root"
+
+    return original_root, normalized
+
+
+def _load_normalized_kappas(kappas_path: Path) -> list:
+    """Return pre-parsed, pre-normalized kappa entries for *kappas_path*.
+
+    The result is computed once per unique folder and then stored in
+    ``_kappa_graph_cache`` so every subsequent call is an O(1) dict lookup.
+
+    Returns:
+        list of (kappa_value: float, root_id: str, normalized: nx.DiGraph)
+    """
+    key = str(kappas_path.resolve())
+    if key in _kappa_graph_cache:
+        return _kappa_graph_cache[key]
+
+    entries = []
+    for file_path in sorted(kappas_path.glob("**/*.json")):
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                data = json.load(f)
+            containers = data if isinstance(data, list) else [data]
+            for kc in containers:
+                if not isinstance(kc, dict) or kc.get("id") != "kappa":
+                    continue
+                try:
+                    kappa_val = float(kc.get("value", 0.0))
+                except (ValueError, TypeError):
+                    kappa_val = 0.0
+                raw_subgraph = kc.get("graphStructure") or kc.get("graphml_h")
+                if not raw_subgraph:
+                    continue
+                g_raw = _parse_kappa_raw(raw_subgraph)
+                original_root, normalized = _normalize_kappa_graph(g_raw)
+                if original_root is None:
+                    continue
+                entries.append((kappa_val, original_root, normalized))
+        except Exception as e:
+            logger.warning(f"Error loading kappa file {file_path}: {e}")
+
+    _kappa_graph_cache[key] = entries
+    return entries
+
 
 class KappaEdge:
     """Represents a connection between the global node and a kappa root node.
@@ -1618,6 +1718,29 @@ class AugmentedFunctionGraph(nx.DiGraph):
 
         return shifted_root_id
 
+    def MergePrenormalizedSubgraph(self, original_root: str, normalized: nx.DiGraph) -> str:
+        """Fast merge path for pre-normalized kappa subgraphs.
+
+        Skips GraphML parsing and node normalization — only does the cheap
+        copy+prefix step.  Call this with results from _load_normalized_kappas()
+        instead of MergeDisjointSubgraph() when the kappa graphs are static.
+
+        Arguments:
+            original_root: The root node ID in *normalized* (no prefix yet).
+            normalized: A pre-normalized nx.DiGraph whose root node already has
+                node_type/root_color/type set to kappa-root values.
+
+        Returns:
+            str: The prefixed root node ID in the merged graph.
+        """
+        self.subgraph_counter += 1
+        prefix = f"kappa_{self.subgraph_counter}"
+        for nid, attrs in normalized.nodes(data=True):
+            self.add_node(f"{prefix}_{nid}", **dict(attrs))
+        for u, v, attrs in normalized.edges(data=True):
+            self.add_edge(f"{prefix}_{u}", f"{prefix}_{v}", **attrs)
+        return f"{prefix}_{original_root}"
+
     def AddEdge(self, edge: KappaEdge) -> None:
         """Adds a KappaEdge connection between the global node and a kappa root node.
 
@@ -1784,62 +1907,28 @@ def LoadAugmentedFunctionGraph(
     if not kappas_path.exists():
         raise FileNotFoundError(f"Kappas folder not found: {kappasFolder}")
 
-    kappa_files = list(kappas_path.glob("**/*.json"))
+    # Kappa subgraphs are static across all main graphs — parse and normalize once,
+    # then reuse the cached result for every subsequent call.
+    kappa_entries = _load_normalized_kappas(kappas_path)
 
-    for file_path in kappa_files:
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+    for kappaValue, original_root, normalized in kappa_entries:
+        kappaRootNodeId = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
 
-            if isinstance(data, list):
-                containers = data
-            elif isinstance(data, dict):
-                containers = [data]
-            else:
-                continue
+        # Tag all nodes in this merged kappa subgraph with their kappa value
+        prefix_parts = kappaRootNodeId.split("_")
+        if len(prefix_parts) >= 2:
+            prefix_str = f"{prefix_parts[0]}_{prefix_parts[1]}"
+            for node in mainGraph.nodes:
+                if str(node).startswith(prefix_str + "_"):
+                    mainGraph.nodes[node]["kappa_value"] = kappaValue
 
-            for kappaContainer in containers:
-                if not isinstance(kappaContainer, dict):
-                    continue
+        newEdge = KappaEdge(source=globalNode, target=kappaRootNodeId, type="GlobalToKappa")
+        newEdge.features["weight"] = kappaValue
+        mainGraph.AddEdge(newEdge)
 
-                if kappaContainer.get("id") == "kappa":
-                    kappa_val_raw = kappaContainer.get("value")
-                    try:
-                        kappaValue = float(kappa_val_raw)
-                    except (ValueError, TypeError):
-                        kappaValue = 0.0
-
-                    kappaSubgraph = kappaContainer.get("graphStructure") or kappaContainer.get("graphml_h")
-                    if not kappaSubgraph:
-                        continue
-
-                    kappaRootNodeId = mainGraph.MergeDisjointSubgraph(kappaSubgraph)
-
-                    # Tag all nodes in this merged kappa subgraph with their kappa value
-                    prefix_parts = kappaRootNodeId.split("_")
-                    if len(prefix_parts) >= 2:
-                        prefix_str = f"{prefix_parts[0]}_{prefix_parts[1]}"
-                        for node in mainGraph.nodes:
-                            if str(node).startswith(prefix_str + "_"):
-                                mainGraph.nodes[node]["kappa_value"] = kappaValue
-
-                    newEdge = KappaEdge(
-                        source=globalNode,
-                        target=kappaRootNodeId,
-                        type="GlobalToKappa"
-                    )
-                    newEdge.features["weight"] = kappaValue
-                    mainGraph.AddEdge(newEdge)
-
-                    backwardEdge = KappaEdge(
-                        source=kappaRootNodeId,
-                        target=globalNode,
-                        type="KappaToGlobal"
-                    )
-                    backwardEdge.features["weight"] = kappaValue
-                    mainGraph.AddEdge(backwardEdge)
-        except Exception as e:
-            logger.warning(f"Error reading or processing kappa file {file_path}: {e}")
+        backwardEdge = KappaEdge(source=kappaRootNodeId, target=globalNode, type="KappaToGlobal")
+        backwardEdge.features["weight"] = kappaValue
+        mainGraph.AddEdge(backwardEdge)
 
     return mainGraph
 
