@@ -429,4 +429,44 @@ Previously these axes were reachable only through `TestGraphNetwork` / the RL ba
 - `supervised_learning/main_graphgym.py` (`_register_mp_hook` guard)
 - `supervised_learning/config_supervised.yaml`, `grid.yaml`
 
+---
+
+## 16. Early Stopping in the GraphGym Workflow
+
+The custom Lightning trainer (`train_with_best_ckpt`) now supports **opt-in early
+stopping** on the per-epoch validation metrics, so runs that stagnate or decline stop
+instead of burning the full `train.epochs` budget.
+
+### 16.1 Behaviour
+- A `pl.callbacks.EarlyStopping` callback is added alongside the existing
+  `ModelCheckpoint` when `cfg.train.early_stopping` is true.
+- Monitors one of the metrics `ValMetricLogger` logs every validation epoch:
+  `val_pr_auc` (mode `max`, default) or `val_loss` (mode `min`). The mode is derived
+  automatically; an unsupported monitor raises a clear `ValueError`. The curated-holdout
+  metrics are logged only on a schedule and are intentionally **not** monitorable (they
+  would intermittently vanish from `callback_metrics` and break the callback).
+- **Validation runs every epoch** in this custom path (the `pl.Trainer` uses Lightning's
+  default `check_val_every_n_epoch=1`; `cfg.train.eval_period` is not wired here and only
+  affects GraphGym's stock `train()`). So `patience` is counted **in epochs** — patience
+  `N` means `N` epochs without improvement. A stale comment claiming "validation runs
+  every eval_period epochs" was corrected.
+
+### 16.2 Config
+```yaml
+train:
+  early_stopping: false           # opt-in master switch
+  early_stopping_monitor: val_pr_auc  # val_pr_auc (max) | val_loss (min)
+  early_stopping_patience: 10     # epochs without improvement before stopping
+  early_stopping_min_delta: 0.0   # min change that counts as an improvement
+```
+Defaults registered in `loader_graphgym.py:set_custom_cfg`. The best checkpoint is still
+selected by `val_pr_auc` (max) independent of which metric drives early stopping, so the
+final curated test always loads the peak model rather than the last (possibly stopped)
+epoch.
+
+**Modified files:**
+- `supervised_learning/main_graphgym.py` (`_build_early_stopping_callback`, callback wiring,
+  comment fix)
+- `supervised_learning/loader_graphgym.py` (`set_custom_cfg` early-stopping cfg fields)
+- `supervised_learning/config_supervised.yaml`
 

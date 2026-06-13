@@ -341,6 +341,37 @@ class ValMetricLogger(pl.callbacks.Callback):
         self._val_data = {}
 
 
+# Validation metrics ValMetricLogger logs every epoch, with the direction that counts
+# as "better". Only these are safe to monitor for early stopping; the curated-holdout
+# metrics are logged on a schedule and would intermittently vanish from callback_metrics.
+_EARLY_STOPPING_MONITORS = {"val_pr_auc": "max", "val_loss": "min"}
+
+
+def _build_early_stopping_callback() -> "pl.callbacks.EarlyStopping":
+    """Construct the EarlyStopping callback from cfg.train.early_stopping_* settings."""
+    monitor = str(getattr(cfg.train, "early_stopping_monitor", "val_pr_auc"))
+    if monitor not in _EARLY_STOPPING_MONITORS:
+        raise ValueError(
+            f"cfg.train.early_stopping_monitor must be one of "
+            f"{sorted(_EARLY_STOPPING_MONITORS)} (metrics logged every validation "
+            f"epoch); got {monitor!r}"
+        )
+    mode = _EARLY_STOPPING_MONITORS[monitor]
+    patience = int(getattr(cfg.train, "early_stopping_patience", 10))
+    min_delta = float(getattr(cfg.train, "early_stopping_min_delta", 0.0))
+    print(
+        f"[GraphGym] Early stopping ENABLED: monitor={monitor} (mode={mode}), "
+        f"patience={patience} epochs, min_delta={min_delta}"
+    )
+    return pl.callbacks.EarlyStopping(
+        monitor=monitor,
+        mode=mode,
+        patience=patience,
+        min_delta=min_delta,
+        verbose=True,
+    )
+
+
 def train_with_best_ckpt(model, datamodule, logger=True):
     """
     Custom training function that replaces PyG's built-in train().
@@ -375,6 +406,11 @@ def train_with_best_ckpt(model, datamodule, logger=True):
         )
         callbacks.append(ckpt_cbk)
     
+    # 4. EarlyStopping (opt-in) — stops when the monitored validation metric stops
+    #    improving. Validation runs every epoch in this path, so patience is in epochs.
+    if getattr(cfg.train, "early_stopping", False):
+        callbacks.append(_build_early_stopping_callback())
+
     curated_loader = None
     if cfg.expression_graph.synthetic and len(datamodule.loaders) >= 3:
         curated_loader = datamodule.loaders[2]
@@ -394,8 +430,9 @@ def train_with_best_ckpt(model, datamodule, logger=True):
         accelerator=cfg.accelerator,
         devices='auto' if not torch.cuda.is_available() else cfg.devices,
     )
-    
-    # Train the model (validation runs every eval_period epochs on unseen synthetic data)
+
+    # Train the model (validation runs every epoch on unseen synthetic data; the
+    # ModelCheckpoint/EarlyStopping callbacks consume those per-epoch val metrics).
     trainer.fit(model, datamodule=datamodule)
     
     # Test using the BEST checkpoint (by val_pr_auc), not the last epoch

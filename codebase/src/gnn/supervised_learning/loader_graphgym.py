@@ -459,6 +459,15 @@ def set_custom_cfg(cfg):
     cfg.train.curated_eval_period = 5
     cfg.train.curated_eval_on_test_highscore = True
     cfg.train.num_workers = 0
+    # Early stopping (opt-in). Validation runs every epoch in this custom Lightning
+    # path, so patience is counted in epochs. Monitored metric must be one always
+    # logged by ValMetricLogger every validation epoch: val_pr_auc (mode max) or
+    # val_loss (mode min) — the curated-holdout metrics are logged only on a schedule
+    # and would break EarlyStopping.
+    cfg.train.early_stopping = False          # master switch
+    cfg.train.early_stopping_monitor = "val_pr_auc"  # val_pr_auc | val_loss
+    cfg.train.early_stopping_patience = 10    # epochs without improvement before stopping
+    cfg.train.early_stopping_min_delta = 0.0  # min change that counts as an improvement
     cfg.params = 0
 
 
