@@ -1417,9 +1417,9 @@ def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tenso
 # Augmented Graph Dataloader Enhancement (kappa h-functions integration)
 # ==============================================================================
 
-# Module-level cache: resolved kappas folder path -> list of (kappa_value, root_id, normalized_graph).
+# Module-level cache: resolved kappas folder path -> {kappa_value: (root_id, normalized_graph)}.
 # Populated once on the first call to _load_normalized_kappas(); all subsequent graph loads reuse it.
-_kappa_graph_cache: dict[str, list[tuple[float, str, nx.DiGraph]]] = {}
+_kappa_graph_cache: dict[str, dict[float, tuple]] = {}
 
 
 def _parse_kappa_raw(raw) -> nx.DiGraph:
@@ -1477,20 +1477,18 @@ def _normalize_kappa_graph(g_raw: nx.DiGraph) -> tuple:
     return original_root, normalized
 
 
-def _load_normalized_kappas(kappas_path: Path) -> list:
-    """Return pre-parsed, pre-normalized kappa entries for *kappas_path*.
+def _load_normalized_kappas(kappas_path: Path) -> dict:
+    """Return {kappa_value: (root_id, normalized_graph)} for all entries in *kappas_path*.
 
     The result is computed once per unique folder and then stored in
     ``_kappa_graph_cache`` so every subsequent call is an O(1) dict lookup.
-
-    Returns:
-        list of (kappa_value: float, root_id: str, normalized: nx.DiGraph)
+    The dict key enables a single O(1) lookup when only one kappa is needed.
     """
     key = str(kappas_path.resolve())
     if key in _kappa_graph_cache:
         return _kappa_graph_cache[key]
 
-    entries = []
+    entries: dict[float, tuple] = {}
     for file_path in sorted(kappas_path.glob("**/*.json")):
         try:
             with open(file_path, encoding="utf-8") as f:
@@ -1510,12 +1508,32 @@ def _load_normalized_kappas(kappas_path: Path) -> list:
                 original_root, normalized = _normalize_kappa_graph(g_raw)
                 if original_root is None:
                     continue
-                entries.append((kappa_val, original_root, normalized))
+                entries[kappa_val] = (original_root, normalized)
         except Exception as e:
             logger.warning(f"Error loading kappa file {file_path}: {e}")
 
     _kappa_graph_cache[key] = entries
     return entries
+
+
+def _tag_and_connect_kappa(
+    graph: "AugmentedFunctionGraph", global_node: str, kappa_root_id: str, kappa_val: float
+) -> None:
+    """Tag merged kappa nodes with their value and wire global↔kappa edges."""
+    prefix_parts = kappa_root_id.split("_")
+    if len(prefix_parts) >= 2:
+        prefix_str = f"{prefix_parts[0]}_{prefix_parts[1]}"
+        for node in graph.nodes:
+            if str(node).startswith(prefix_str + "_"):
+                graph.nodes[node]["kappa_value"] = kappa_val
+
+    fwd = KappaEdge(source=global_node, target=kappa_root_id, type="GlobalToKappa")
+    fwd.features["weight"] = kappa_val
+    graph.AddEdge(fwd)
+
+    bwd = KappaEdge(source=kappa_root_id, target=global_node, type="KappaToGlobal")
+    bwd.features["weight"] = kappa_val
+    graph.AddEdge(bwd)
 
 
 class KappaEdge:
@@ -1880,14 +1898,22 @@ def LoadGraphFromLocalStructure(folder: Union[Path, str], id: str) -> AugmentedF
 
 
 def LoadAugmentedFunctionGraph(
-    graphId: str, graphsFolder: Union[str, Path], kappasFolder: Union[str, Path]
+    graphId: str,
+    graphsFolder: Union[str, Path],
+    kappasFolder: Union[str, Path],
+    kappa_value: Union[float, None] = None,
 ) -> AugmentedFunctionGraph:
-    """Enhances a main function graph by merging matching kappa h-functions.
+    """Enhances a main function graph by merging kappa h-function subgraphs.
+
+    When *kappa_value* is given, only the matching kappa subgraph is merged
+    (O(1) hash-table lookup).  When it is None all subgraphs are merged for
+    backward compatibility.
 
     Arguments:
         graphId: The unique ID of the main function graph to load.
         graphsFolder: Path to the folder containing mathematical basis graphs.
         kappasFolder: Path to the folder containing kappa h-functions.
+        kappa_value: If provided, merge only this kappa; otherwise merge all.
 
     Returns:
         An AugmentedFunctionGraph that is compatible with PyTorch-Geometric/NetworkX.
@@ -1907,28 +1933,26 @@ def LoadAugmentedFunctionGraph(
     if not kappas_path.exists():
         raise FileNotFoundError(f"Kappas folder not found: {kappasFolder}")
 
-    # Kappa subgraphs are static across all main graphs — parse and normalize once,
-    # then reuse the cached result for every subsequent call.
-    kappa_entries = _load_normalized_kappas(kappas_path)
+    # Kappa subgraphs are static — parse and normalize once, reuse via O(1) dict lookup.
+    kappa_lookup = _load_normalized_kappas(kappas_path)
 
-    for kappaValue, original_root, normalized in kappa_entries:
-        kappaRootNodeId = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
-
-        # Tag all nodes in this merged kappa subgraph with their kappa value
-        prefix_parts = kappaRootNodeId.split("_")
-        if len(prefix_parts) >= 2:
-            prefix_str = f"{prefix_parts[0]}_{prefix_parts[1]}"
-            for node in mainGraph.nodes:
-                if str(node).startswith(prefix_str + "_"):
-                    mainGraph.nodes[node]["kappa_value"] = kappaValue
-
-        newEdge = KappaEdge(source=globalNode, target=kappaRootNodeId, type="GlobalToKappa")
-        newEdge.features["weight"] = kappaValue
-        mainGraph.AddEdge(newEdge)
-
-        backwardEdge = KappaEdge(source=kappaRootNodeId, target=globalNode, type="KappaToGlobal")
-        backwardEdge.features["weight"] = kappaValue
-        mainGraph.AddEdge(backwardEdge)
+    if kappa_value is not None:
+        kv = float(kappa_value)
+        entry = kappa_lookup.get(kv)
+        if entry is None:
+            logger.warning(
+                f"Kappa value {kv} not found for graph '{graphId}'; "
+                f"available: {sorted(kappa_lookup)}. No kappa merged."
+            )
+        else:
+            original_root, normalized = entry
+            kappa_root_id = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
+            _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
+    else:
+        # Backward compat: merge all kappas (used when kappa value is unknown at load time)
+        for kv, (original_root, normalized) in kappa_lookup.items():
+            kappa_root_id = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
+            _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
 
     return mainGraph
 

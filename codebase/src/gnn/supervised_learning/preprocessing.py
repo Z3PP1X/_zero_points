@@ -17,7 +17,6 @@ from gnn.supervised_learning.dataset import DatasetLoader
 from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
-    filter_active_kappa,
     slice_active_features,
 )
 from gnn.shared.utils.graph_loader import GraphDataLoader
@@ -117,7 +116,8 @@ class GraphPipeline:
             self.graph_loader = graph_loader
             self.graphs = self.graph_loader.load_all()
         else:
-            self.graphs = self.unified_loader.load_all()
+            kappa_map = self.unified_loader.build_kappa_map() if self.add_kappa else None
+            self.graphs = self.unified_loader.load_all(kappa_map=kappa_map)
             
         self.graph_pipeline = self
         
@@ -144,13 +144,15 @@ class GraphPipeline:
             
             # 1. Curated dataset as validation (test) data
             df_curated = self.unified_loader.dataset_loader.data
-            graphs_curated = self.unified_loader.load_all()
+            kappa_map_curated = self.unified_loader.build_kappa_map() if self.add_kappa else None
+            graphs_curated = self.unified_loader.load_all(kappa_map=kappa_map_curated)
             graph_ids_curated = set(graphs_curated.keys())
             test_df = df_curated[df_curated["problem_id"].isin(graph_ids_curated)].copy()
-            
+
             # 2. Synthetic dataset as training data
             df_synth = self.synthetic_unified_loader.dataset_loader.data
-            graphs_synth = self.synthetic_unified_loader.load_all()
+            kappa_map_synth = self.synthetic_unified_loader.build_kappa_map() if self.add_kappa else None
+            graphs_synth = self.synthetic_unified_loader.load_all(kappa_map=kappa_map_synth)
             graph_ids_synth = set(graphs_synth.keys())
             train_df = df_synth[df_synth["problem_id"].isin(graph_ids_synth)].copy()
             
@@ -395,9 +397,5 @@ class ProblemRunDataset(Dataset):
         # Remove laplacian if present to prevent PyG collation mismatch errors
         if hasattr(data, "laplacian"):
             del data.laplacian
-
-        # Filter the graph to keep only the active kappa graph
-        kappa_val = row.get("kappa", None)
-        data = filter_active_kappa(data, kappa_val)
 
         return data

@@ -198,15 +198,16 @@ class GraphDataLoader:
     def has_graph(self, graph_id: Any) -> bool:
         return str(graph_id) in self._raw_sources
 
-    def get_graph(self, graph_id: Any) -> Union[Data, HeteroData]:
+    def get_graph(self, graph_id: Any, kappa_value: Union[float, None] = None) -> Union[Data, HeteroData]:
         import torch
         gid_str = str(graph_id)
         if gid_str not in self._raw_sources:
             raise KeyError(f"Graph ID '{gid_str}' not found in loaded graphs.")
 
-        # Return clone from memory cache if already converted
-        if gid_str in self._converted_cache:
-            return self._converted_cache[gid_str].clone()
+        # Memory cache key includes kappa so callers with different values don't collide.
+        mem_key = f"{gid_str}_k{kappa_value}" if kappa_value is not None else gid_str
+        if mem_key in self._converted_cache:
+            return self._converted_cache[mem_key].clone()
 
         # Kappa augmentation is opt-in (add_kappa); on top of that the kappa folder
         # must exist and contain json files.
@@ -221,13 +222,16 @@ class GraphDataLoader:
             if self.kappas_dir_explicit or not is_temp:
                 use_augmented = True
 
-        # Check disk cache
-        # Clean graph_id to prevent path issues
+        # Disk cache key: include kappa value when selective merging is active so each
+        # (graph, kappa) pair gets its own file.  The supernode marker prevents collisions
+        # with supernode-augmented variants.
         clean_gid = "".join(c for c in gid_str if c.isalnum() or c in ('_', '-'))
-        # The supernode marker is part of the cache key so supernode-augmented graphs
-        # never collide with their plain counterparts on disk.
         sn_marker = "_sn" if self.add_virtual_supernode else ""
-        suffix = f"{sn_marker}_augmented.pt" if use_augmented else f"{sn_marker}.pt"
+        if use_augmented:
+            kappa_marker = f"_k{int(kappa_value)}" if kappa_value is not None else ""
+            suffix = f"{sn_marker}{kappa_marker}_augmented.pt"
+        else:
+            suffix = f"{sn_marker}.pt"
         cache_file = self.cache_dir / (
             f"{clean_gid}_{self.mode}_"
             f"{self.heterogeneous}_{self.edge_direction}{suffix}"
@@ -236,18 +240,18 @@ class GraphDataLoader:
         if cache_file.exists():
             try:
                 converted = torch.load(cache_file, weights_only=False)
-                self._converted_cache[gid_str] = converted
+                self._converted_cache[mem_key] = converted
                 return converted.clone()
             except Exception as e:
                 logger.warning(f"Failed to load cached graph {cache_file}: {e}")
 
         if use_augmented:
-            # Load the augmented NetworkX DiGraph using LoadAugmentedFunctionGraph
             from gnn.shared.utils.graph_utils import LoadAugmentedFunctionGraph
             main_graph = LoadAugmentedFunctionGraph(
                 graphId=gid_str,
                 graphsFolder=self.source_path,
-                kappasFolder=self.kappas_dir
+                kappasFolder=self.kappas_dir,
+                kappa_value=kappa_value,
             )
             converted = self.converter.convert(
                 main_graph,
@@ -257,7 +261,6 @@ class GraphDataLoader:
                 add_virtual_supernode=self.add_virtual_supernode,
             )
         else:
-            # Retrieve and parse raw data
             raw_val = self._raw_sources[gid_str]
             if isinstance(raw_val, Path):
                 with open(raw_val, "r", encoding="utf-8") as f:
@@ -265,7 +268,6 @@ class GraphDataLoader:
             else:
                 raw_dict = raw_val
 
-            # Convert to PyG object
             converted = self.converter.convert(
                 raw_dict,
                 heterogeneous=self.heterogeneous,
@@ -274,18 +276,24 @@ class GraphDataLoader:
                 add_virtual_supernode=self.add_virtual_supernode,
             )
 
-        # Save to disk cache
         try:
             torch.save(converted, cache_file)
         except Exception as e:
             logger.warning(f"Failed to save cached graph {cache_file}: {e}")
 
-        self._converted_cache[gid_str] = converted
+        self._converted_cache[mem_key] = converted
         return converted.clone()
 
-    def load_all(self) -> dict[str, Union[Data, HeteroData]]:
-        """Preloads and converts all discovered graphs into memory."""
+    def load_all(self, kappa_map: Union[dict, None] = None) -> dict[str, Union[Data, HeteroData]]:
+        """Preloads and converts all discovered graphs into memory.
+
+        Arguments:
+            kappa_map: Optional {graph_id: kappa_value} mapping. When provided,
+                each graph is merged with only its matching kappa subgraph instead
+                of all subgraphs, producing smaller graphs and correct filtering.
+        """
         result = {}
         for gid in self._raw_sources.keys():
-            result[gid] = self.get_graph(gid)
+            kv = kappa_map.get(gid) if kappa_map else None
+            result[gid] = self.get_graph(gid, kappa_value=kv)
         return result
