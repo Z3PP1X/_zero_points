@@ -410,9 +410,39 @@ def cosine_with_warmup_scheduler(optimizer, max_epoch):
 register_scheduler("cosine_with_warmup", cosine_with_warmup_scheduler)
 
 
+def homogenize_for_classifier(data):
+    """Collapse a HeteroData graph to homogeneous Data via PyG's ``to_homogeneous``.
+
+    The ``expression_classifier`` backbone consumes homogeneous tensors (``batch.x`` /
+    ``batch.edge_index``), and ``InMemoryDataset.collate`` only round-trips graphs that
+    share a uniform store layout — HeteroData with type-dependent node/edge stores fails
+    both (the collate/separate ``slices`` span only the graphs that happen to carry each
+    store). Every hetero node type already carries the full ``NODE_FEATURE_SCHEMA`` (see
+    ``heterogeneous_converter.to_hetero``), so PyG's library ``to_homogeneous`` rebuilds
+    the exact node-feature matrix the classifier expects, with ``node_type`` preserved as a
+    column of ``x``. Dropped first: the non-tensor ``node_ids`` metadata (``to_homogeneous``
+    only merges tensors) and the hetero ``edge_attr`` (2-D augmented-edge features that do
+    not match the homogeneous ``EDGE_FEATURE_SCHEMA``; the backbone zero-fills edge features
+    to the right dim). Connectivity is kept; edge-type semantics fold into ``edge_index``.
+    Homogeneous ``Data`` passes through unchanged.
+    """
+    from torch_geometric.data import HeteroData
+
+    if not isinstance(data, HeteroData):
+        return data
+    for store in data.node_stores:
+        if "node_ids" in store:
+            del store["node_ids"]
+    for store in data.edge_stores:
+        if "edge_attr" in store:
+            del store["edge_attr"]
+    return data.to_homogeneous(add_node_type=True, add_edge_type=True)
+
+
 class ExpressionGraphDataset(InMemoryDataset):
     def __init__(self, data_list, train_idx, val_idx, test_idx):
         super().__init__()
+        data_list = [homogenize_for_classifier(d) for d in data_list]
         self._data, self.slices = self.collate(data_list)
         self._data.train_graph_index = torch.tensor(train_idx, dtype=torch.long)
         self._data.val_graph_index = torch.tensor(val_idx, dtype=torch.long)
