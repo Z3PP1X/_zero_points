@@ -1,5 +1,11 @@
 import torch
-from feature_layout import FeatureLayout, GNN_ARCHITECTURE_CHOICES, GNN_ACTIVATION_CHOICES
+from feature_layout import (
+    FeatureLayout,
+    GNN_ARCHITECTURE_CHOICES,
+    GNN_ACTIVATION_CHOICES,
+    GNN_VARIANT_CHOICES,
+    POOL_TYPE_CHOICES,
+)
 from gnn_backbones import (
     NODE_TYPE_COL,
     build_graph_policy_backbone,
@@ -101,3 +107,61 @@ def test_backbone_forward_pass_all_combinations():
             # Forward pass without global features
             out_no_global = backbone(x, edge_index, batch_index, None, edge_attr=edge_attr)
             assert out_no_global.shape == (num_graphs, hidden_dim)
+
+
+def _pool_inputs():
+    layout = FeatureLayout(node_input_dim=4, global_input_dim=6, edge_input_dim=4)
+    x = torch.randn(10, layout.padded_node_feature_count)
+    edge_index = torch.tensor(
+        [[0, 1, 2, 3, 4, 5, 6, 7, 8, 0], [1, 2, 3, 4, 5, 6, 7, 8, 9, 2]], dtype=torch.long
+    )
+    edge_attr = torch.randn(edge_index.size(1), layout.padded_edge_feature_count)
+    batch_index = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1], dtype=torch.long)
+    global_features = torch.randn(2, 8)
+    return layout, x, edge_index, edge_attr, batch_index, global_features
+
+
+def test_variant_pool_forward_shapes():
+    layout, x, edge_index, edge_attr, batch_index, global_features = _pool_inputs()
+    hidden_dim = 64
+    num_graphs = 2
+
+    for variant in ("pooling", "pooling_skip"):
+        for pool_type in POOL_TYPE_CHOICES:
+            backbone = build_graph_policy_backbone(
+                layout=layout,
+                architecture="gatv2_stack",
+                activation="prelu",
+                hidden_dim=hidden_dim,
+                num_layers=2,
+                heads=2,
+                variant=variant,
+                pool_type=pool_type,
+            )
+            backbone.eval()
+            with torch.no_grad():
+                out = backbone(x, edge_index, batch_index, global_features, edge_attr=edge_attr)
+            assert out.shape == (num_graphs, hidden_dim), (variant, pool_type)
+            assert torch.isfinite(out).all(), (variant, pool_type)
+
+
+def test_legacy_variant_is_default_and_deterministic():
+    layout, x, edge_index, edge_attr, batch_index, global_features = _pool_inputs()
+    assert "legacy" in GNN_VARIANT_CHOICES
+
+    torch.manual_seed(0)
+    default_backbone = build_graph_policy_backbone(
+        layout=layout, architecture="gine_stack", hidden_dim=32, num_layers=2, heads=2
+    )
+    torch.manual_seed(0)
+    legacy_backbone = build_graph_policy_backbone(
+        layout=layout, architecture="gine_stack", hidden_dim=32, num_layers=2, heads=2,
+        variant="legacy",
+    )
+    default_backbone.eval()
+    legacy_backbone.eval()
+    with torch.no_grad():
+        out_default = default_backbone(x, edge_index, batch_index, global_features, edge_attr=edge_attr)
+        out_legacy = legacy_backbone(x, edge_index, batch_index, global_features, edge_attr=edge_attr)
+    assert default_backbone.variant == "legacy"
+    assert torch.allclose(out_default, out_legacy, atol=1e-6)

@@ -256,6 +256,7 @@ def main(
     layer_type: str = "gatv2conv",
     edge_direction: str = "top_down",
     heterogeneous: bool = False,
+    add_kappa: bool = False,
 ):
     seed = DEFAULT_SEED
     cfg = bootstrap_graphgym_cfg(config_path, seed=seed)
@@ -272,6 +273,7 @@ def main(
         synthetic_dataset=synthetic_dataset,
         edge_direction=edge_direction,
         heterogeneous=heterogeneous,
+        add_kappa=add_kappa,
     )
     resolved_active_features = (
         None
@@ -299,6 +301,7 @@ def main(
         mode=mode,
         heterogeneous=heterogeneous,
         edge_direction=edge_direction,
+        add_kappa=add_kappa,
     )
 
     pipeline = GraphPipeline(
@@ -311,6 +314,7 @@ def main(
         synthetic_dataset_name=synthetic_dataset,
         layer_type=layer_type,
         heterogeneous=heterogeneous,
+        add_kappa=add_kappa,
     )
 
     train_loader, val_loader, class_weights = pipeline.pipe(
@@ -595,6 +599,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Enables heterogeneous graph mode.",
     )
+    parser.add_argument(
+        "--add-kappa",
+        action="store_true",
+        help="Merge kappa (h-function) subgraphs from datasets/kappas/ into each graph.",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -611,6 +620,7 @@ if __name__ == "__main__":
     synthetic = args.synthetic or settings["synthetic"]
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
     heterogeneous = args.heterogeneous or settings["heterogeneous"]
+    add_kappa = args.add_kappa or settings["add_kappa"]
 
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
@@ -620,6 +630,7 @@ if __name__ == "__main__":
             mode=mode,
             heterogeneous=heterogeneous,
             edge_direction=edge_direction,
+            add_kappa=add_kappa,
         )
         print("Curated dataset loaded successfully!")
         print(loader.data.tail())
@@ -634,6 +645,7 @@ if __name__ == "__main__":
                 mode=mode,
                 heterogeneous=heterogeneous,
                 edge_direction=edge_direction,
+                add_kappa=add_kappa,
             )
             print("Synthetic dataset loaded successfully!")
             print(synth_loader.data.tail())
@@ -675,6 +687,7 @@ if __name__ == "__main__":
                 layer_type=layer_type,
                 edge_direction=edge_direction,
                 heterogeneous=heterogeneous,
+                add_kappa=add_kappa,
             )
         except Exception as e:
             print(

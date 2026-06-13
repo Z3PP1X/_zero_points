@@ -231,6 +231,8 @@ class PpoOptunaWorkflow:
             hidden_dim=policy.hidden_dim,
             num_layers=policy.num_layers,
             heads=policy.heads,
+            variant=policy.variant,
+            pool_type=policy.pool_type,
         )
         policy_kwargs = {
             "features_extractor_class": CustomGNNFeaturesExtractor,

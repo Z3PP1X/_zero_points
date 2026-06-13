@@ -18,12 +18,25 @@ NODE_INPUT_DIM_CHOICES = (4, 5)
 EDGE_INPUT_DIM_CHOICES = (4, 8)
 GLOBAL_INPUT_DIM_CHOICES = (6, 8)
 
+# Structural variant of the GNN backbone (orthogonal to the layer-type architecture)
+# and the hierarchical pooling operator used by the non-legacy variants.
+GNN_VARIANT_CHOICES = (
+    "legacy",
+    "pooling",
+    "pooling_skip",
+)
+POOL_TYPE_CHOICES = (
+    "topk",
+    "diffpool",
+)
+
 # Suffix for Optuna study/DB names. Bump (or change choices) when categorical search
 # spaces change so load_if_exists does not reuse incompatible distributions.
 OPTUNA_SEARCH_SPACE_SUFFIX = (
     f"n{''.join(str(choice) for choice in NODE_INPUT_DIM_CHOICES)}"
     f"e{''.join(str(choice) for choice in EDGE_INPUT_DIM_CHOICES)}"
     f"g{''.join(str(choice) for choice in GLOBAL_INPUT_DIM_CHOICES)}"
+    f"v{len(GNN_VARIANT_CHOICES)}p{len(POOL_TYPE_CHOICES)}"
     f"_{current_timestamp}"
 )
 
@@ -35,6 +48,7 @@ GNN_ARCHITECTURE_CHOICES = (
 GNN_LAYER_COUNT_CHOICES = (1, 2, 3)
 GAT_HEAD_COUNT_CHOICES = (2, 4, 8)
 GNN_ACTIVATION_CHOICES = (
+    "prelu",
     "relu",
     "leaky_relu",
     "elu",

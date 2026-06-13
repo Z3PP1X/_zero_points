@@ -1,14 +1,16 @@
 import torch
 import torch.nn as nn
-from torch.nn import LeakyReLU
 from torch_geometric.nn import GATv2Conv, GINEConv
 
 from gnn.shared.models.gnn_backbones import (
     EDGE_AWARE_ARCHITECTURE_NAMES,
+    LEGACY_VARIANTS,
+    UniformPoolMixin,
     _gin_mlp,
     apply_edge_conv,
     coalesce_edge_attr,
     filter_real_subgraph,
+    make_activation,
     pool_split_embeddings,
     resolve_node_feature_names,
 )
@@ -35,7 +37,7 @@ class SupervisedGraphClassifier(nn.Module):
         self.backbone = backbone
         self.classifier = nn.Sequential(
             nn.Linear(hidden_dim + global_dim, hidden_dim),
-            LeakyReLU(),
+            make_activation("prelu"),
             nn.Dropout(0.2),
             nn.Linear(hidden_dim, output_dim),
         )
@@ -48,10 +50,12 @@ class SupervisedGraphClassifier(nn.Module):
         return self.classifier(features)
 
 
-class TestGraphNetwork(nn.Module):
+class TestGraphNetwork(UniformPoolMixin, nn.Module):
     """
-    Supervised graph classifier with split real/virtual pooling and native edge features.
-    Supports GATv2 (attention over edges) and GINE (edge attrs in update MLP).
+    Supervised graph classifier. The legacy variant uses split real/virtual pooling
+    and native edge features (GATv2 attention over edges, or GINE edge attrs in the
+    update MLP). The ``pooling`` / ``pooling_skip`` variants pool the whole graph
+    uniformly via TopK or DiffPool. PReLU activations throughout.
     """
 
     __test__ = False  # prevent pytest from collecting this nn.Module as a test case
@@ -66,6 +70,9 @@ class TestGraphNetwork(nn.Module):
         architecture="gatv2_stack",
         edge_dim=4,
         active_features=None,
+        activation="prelu",
+        variant="legacy",
+        pool_type="topk",
     ):
         super().__init__()
         if architecture not in EDGE_AWARE_ARCHITECTURE_NAMES:
@@ -79,7 +86,10 @@ class TestGraphNetwork(nn.Module):
         self.edge_dim = edge_dim
         self.hidden_dim = hidden_dim
         self.heads = heads
-        self.activation = LeakyReLU()
+        self.activation_name = activation
+        self.variant = variant
+        self.pool_type = pool_type
+        self._last_aux_loss = torch.zeros(())
         self.num_layers = 3
 
         # Categorical features (node_type, label_id; edge relation_type) are integer
@@ -94,7 +104,7 @@ class TestGraphNetwork(nn.Module):
             self.node_feature_names,
             hidden_dim,
             NODE_CATEGORICAL_REGISTRY,
-            activation=LeakyReLU(),
+            activation=make_activation(activation),
         )
         conv_in_dim = hidden_dim
         self.conv_in_dim = conv_in_dim
@@ -108,27 +118,31 @@ class TestGraphNetwork(nn.Module):
                 list(EDGE_FEATURE_SCHEMA),
                 edge_dim,
                 EDGE_CATEGORICAL_REGISTRY,
-                activation=LeakyReLU(),
+                activation=make_activation(activation),
             )
         else:
             self.edge_encoder = None
 
         if architecture == "gine_stack":
-            self.conv1 = GINEConv(_gin_mlp(conv_in_dim, hidden_dim, self.activation), edge_dim=edge_dim)
-            self.conv2 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, self.activation), edge_dim=edge_dim)
-            self.conv3 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, self.activation), edge_dim=edge_dim)
+            self.conv1 = GINEConv(_gin_mlp(conv_in_dim, hidden_dim, activation), edge_dim=edge_dim)
+            self.conv2 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
+            self.conv3 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
         else:
             self.conv1 = GATv2Conv(conv_in_dim, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
             self.conv2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
             self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim)
 
         self.convs = nn.ModuleList([self.conv1, self.conv2, self.conv3])
+        # One activation per conv layer so PReLU slopes are independent per layer.
+        self.layer_activations = nn.ModuleList(
+            [make_activation(activation) for _ in range(self.num_layers)]
+        )
         self.virtual_update_mlps = nn.ModuleList(
             [
                 nn.Sequential(
                     nn.Linear(self._virtual_mlp_input_dim(layer_idx), self._layer_output_dim(layer_idx)),
                     nn.BatchNorm1d(self._layer_output_dim(layer_idx)),
-                    LeakyReLU(),
+                    make_activation(activation),
                 )
                 for layer_idx in range(self.num_layers)
             ]
@@ -136,10 +150,25 @@ class TestGraphNetwork(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Linear(2 * hidden_dim + global_dim, hidden_dim),
-            LeakyReLU(),
+            make_activation(activation),
             nn.Dropout(0.2),
             nn.Linear(hidden_dim, output_dim),
         )
+
+        # Uniform-pool variants reuse the same classifier tail (2*hidden_dim + global).
+        if variant not in LEGACY_VARIANTS:
+            self._init_uniform_pool(
+                first_in_dim=conv_in_dim,
+                hidden_dim=hidden_dim,
+                num_layers=self.num_layers,
+                heads=heads,
+                edge_dim=edge_dim,
+                architecture=architecture,
+                activation_name=activation,
+                variant=variant,
+                pool_type=pool_type,
+                tail_in_dim=2 * hidden_dim,
+            )
 
     @classmethod
     def from_pipeline(cls, pipeline, **kwargs):
@@ -172,6 +201,18 @@ class TestGraphNetwork(nn.Module):
         return self._layer_output_dim(layer_idx - 1)
 
     def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
+        if self.variant in LEGACY_VARIANTS:
+            x_pooled = self._legacy_forward(x, edge_index, batch, edge_attr)
+        else:
+            x_pooled = self._uniform_forward(x, edge_index, batch, edge_attr)
+
+        if global_features is not None:
+            global_features = global_features.view(x_pooled.size(0), -1)
+            x_pooled = torch.cat([x_pooled, global_features], dim=-1)
+
+        return self.classifier(x_pooled)
+
+    def _legacy_forward(self, x, edge_index, batch, edge_attr=None):
         # Derive virtual/real partition from the raw node_type column before any
         # encoding (the encoder consumes that column). Resolve the column BY NAME so
         # it survives active-feature subset/reorder.
@@ -195,11 +236,13 @@ class TestGraphNetwork(nn.Module):
         batch_virt = batch[is_virtual] if is_virtual.any() else None
 
         for layer_idx, conv in enumerate(self.convs):
-            h_real = self.activation(apply_edge_conv(conv, h_real, real_edge_index, real_edge_attr))
+            h_real = self.layer_activations[layer_idx](
+                apply_edge_conv(conv, h_real, real_edge_index, real_edge_attr)
+            )
             if is_virtual.any():
                 h_virt = self.virtual_update_mlps[layer_idx](h_virt)
 
-        x_pooled = pool_split_embeddings(
+        return pool_split_embeddings(
             h_real,
             batch_real,
             h_virt,
@@ -208,8 +251,11 @@ class TestGraphNetwork(nn.Module):
             self.hidden_dim,
         )
 
-        if global_features is not None:
-            global_features = global_features.view(x_pooled.size(0), -1)
-            x_pooled = torch.cat([x_pooled, global_features], dim=-1)
-
-        return self.classifier(x_pooled)
+    def _uniform_forward(self, x, edge_index, batch, edge_attr=None):
+        # Whole-graph hierarchical pooling: no real/virtual split.
+        edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
+        x, _ = self.node_encoder(x)
+        if self.edge_encoder is not None:
+            edge_attr, _ = self.edge_encoder(edge_attr)
+        num_graphs = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        return self._uniform_pool_forward(x, edge_index, edge_attr, batch, num_graphs)

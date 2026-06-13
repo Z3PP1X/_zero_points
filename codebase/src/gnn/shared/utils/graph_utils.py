@@ -899,26 +899,30 @@ class ExpressionGraphConverter:
                 child = edge["target"]
                 children_dict.setdefault(parent, []).append(child)
 
-        # Common G_enriched processing (augmented features path)
-        last_seen_map = {}
-        if "global" in G_enriched:
-            build_augmented_math_graph(
-                G_enriched,
-                "global",
-                last_seen_map,
-                children_dict,
-                edge_direction,
-            )
-        else:
-            roots = [n for n, d in G_ast.in_degree() if d == 0]
-            for r in roots:
+        # Common G_enriched processing (augmented features path).
+        # The augmented NextUse / function-nesting edges turn the expression *tree*
+        # into a *graph*, so they are only added in graph mode. The tree and
+        # tree_derivatives modes keep the pure (multi-)tree structure.
+        if mode == "graph":
+            last_seen_map = {}
+            if "global" in G_enriched:
                 build_augmented_math_graph(
                     G_enriched,
-                    r,
+                    "global",
                     last_seen_map,
                     children_dict,
                     edge_direction,
                 )
+            else:
+                roots = [n for n, d in G_ast.in_degree() if d == 0]
+                for r in roots:
+                    build_augmented_math_graph(
+                        G_enriched,
+                        r,
+                        last_seen_map,
+                        children_dict,
+                        edge_direction,
+                    )
 
         # Gather node_kappas mapping matching node_ids
         node_kappas = [G_enriched.nodes[nid].get("kappa_value") for nid in node_ids]

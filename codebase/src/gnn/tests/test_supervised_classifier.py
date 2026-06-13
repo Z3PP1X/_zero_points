@@ -63,6 +63,33 @@ def test_classifier_forward_with_feature_encoder():
         assert torch.isfinite(out).all()
 
 
+def test_variant_pool_classifier():
+    """The pooling / pooling_skip variants (TopK + DiffPool) forward to class logits."""
+    batch = _build_batch()
+    input_dim = len(NODE_FEATURE_SCHEMA)
+    edge_dim = len(EDGE_FEATURE_SCHEMA)
+
+    for variant in ("pooling", "pooling_skip"):
+        for pool_type in ("topk", "diffpool"):
+            model = TestGraphNetwork(
+                input_dim=input_dim,
+                hidden_dim=32,
+                global_dim=2,
+                edge_dim=edge_dim,
+                architecture="gatv2_stack",
+                activation="prelu",
+                variant=variant,
+                pool_type=pool_type,
+            )
+            model.eval()
+            with torch.no_grad():
+                out = model(
+                    batch.x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr
+                )
+            assert out.shape == (1, 2), (variant, pool_type)
+            assert torch.isfinite(out).all(), (variant, pool_type)
+
+
 def test_label_id_embedding_breaks_ordinal_assumption():
     """Two graphs differing only in a function label must be separable through the
     label embedding rather than a linear scaling of the raw id."""

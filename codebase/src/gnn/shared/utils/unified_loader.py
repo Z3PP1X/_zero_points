@@ -28,6 +28,7 @@ class UnifiedDataLoader:
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
+        add_kappa: bool = False,
     ) -> UnifiedDataLoader:
         """
         Retrieves a cached singleton/multiton instance matching the parameter configuration.
@@ -48,6 +49,7 @@ class UnifiedDataLoader:
             str(base_dir) if base_dir else None,
             is_synthetic,
             edge_direction,
+            add_kappa,
         )
         if key not in cls._instances:
             cls._instances[key] = cls(
@@ -59,6 +61,7 @@ class UnifiedDataLoader:
                 base_dir=base_dir,
                 is_synthetic=is_synthetic,
                 edge_direction=edge_direction,
+                add_kappa=add_kappa,
             )
         return cls._instances[key]
 
@@ -77,6 +80,7 @@ class UnifiedDataLoader:
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
+        add_kappa: bool = False,
     ):
         self.dataset_name = dataset_name
         self.run_key = run_key
@@ -86,6 +90,7 @@ class UnifiedDataLoader:
         self.base_dir = base_dir
         self.is_synthetic = is_synthetic
         self.edge_direction = edge_direction
+        self.add_kappa = add_kappa
 
         # Unified lookup name for GraphDataLoader
         # For compatibility with GraphDataLoader's parsing, if run_key differs from dataset_name, pass "run_key/dataset_name"
@@ -105,6 +110,7 @@ class UnifiedDataLoader:
             base_dir=self.base_dir,
             is_synthetic=self.is_synthetic,
             edge_direction=self.edge_direction,
+            add_kappa=self.add_kappa,
         )
 
         # Automatically enrich missing x0/startwert values from graph data
