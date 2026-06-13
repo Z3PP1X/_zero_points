@@ -610,15 +610,24 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         train_data_list = [
             pipeline.train_dataset[i] for i in range(len(pipeline.train_dataset))
         ]
-        test_data_list = [
+        # The 20% holdout is split into two DISJOINT halves so checkpoint selection
+        # (val) never sees the generalization set (test). A deterministic interleave
+        # (even -> val, odd -> test) keeps class proportions roughly balanced without
+        # needing labels here. Previously val and test pointed at the SAME indices,
+        # which leaked the test set into model selection.
+        holdout = [
             pipeline.test_dataset[i] for i in range(len(pipeline.test_dataset))
         ]
+        val_data_list = holdout[0::2]
+        test_data_list = holdout[1::2]
 
-        all_data_list = train_data_list + test_data_list
+        all_data_list = train_data_list + val_data_list + test_data_list
 
-        train_indices = list(range(len(train_data_list)))
-        val_indices = list(range(len(train_data_list), len(all_data_list)))
-        test_indices = list(range(len(train_data_list), len(all_data_list)))
+        n_train = len(train_data_list)
+        n_val = len(val_data_list)
+        train_indices = list(range(n_train))
+        val_indices = list(range(n_train, n_train + n_val))
+        test_indices = list(range(n_train + n_val, len(all_data_list)))
 
     # --- Compute class weights from training data and register weighted cross entropy loss ---
     try:

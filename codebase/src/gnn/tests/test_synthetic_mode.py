@@ -15,6 +15,9 @@ if str(src_dir) not in sys.path:
 from preprocessing import GraphPipeline
 from unified_loader import UnifiedDataLoader
 from torch_geometric.data import Data
+from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA
+
+_EDGE_DIM = len(EDGE_FEATURE_SCHEMA)
 
 
 @pytest.fixture(autouse=True)
@@ -47,11 +50,11 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     g_curated_1 = Data(num_nodes=3)
     g_curated_1.x = torch.zeros((3, 8))
     g_curated_1.edge_index = torch.empty((2, 0), dtype=torch.long)
-    g_curated_1.edge_attr = torch.empty((0, 4), dtype=torch.float)
+    g_curated_1.edge_attr = torch.empty((0, _EDGE_DIM), dtype=torch.float)
     g_curated_2 = Data(num_nodes=3)
     g_curated_2.x = torch.zeros((3, 8))
     g_curated_2.edge_index = torch.empty((2, 0), dtype=torch.long)
-    g_curated_2.edge_attr = torch.empty((0, 4), dtype=torch.float)
+    g_curated_2.edge_attr = torch.empty((0, _EDGE_DIM), dtype=torch.float)
     
     mock_curated_unified.load_all.return_value = {
         "P_curated_1": g_curated_1,
@@ -80,11 +83,11 @@ def test_synthetic_mode_split(MockUnifiedDataLoader):
     g_synth_1 = Data(num_nodes=3)
     g_synth_1.x = torch.zeros((3, 8))
     g_synth_1.edge_index = torch.empty((2, 0), dtype=torch.long)
-    g_synth_1.edge_attr = torch.empty((0, 4), dtype=torch.float)
+    g_synth_1.edge_attr = torch.empty((0, _EDGE_DIM), dtype=torch.float)
     g_synth_2 = Data(num_nodes=3)
     g_synth_2.x = torch.zeros((3, 8))
     g_synth_2.edge_index = torch.empty((2, 0), dtype=torch.long)
-    g_synth_2.edge_attr = torch.empty((0, 4), dtype=torch.float)
+    g_synth_2.edge_attr = torch.empty((0, _EDGE_DIM), dtype=torch.float)
     
     mock_synth_unified.load_all.return_value = {
         "P_synth_1": g_synth_1,

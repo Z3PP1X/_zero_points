@@ -39,3 +39,18 @@ codebase/src/gnn/supervised_learning/run_results/**
 # Stray single-run GraphGym outputs (default out_dir when no experiment name given)
 codebase/src/agg/
 codebase/src/results/
+codebase/src/gnn/supervised_learning/results/
+codebase/src/gnn/supervised_learning/agg/
+
+# Generated plots / visualizations (regenerable from the scripts that emit them)
+codebase/src/gnn/output_plots/
+codebase/src/gnn/supervised_learning/visualizations/
+*.gexf
+
+# Datasets and their archive (bulk input data, unpacked locally — never commit)
+datasets/
+datasets.zip
+
+# Cached converted graph tensors
+*.pt
+*_augmented.pt
