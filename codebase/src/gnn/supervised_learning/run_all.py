@@ -164,15 +164,15 @@ STAGE_REGISTRY = {
     "6": ("stage6_hetero_diffpool",
           "Hetero + Diffpool (Gerüst); Code-Erweiterung ausstehend"),
 }
+_STAGE_FOLDERS = {folder for folder, _ in STAGE_REGISTRY.values()}
 
 
 def _resolve_stage(stage: str, script_dir: Path) -> tuple[Path, Path]:
     """Map a --stage id (number or folder name) to its base_config.yaml + grid.yaml."""
     settings_dir = script_dir / "config_settings"
-    folders = {folder for folder, _ in STAGE_REGISTRY.values()}
     if stage in STAGE_REGISTRY:
         folder = STAGE_REGISTRY[stage][0]
-    elif stage in folders:
+    elif stage in _STAGE_FOLDERS:
         folder = stage
     else:
         valid = ", ".join(f"{k}={v[0]}" for k, v in STAGE_REGISTRY.items())
@@ -194,6 +194,24 @@ def _print_stages() -> None:
     print("\nExample: python run_all.py --stage 3 --dry-run")
 
 
+def _cleanup_run_configs(configs_dir: Path) -> None:
+    """Remove a finished run's per-experiment config directory.
+
+    Each generated config is snapshotted into its own run folder as ``config.yaml`` (by
+    main_graphgym's ``dump_cfg``) and recorded in ``run_manifest.json``, so the transient
+    generated configs under ``configs/<experiment>/`` are safe to delete once the run is
+    done. Best-effort: never raises.
+    """
+    import shutil
+
+    try:
+        if configs_dir.exists():
+            shutil.rmtree(configs_dir)
+            print(f"[Orchestrator] Cleaned up per-run config dir: {configs_dir}")
+    except OSError as exc:
+        print(f"[Orchestrator] Warning: could not remove {configs_dir}: {exc}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run GraphGym grid search with automatic post-evaluation."
@@ -213,7 +231,13 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Only generate the grid configs (+ manifest) and exit; no training/eval.",
+        help="Only generate the grid configs (+ manifest) and exit; no training/eval. "
+             "The per-run config dir is kept for inspection.",
+    )
+    parser.add_argument(
+        "--keep-configs",
+        action="store_true",
+        help="Do not delete the per-run config dir (configs/<experiment>/) after the run.",
     )
     parser.add_argument(
         "--experiment-name",
@@ -304,19 +328,33 @@ def main():
     results_dir = script_dir / "run_results" / experiment_name
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    configs_dir = script_dir / "configs"
+    def _resolve_path(arg: str | None, default: str) -> Path:
+        raw = Path(arg) if arg is not None else Path(default)
+        return raw if raw.is_absolute() else script_dir / raw
+
+    # Per-run config directory (configs/<experiment>/) so concurrent experiments with
+    # different contexts never overwrite each other's generated configs. It is deleted
+    # after the run completes (unless --keep-configs / --dry-run); each run folder keeps
+    # its own config.yaml snapshot, so nothing reproducible is lost.
+    configs_dir = script_dir / "configs" / experiment_name
     if args.stage:
         config_base, grid_path = _resolve_stage(args.stage, script_dir)
         # An explicit --config/--grid still overrides the stage's defaults.
         if args.config is not None:
-            config_base = script_dir / args.config
+            config_base = _resolve_path(args.config, args.config)
         if args.grid is not None:
-            grid_path = script_dir / args.grid
-        print(f"[Orchestrator] Stage '{args.stage}': "
-              f"{config_base.relative_to(script_dir)} + {grid_path.relative_to(script_dir)}")
+            grid_path = _resolve_path(args.grid, args.grid)
+
+        def _fmt(p: Path) -> str:
+            try:
+                return str(p.relative_to(script_dir))
+            except ValueError:
+                return str(p)
+
+        print(f"[Orchestrator] Stage '{args.stage}': {_fmt(config_base)} + {_fmt(grid_path)}")
     else:
-        config_base = script_dir / (args.config or "config_supervised.yaml")
-        grid_path = script_dir / (args.grid or "grid.yaml")
+        config_base = _resolve_path(args.config, "config_supervised.yaml")
+        grid_path = _resolve_path(args.grid, "grid.yaml")
     train_script = script_dir / "main_graphgym.py"
     python_exe = sys.executable
 
@@ -348,7 +386,7 @@ def main():
 
     if args.dry_run:
         print(f"[Orchestrator] Dry run: generated {len(config_files)} config(s) in "
-              f"{configs_dir}; skipping training and evaluation.")
+              f"{configs_dir}; skipping training and evaluation (config dir kept).")
         return
 
     if not args.skip_training:
@@ -365,18 +403,23 @@ def main():
 
     if args.skip_eval:
         print("[Orchestrator] Skipping post-evaluation (--skip-eval).")
-        return
+    else:
+        from gnn.supervised_learning.run_results.post_eval import run_post_evaluation
 
-    from gnn.supervised_learning.run_results.post_eval import run_post_evaluation
+        run_post_evaluation(
+            results_dir,
+            configs_dir=configs_dir,
+            full_runs=args.full_eval,
+            skip_slices=args.skip_slices,
+            top_k=args.top_k,
+            skip_report=args.skip_report,
+        )
 
-    run_post_evaluation(
-        results_dir,
-        configs_dir=configs_dir,
-        full_runs=args.full_eval,
-        skip_slices=args.skip_slices,
-        top_k=args.top_k,
-        skip_report=args.skip_report,
-    )
+    # The run is done; drop the transient per-run config dir (config.yaml snapshots in
+    # each run folder + run_manifest.json remain the canonical record). On an exception
+    # above this line we intentionally do NOT reach here, leaving configs for debugging.
+    if not args.keep_configs:
+        _cleanup_run_configs(configs_dir)
 
 
 if __name__ == "__main__":
