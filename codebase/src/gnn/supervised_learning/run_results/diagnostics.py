@@ -146,6 +146,7 @@ class DiagnosticPlotter:
         from torch_geometric.graphgym.train import GraphGymDataModule
 
         set_cfg(cfg)
+        cfg.set_new_allowed(True)
         args = argparse.Namespace(cfg_file=str(config_path), opts=[])
         load_cfg(cfg, args)
 
