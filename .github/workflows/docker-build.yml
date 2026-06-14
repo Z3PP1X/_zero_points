@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Code checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Guard: the image build only makes sense if there is a Dockerfile at the
       # repo root. Without it the build steps are skipped and the job stays green
