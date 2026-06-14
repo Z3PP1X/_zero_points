@@ -13,7 +13,7 @@
 # EINSTELLBAR (siehe grid.yaml):
 #   gnn.dim_inner, gnn.layers_mp
 #   (gnn.layer_type / att_heads sind im Hetero-Pfad INERT: der HeteroExpressionClassifier
-#    nutzt ausschließlich SAGEConv -> daher gepinnt, nicht gesweept.)
+#    nutzt ausschließlich GINConv -> daher gepinnt, nicht gesweept.)
 #
 # -------------------------------------------------------------------------------------
 # TODO / GEPLANT (noch nicht im Code):
@@ -83,11 +83,11 @@ gnn:
   layers_mp: 2                     # EINSTELLBAR (Hetero-Pfad liest layers_mp = num_layers)
   layers_post_mp: 2
   dim_inner: 128                   # EINSTELLBAR
-  layer_type: gatv2conv           # INERT im Hetero-Pfad (SAGEConv) -> gepinnt
+  layer_type: gatv2conv           # INERT im Hetero-Pfad (GINConv) -> gepinnt
   stage_type: skipsum
   act: prelu                       # EINSTELLBAR: verdrahtet (Hetero-Convs + Head; war zuvor F.relu hardcodet)
   dropout: 0.2                     # EINSTELLBAR: verdrahtet (Hetero-Head) -> hier gepinnt
-  att_heads: 4                     # INERT im Hetero-Pfad (SAGEConv hat keine Köpfe) -> gepinnt
+  att_heads: 4                     # INERT im Hetero-Pfad (GINConv hat keine Köpfe) -> gepinnt
   variant: legacy                  # FIX (Pooling für hetero noch nicht verdrahtet)
   pool_type: topk                  # inert (siehe TODO im Header)
   aux_loss_weight: 1.0             # inert

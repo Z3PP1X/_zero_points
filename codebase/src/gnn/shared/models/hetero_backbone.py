@@ -19,10 +19,11 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
-from torch_geometric.nn import SAGEConv, to_hetero
+from torch_geometric.nn import GINConv, to_hetero
 
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
 from gnn.shared.models.gnn_backbones import (
+    _gin_mlp,
     functional_activation,
     make_activation,
     resolve_global_pool,
@@ -99,10 +100,10 @@ def pad_edge_types(
 class _ConvStack(nn.Module):
     """Homogeneous message-passing stack ``to_hetero`` lifts to per-edge-type convs."""
 
-    def __init__(self, hidden_dim: int, num_layers: int, sage_aggr: str, activation: str = "relu"):
+    def __init__(self, hidden_dim: int, num_layers: int, activation: str = "relu"):
         super().__init__()
         self.convs = nn.ModuleList(
-            [SAGEConv(hidden_dim, hidden_dim, aggr=sage_aggr) for _ in range(num_layers)]
+            [GINConv(_gin_mlp(hidden_dim, hidden_dim, activation)) for _ in range(num_layers)]
         )
         # cfg.gnn.act drives the activation, but it MUST be functional here: to_hetero traces
         # this stack and would turn an nn.Module activation into a per-node-type call_module
@@ -170,7 +171,7 @@ class HeteroExpressionClassifier(nn.Module):
             activation=make_activation(activation),
         )
         self.gnn = to_hetero(
-            _ConvStack(hidden_dim, num_layers, sage_aggr="mean", activation=activation),
+            _ConvStack(hidden_dim, num_layers, activation=activation),
             hetero_metadata,
             aggr=aggr,
         )
