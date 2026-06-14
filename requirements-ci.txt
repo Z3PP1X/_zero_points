@@ -1,0 +1,26 @@
+# Test/CI dependencies for the GNN-RL suite.
+#
+# torch is installed SEPARATELY from the CPU wheel index in the CI workflow
+# (.github/workflows/tests.yml), because the default PyPI wheels are CUDA builds:
+#     pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+#
+# torch_scatter / torch_sparse are intentionally NOT listed: the test suite does
+# not exercise the single lazy `from torch_scatter import scatter` path, and the
+# compiled extensions are awkward to provision on CI runners.
+#
+# Versions are pinned to the developer "pytorch" conda env for parity.
+torch_geometric==2.7.0
+stable-baselines3==2.8.0
+gymnasium==1.2.3
+optuna==4.8.0
+networkx==3.6.1
+numpy==2.4.4
+pandas==2.3.3
+scikit-learn==1.8.0
+scipy==1.17.1
+matplotlib==3.10.8
+mlflow==3.10.1
+yacs==0.1.8
+PyYAML==6.0.3
+pyzmq==27.1.0
+pytest==9.0.2

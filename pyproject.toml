@@ -1,3 +1,19 @@
 [tool.ruff]
 line-length = 88
 target-version = 'py312'
+
+[tool.pytest.ini_options]
+# The test suite mixes package-style imports (``from gnn.shared...``) with
+# bare-module imports (``from reward import ...``, ``from network_gateway
+# import ...``). Wire up every source root here so a plain ``pytest`` works
+# from the repo root without a hand-rolled PYTHONPATH (used by CI too).
+testpaths = ["codebase/src/gnn/tests"]
+pythonpath = [
+    "codebase/src",
+    "codebase/src/gnn/shared/utils",
+    "codebase/src/gnn/shared/models",
+    "codebase/src/gnn/reinforcement_learning",
+    "codebase/src/gnn/reinforcement_learning/gateway",
+    "codebase/src/gnn/supervised_learning",
+]
+addopts = "-q"

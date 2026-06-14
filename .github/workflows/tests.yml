@@ -1,0 +1,73 @@
+name: tests
+
+# Test-gate for the dev -> main promotion chain:
+#   * every push to `dev` runs the full pytest suite
+#   * if the suite is green, the exact tested commit is merged into `main`
+#   * if it is red, `main` is left untouched and the fix stays on `dev`
+# Pull requests targeting `dev` or `main` are tested but never auto-promoted.
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+# Read-only by default; the promote job opts into write access explicitly.
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU build of torch (default PyPI wheels are CUDA and far too large).
+          pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-ci.txt
+
+      - name: Run test suite
+        # pytest config (roots, testpaths) lives in pyproject.toml.
+        run: pytest
+
+  promote:
+    # Only promote the real branch tip after a green run on dev.
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote tested dev commit to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "${GITHUB_SHA}"
+          if git merge --ff-only "${GITHUB_SHA}"; then
+            echo "Fast-forwarded main to dev (${GITHUB_SHA})."
+          else
+            git merge --no-ff -m "ci: promote dev@${GITHUB_SHA:0:7} to main (tests green)" "${GITHUB_SHA}"
+          fi
+          git push origin HEAD:main

@@ -205,6 +205,10 @@ def test_stack_obs_handles_none_slots():
 
     obs = env._stack_obs()
 
-    assert obs["x"].shape == (2, 50, 24)
-    assert obs["edge_index"].shape == (2, 2, 100)
-    assert obs["num_nodes"].shape == (2, 1)
+    # Derive expected shapes from the env's own (single-env) observation space
+    # so this assertion tracks the live node-feature schema instead of a stale
+    # hard-coded feature dim.
+    space = env.observation_space
+    assert obs["x"].shape == (env.num_envs, *space["x"].shape)
+    assert obs["edge_index"].shape == (env.num_envs, *space["edge_index"].shape)
+    assert obs["num_nodes"].shape == (env.num_envs, *space["num_nodes"].shape)
