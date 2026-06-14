@@ -23,3 +23,8 @@ expression_graph.features.positional:       # NEU: Anchor-basierte Positional-Fe
 
 gnn.dropout:
   - 0.0
+
+expression_graph.edge_direction:
+  - top_down
+  - bottom_up
+  - bidirectional
