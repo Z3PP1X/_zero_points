@@ -15,9 +15,10 @@
 #   gnn.layer_type {gatv2conv, gineconv}   <-- NEU (Edge-Networks)
 #   gnn.dim_inner
 #
-# HINWEIS: layers_mp und dropout sind im homogenen TestGraphNetwork derzeit INERT
-# (3 MP-Layer sind hardcodiert, dropout ist nicht verdrahtet) und werden daher hier
-# gepinnt, nicht gesweept.
+# HINWEIS: layers_mp (MP-Tiefe), dropout, act und model.graph_pooling werden jetzt direkt
+# vom TestGraphNetwork konsumiert (Config = Source of Truth) und sind sweepbar. Hier der
+# Uebersicht halber gepinnt — aber NICHT mehr inert: Aenderungen wirken aufs Modell.
+# Inert bleiben nur die reinen Stock-GNN-Achsen layers_pre_mp / layers_post_mp / stage_type.
 # =====================================================================================
 
 out_dir: results
@@ -68,17 +69,17 @@ model:
   type: expression_classifier      # FIX: edge-aware custom Backbone (TestGraphNetwork)
   loss_fun: weighted_cross_entropy
   edge_decoding: dot
-  graph_pooling: add              # inert für expression_classifier
+  graph_pooling: add              # EINSTELLBAR: Readout (mean|add|max), verdrahtet; add = expressiver
 
 gnn:
   layers_pre_mp: 1
-  layers_mp: 3                     # INERT (TestGraphNetwork hardcodet 3) -> gepinnt
+  layers_mp: 3                     # EINSTELLBAR: MP-Tiefe (verdrahtet) -> hier gepinnt auf 3
   layers_post_mp: 2
   dim_inner: 128                   # EINSTELLBAR
   layer_type: gatv2conv           # EINSTELLBAR {gatv2conv, gineconv}   <-- NEU
-  stage_type: skipsum
-  act: gelu
-  dropout: 0.2                     # INERT im custom Backbone -> gepinnt
+  stage_type: skipsum              # inert für expression_classifier (nur Stock-GNN)
+  act: gelu                        # EINSTELLBAR: verdrahtet (war zuvor zu prelu hardcodet)
+  dropout: 0.2                     # EINSTELLBAR: verdrahtet (custom-Backbone-Head) -> hier gepinnt
   att_heads: 4                     # FIX (GATv2-Köpfe)
   variant: legacy                  # FIX (Hierarchical Pooling kommt in Stufe 5/6)
   pool_type: topk                  # inert für variant=legacy

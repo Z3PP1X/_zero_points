@@ -357,6 +357,9 @@ class ExpressionClassifierNetwork(torch.nn.Module):
                 out_dim=dim_out,
                 num_layers=getattr(cfg.gnn, "layers_mp", 2),
                 aggr=getattr(cfg.gnn, "hetero_aggr", "sum"),
+                activation=cfg.gnn.act,
+                dropout=cfg.gnn.dropout,
+                graph_pooling=cfg.model.graph_pooling,
             )
             return
 
@@ -376,9 +379,14 @@ class ExpressionClassifierNetwork(torch.nn.Module):
             architecture=architecture_from_layer_type(layer_type),
             edge_dim=cfg.dataset.edge_dim,
             active_features=names or None,
-            activation="prelu",
+            # The GraphGym config is the single source of truth: depth, activation,
+            # dropout and the graph-level readout all come from cfg, not hardcoded.
+            activation=cfg.gnn.act,
             variant=cfg.gnn.variant,
             pool_type=cfg.gnn.pool_type,
+            num_layers=cfg.gnn.layers_mp,
+            dropout=cfg.gnn.dropout,
+            graph_pooling=cfg.model.graph_pooling,
         )
         # Surfaced for the aux-loss monkeypatch on GraphGymModule._shared_step.
         self._last_aux_loss = torch.zeros(())

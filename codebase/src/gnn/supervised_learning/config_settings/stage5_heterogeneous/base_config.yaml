@@ -76,7 +76,7 @@ model:
   type: expression_classifier      # FIX
   loss_fun: weighted_cross_entropy
   edge_decoding: dot
-  graph_pooling: add
+  graph_pooling: add               # EINSTELLBAR: Readout (mean|add|max), jetzt im Hetero-Pfad verdrahtet
 
 gnn:
   layers_pre_mp: 1
@@ -85,8 +85,8 @@ gnn:
   dim_inner: 128                   # EINSTELLBAR
   layer_type: gatv2conv           # INERT im Hetero-Pfad (SAGEConv) -> gepinnt
   stage_type: skipsum
-  act: prelu
-  dropout: 0.2                     # INERT im Hetero-Pfad (Head hardcodet Dropout) -> gepinnt
+  act: prelu                       # EINSTELLBAR: verdrahtet (Hetero-Convs + Head; war zuvor F.relu hardcodet)
+  dropout: 0.2                     # EINSTELLBAR: verdrahtet (Hetero-Head) -> hier gepinnt
   att_heads: 4                     # INERT im Hetero-Pfad (SAGEConv hat keine Köpfe) -> gepinnt
   variant: legacy                  # FIX (Pooling für hetero noch nicht verdrahtet)
   pool_type: topk                  # inert (siehe TODO im Header)

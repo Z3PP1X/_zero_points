@@ -75,23 +75,25 @@ train:
 model:
   # expression_classifier routes through the shared TestGraphNetwork backbone, exposing the
   # gnn.variant (legacy/pooling/pooling_skip) and gnn.pool_type (topk/diffpool) axes below.
-  # Set back to `gnn` to use PyG's stock GNN (graph_pooling/stage_type take effect then).
+  # Set back to `gnn` to use PyG's stock GNN (layers_pre_mp/layers_post_mp/stage_type take
+  # effect then).
   type: expression_classifier
   loss_fun: weighted_cross_entropy
   edge_decoding: dot
-  graph_pooling: mean              # inert for expression_classifier (it owns its pooling/readout)
+  graph_pooling: add               # graph-level readout (mean|add|max), wired into the custom
+                                   # backbone; add/sum keeps node-count signal (more expressive)
 
 # --- GNN Backbone Architecture (gatv2conv | gineconv | gcnconv | ginconv) ---
 gnn:
-  layers_pre_mp: 1                  
-  layers_mp: 3                      
-  layers_post_mp: 2                 
-  dim_inner: 128                    
+  layers_pre_mp: 1                  # stock-GNN only (custom backbone uses its own node encoder)
+  layers_mp: 3                      # MP depth — wired into the custom backbone (TestGraphNetwork)
+  layers_post_mp: 2                 # stock-GNN only (custom backbone uses a fixed 2-layer head)
+  dim_inner: 128                    # hidden width
   layer_type: gatv2conv             # gatv2conv/gineconv use edge features; gcnconv/ginconv do not
-  stage_type: skipsum               # (inert for expression_classifier) residual connections in stock GNN
-  act: gelu
-  dropout: 0.2
-  att_heads: 4                      # GATv2 attention heads (held constant across the ablation arms)
+  stage_type: skipsum               # stock-GNN only (residual mode); custom backbone has no residual wiring
+  act: gelu                         # activation — wired into the custom backbone (was hardcoded prelu)
+  dropout: 0.2                      # dropout — wired into the custom backbone head
+  att_heads: 4                      # GATv2 attention heads
   # --- expression_classifier pooling/skip ablation axes (see grid.yaml) ---
   variant: legacy                   # legacy | standard | pooling | pooling_skip
   pool_type: topk                   # topk | diffpool (only used by pooling* variants)

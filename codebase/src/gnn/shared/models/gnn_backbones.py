@@ -14,6 +14,7 @@ from torch_geometric.nn import (
     dense_diff_pool,
     global_mean_pool,
     global_max_pool,
+    global_add_pool,
 )
 from torch_geometric.utils import to_dense_batch, to_dense_adj
 
@@ -29,6 +30,26 @@ from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
 
 # Column index of node_type in the FULL node schema; imported by tests.
 NODE_TYPE_COL = NODE_FEATURE_SCHEMA.index("node_type")
+
+# Graph-level readout operators selectable via cfg.model.graph_pooling. "add"/"sum" are
+# the same PyG op (sum readout) — more expressive than mean since it keeps graph size /
+# multiplicity information. Kept here so every backbone resolves the name identically.
+GLOBAL_POOL_FUNCTIONS: dict[str, Callable] = {
+    "mean": global_mean_pool,
+    "add": global_add_pool,
+    "sum": global_add_pool,
+    "max": global_max_pool,
+}
+
+
+def resolve_global_pool(pooling_name: str) -> Callable:
+    """Map a cfg.model.graph_pooling name to a PyG global-pool function."""
+    key = (pooling_name or "mean").lower()
+    if key not in GLOBAL_POOL_FUNCTIONS:
+        raise ValueError(
+            f"Unknown graph_pooling {pooling_name!r}; expected one of {sorted(GLOBAL_POOL_FUNCTIONS)}"
+        )
+    return GLOBAL_POOL_FUNCTIONS[key]
 
 
 def resolve_node_feature_names(active_feature_names) -> list[str]:
@@ -62,19 +83,25 @@ def pool_split_embeddings(
     batch_virt: torch.Tensor | None,
     num_graphs: int,
     readout_dim: int,
+    pool_fn: Callable = global_mean_pool,
 ) -> torch.Tensor:
-    """Pool real and virtual embedding tensors that may differ in feature dim until the final layer."""
+    """Pool real and virtual embedding tensors that may differ in feature dim until the final layer.
+
+    ``pool_fn`` is the graph-level readout (mean/add/max), resolved from
+    ``cfg.model.graph_pooling`` by the caller; it is applied to both the real and virtual
+    partitions so the concatenated ``2*readout_dim`` head input is unaffected by the choice.
+    """
     ref = h_real if h_real.numel() > 0 else h_virt
     assert ref is not None
     device, dtype = ref.device, ref.dtype
 
     if h_real.numel() > 0:
-        x_real_pooled = global_mean_pool(h_real, batch_real, size=num_graphs)
+        x_real_pooled = pool_fn(h_real, batch_real, size=num_graphs)
     else:
         x_real_pooled = torch.zeros(num_graphs, readout_dim, device=device, dtype=dtype)
 
     if h_virt is not None and h_virt.numel() > 0:
-        x_virt_pooled = global_mean_pool(h_virt, batch_virt, size=num_graphs)
+        x_virt_pooled = pool_fn(h_virt, batch_virt, size=num_graphs)
     else:
         x_virt_pooled = torch.zeros(num_graphs, readout_dim, device=device, dtype=dtype)
 
@@ -178,6 +205,33 @@ def make_activation(activation_name: str = "prelu") -> nn.Module:
     -- never share a single module across layers/encoders.
     """
     return get_activation_module(activation_name)
+
+
+def functional_activation(activation_name: str = "relu") -> Callable[[torch.Tensor], torch.Tensor]:
+    """Return a STATELESS functional activation by name.
+
+    Used inside modules that ``to_hetero`` symbolically traces (the hetero conv stack): a
+    stateful ``nn.Module`` activation becomes a per-node-type ``call_module`` whose generated
+    attribute name collides with node types that are Python keywords (e.g. ``global``), so the
+    traced stack must apply activations as plain functions. PReLU's learnable slope cannot be
+    traced per-relation, so it is realised as its default-init LeakyReLU (negative slope 0.25);
+    every other activation maps to its exact functional form. Activation *modules* outside the
+    traced stack (encoders, heads) should still use :func:`make_activation`.
+    """
+    import torch.nn.functional as F
+
+    name = activation_name.lower().replace("_", "")
+    table: dict[str, Callable[[torch.Tensor], torch.Tensor]] = {
+        "relu": F.relu,
+        "gelu": F.gelu,
+        "elu": F.elu,
+        "tanh": torch.tanh,
+        "leakyrelu": F.leaky_relu,
+        "prelu": lambda x: F.leaky_relu(x, 0.25),
+    }
+    if name not in table:
+        raise ValueError(f"Unknown activation function: {activation_name}")
+    return table[name]
 
 
 def _graph_mlp_tail(

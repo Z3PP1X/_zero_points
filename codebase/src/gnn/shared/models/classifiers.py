@@ -13,6 +13,7 @@ from gnn.shared.models.gnn_backbones import (
     filter_real_subgraph,
     make_activation,
     pool_split_embeddings,
+    resolve_global_pool,
     resolve_node_feature_names,
 )
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
@@ -74,6 +75,9 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         activation="prelu",
         variant="legacy",
         pool_type="topk",
+        num_layers=3,
+        dropout=0.2,
+        graph_pooling="mean",
     ):
         super().__init__()
         if architecture not in EDGE_AWARE_ARCHITECTURE_NAMES:
@@ -81,6 +85,8 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
                 f"Unsupported architecture {architecture!r}; "
                 f"expected one of {EDGE_AWARE_ARCHITECTURE_NAMES}"
             )
+        if num_layers < 1:
+            raise ValueError(f"num_layers must be >= 1, got {num_layers}")
 
         self.input_dim = input_dim
         self.architecture = architecture
@@ -90,8 +96,13 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         self.activation_name = activation
         self.variant = variant
         self.pool_type = pool_type
+        self.dropout = dropout
+        # Graph-level readout for the legacy real/virtual split path. Selectable via
+        # cfg.model.graph_pooling (mean|add|max); 'add' keeps node-count/multiplicity signal.
+        self.graph_pooling = graph_pooling
+        self.pool_fn = resolve_global_pool(graph_pooling)
         self._last_aux_loss = torch.zeros(())
-        self.num_layers = 3
+        self.num_layers = num_layers
 
         # Categorical features (node_type; edge relation_type) are integer codes.
         # Feeding them as raw floats imposes a spurious ordinal scale (e.g. Log=17 ≈
@@ -123,16 +134,25 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         else:
             self.edge_encoder = None
 
-        if architecture == "gine_stack":
-            self.conv1 = GINEConv(_gin_mlp(conv_in_dim, hidden_dim, activation), edge_dim=edge_dim)
-            self.conv2 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
-            self.conv3 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
-        else:
-            self.conv1 = GATv2Conv(conv_in_dim, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
-            self.conv2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
-            self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim)
-
-        self.convs = nn.ModuleList([self.conv1, self.conv2, self.conv3])
+        # Depth is config-driven (cfg.gnn.layers_mp): build exactly num_layers convs with
+        # the correct per-layer widths instead of a fixed conv1/conv2/conv3 triple. For GATv2
+        # the last layer collapses the heads (heads=1, concat=False) so the readout width
+        # stays hidden_dim regardless of att_heads / depth; intermediate layers concat heads.
+        convs: list[nn.Module] = []
+        in_dim = conv_in_dim
+        for layer_idx in range(self.num_layers):
+            is_last = layer_idx == self.num_layers - 1
+            if architecture == "gine_stack":
+                convs.append(GINEConv(_gin_mlp(in_dim, hidden_dim, activation), edge_dim=edge_dim))
+                in_dim = hidden_dim
+            else:
+                out_heads = 1 if is_last else heads
+                concat = not is_last
+                convs.append(
+                    GATv2Conv(in_dim, hidden_dim, heads=out_heads, concat=concat, edge_dim=edge_dim)
+                )
+                in_dim = hidden_dim * out_heads if concat else hidden_dim
+        self.convs = nn.ModuleList(convs)
         # Forward-hook target for Dirichlet-energy / over-smoothing diagnostics. Parameter-
         # free, so it leaves the checkpoint and numerics untouched; main_graphgym discovers
         # it as the message-passing probe in place of PyG GNN's absent .mp stage.
@@ -155,7 +175,7 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(2 * hidden_dim + global_dim, hidden_dim),
             make_activation(activation),
-            nn.Dropout(0.2),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, output_dim),
         )
 
@@ -257,6 +277,7 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
             batch_virt,
             num_graphs,
             self.hidden_dim,
+            pool_fn=self.pool_fn,
         )
 
     def _uniform_forward(self, x, edge_index, batch, edge_attr=None):

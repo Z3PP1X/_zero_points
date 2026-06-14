@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch_geometric.data import HeteroData
-from torch_geometric.nn import SAGEConv, global_mean_pool, to_hetero
+from torch_geometric.nn import SAGEConv, to_hetero
 
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
-from gnn.shared.models.gnn_backbones import make_activation, resolve_node_feature_names
+from gnn.shared.models.gnn_backbones import (
+    functional_activation,
+    make_activation,
+    resolve_global_pool,
+    resolve_node_feature_names,
+)
 from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
 
 # The fixed heterogeneous node-type vocabulary (mirrors graph_utils.get_hetero_node_type).
@@ -95,15 +99,20 @@ def pad_edge_types(
 class _ConvStack(nn.Module):
     """Homogeneous message-passing stack ``to_hetero`` lifts to per-edge-type convs."""
 
-    def __init__(self, hidden_dim: int, num_layers: int, sage_aggr: str):
+    def __init__(self, hidden_dim: int, num_layers: int, sage_aggr: str, activation: str = "relu"):
         super().__init__()
         self.convs = nn.ModuleList(
             [SAGEConv(hidden_dim, hidden_dim, aggr=sage_aggr) for _ in range(num_layers)]
         )
+        # cfg.gnn.act drives the activation, but it MUST be functional here: to_hetero traces
+        # this stack and would turn an nn.Module activation into a per-node-type call_module
+        # whose generated name clashes with the 'global' node type (a Python keyword). See
+        # functional_activation() (PReLU is realised as its default-init LeakyReLU).
+        self.act_fn = functional_activation(activation)
 
     def forward(self, x, edge_index):
         for conv in self.convs:
-            x = F.relu(conv(x, edge_index))
+            x = self.act_fn(conv(x, edge_index))
         return x
 
 
@@ -138,10 +147,14 @@ class HeteroExpressionClassifier(nn.Module):
         num_layers: int = 2,
         aggr: str = "sum",
         activation: str = "prelu",
+        dropout: float = 0.2,
+        graph_pooling: str = "mean",
     ):
         super().__init__()
         self.node_types = list(metadata[0])
         self.hidden_dim = hidden_dim
+        # Graph-level readout, selectable via cfg.model.graph_pooling (mean|add|max).
+        self.pool_fn = resolve_global_pool(graph_pooling)
         self._loop_edge_types = [(nt, "self_loop", nt) for nt in self.node_types]
         hetero_metadata = (
             self.node_types,
@@ -157,14 +170,14 @@ class HeteroExpressionClassifier(nn.Module):
             activation=make_activation(activation),
         )
         self.gnn = to_hetero(
-            _ConvStack(hidden_dim, num_layers, sage_aggr="mean"),
+            _ConvStack(hidden_dim, num_layers, sage_aggr="mean", activation=activation),
             hetero_metadata,
             aggr=aggr,
         )
         self.head = nn.Sequential(
             nn.Linear(len(self.node_types) * hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
+            make_activation(activation),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, out_dim),
         )
 
@@ -192,7 +205,7 @@ class HeteroExpressionClassifier(nn.Module):
             if x is None:  # conv stack did not touch this node type
                 x = h0.get(nt)
             if x is not None and x.size(0) > 0:
-                pooled.append(global_mean_pool(x, data[nt].batch, size=num_graphs))
+                pooled.append(self.pool_fn(x, data[nt].batch, size=num_graphs))
             else:
                 pooled.append(torch.zeros(num_graphs, self.hidden_dim, device=device))
 
