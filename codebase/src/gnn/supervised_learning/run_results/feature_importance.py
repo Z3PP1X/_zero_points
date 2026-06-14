@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+from gnn.supervised_learning.run_results._plot_utils import save_figure
 import numpy as np
 import pandas as pd
 import torch
@@ -155,7 +157,7 @@ def save_feature_importance_artifacts(
     plt.tight_layout()
 
     png_path = output_dir / f"feature_importance_{split_label}.png"
-    plt.savefig(png_path, bbox_inches="tight")
+    save_figure(png_path)
     plt.close(fig)
     return json_path
 
@@ -295,7 +297,7 @@ def aggregate_feature_importance_plots(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"feature_importance_heatmap_{split}.png"
-    plt.savefig(out_path, bbox_inches="tight")
+    save_figure(out_path)
     plt.close(fig)
 
     csv_path = output_dir / f"feature_importance_matrix_{split}.csv"

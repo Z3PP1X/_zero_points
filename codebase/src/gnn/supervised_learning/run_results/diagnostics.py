@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+from gnn.supervised_learning.run_results._plot_utils import save_figure
 import numpy as np
 import pandas as pd
 import torch
@@ -203,9 +205,8 @@ class DiagnosticPlotter:
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
         fig.suptitle(f"{title}\n(positive class = {pos_label})", fontsize=12, fontweight="bold")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
-        plt.savefig(output_path, bbox_inches="tight")
+        save_figure(output_path)
         plt.close(fig)
 
     def _plot_roc_curve(self, y_true, y_score, title: str, output_path: Path, pos_label: int):
@@ -222,9 +223,8 @@ class DiagnosticPlotter:
         ax.set_title(title, fontsize=12, fontweight="bold")
         ax.legend(loc="lower right")
         ax.grid(linestyle="--", alpha=0.4)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
-        plt.savefig(output_path, bbox_inches="tight")
+        save_figure(output_path)
         plt.close(fig)
 
     def _plot_pr_curve(self, y_true, y_score, title: str, output_path: Path, pos_label: int):
@@ -240,9 +240,8 @@ class DiagnosticPlotter:
         ax.set_title(title, fontsize=12, fontweight="bold")
         ax.legend(loc="lower left")
         ax.grid(linestyle="--", alpha=0.4)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
-        plt.savefig(output_path, bbox_inches="tight")
+        save_figure(output_path)
         plt.close(fig)
 
     def _plot_reliability(
@@ -297,9 +296,8 @@ class DiagnosticPlotter:
         ax.set_title(f"{title}\nECE = {ece:.4f}", fontsize=12, fontweight="bold")
         ax.legend(loc="upper left", frameon=False, fontsize=9)
         ax.grid(linestyle="--", alpha=0.4)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
-        plt.savefig(output_path, bbox_inches="tight")
+        save_figure(output_path)
         plt.close(fig)
 
     def run_top_configs(self, leaderboard_csv: Path | None = None):

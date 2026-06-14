@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+from gnn.supervised_learning.run_results._plot_utils import save_figure
 import numpy as np
 import pandas as pd
 
@@ -158,9 +160,8 @@ class TrainingCurvePlotter:
                 ax.legend(fontsize=8, frameon=False)
 
         plt.suptitle(title, fontsize=14, fontweight="bold", y=1.01)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
-        plt.savefig(output_path, bbox_inches="tight")
+        save_figure(output_path)
         plt.close(fig)
         if verbose:
             print(f"    Saved training curves: {output_path}")

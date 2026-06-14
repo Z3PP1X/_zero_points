@@ -10,6 +10,8 @@ logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+
+from gnn.supervised_learning.run_results._plot_utils import save_figure
 import numpy as np
 import pandas as pd
 
@@ -390,8 +392,25 @@ class GNNResultEvaluator:
                 style="italic",
                 color="#555555",
             )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, bbox_inches="tight")
+        footnote = self._build_footnote(footnote_df)
+        if footnote:
+            plt.figtext(
+                0.5,
+                0.01,
+                footnote,
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#666666",
+                style="italic",
+                bbox=dict(
+                    boxstyle="round,pad=0.4",
+                    facecolor="#f5f5f5",
+                    edgecolor="#cccccc",
+                    alpha=0.85,
+                ),
+            )
+        save_figure(output_path)
         plt.close(fig)
 
     def _plot_single_heatmap(
