@@ -1,23 +1,21 @@
 # =====================================================================================
-# STUFE 6 — Hetero + Diffpool (GERÜST)
+# STUFE 6 — Hetero + DiffPool
 # =====================================================================================
-# Sechste Stufe: hierarchical pooling — insbesondere DiffPool — auch für heterogene
-# Netzwerke. Dies ist die geplante Weiterentwicklung von Stufe 5.
-#
-# WICHTIG: Diese Stufe ist aktuell ein CONFIG-GERÜST. Der HeteroExpressionClassifier
-# unterstützt noch KEIN variant/pool_type (kein hierarchical pooling / DiffPool für
-# hetero). Funktional ist diese Stufe daher heute identisch zu Stufe 5 (flaches
-# Hetero-Message-Passing). Die DiffPool-Achse ist in grid.yaml als auskommentierter
-# TODO vorbereitet und wird aktiviert, sobald der Hetero-DiffPool-Code existiert.
+# Sechste Stufe: hierarchisches Pooling (DiffPool) für heterogene Netzwerke.
+# Weiterentwicklung von Stufe 5 (flaches Hetero-Message-Passing).
 #
 # FIX:
 #   model.type=expression_classifier, heterogeneous=true, mode=graph,
 #   edge_direction=top_down, features = node + topology + positional + edge (volles Schema)
+#   variant=pooling, pool_type=diffpool  →  ein DiffPool-Schritt pro Knoten-Typ
 #
 # EINSTELLBAR (siehe grid.yaml):
 #   gnn.dim_inner, gnn.layers_mp
-#   (gnn.layer_type / att_heads sind im Hetero-Pfad INERT: SAGEConv -> gepinnt.)
-#   (GEPLANT: gnn.variant {legacy, pooling}, gnn.pool_type {topk, diffpool})
+#   gnn.variant {legacy, pooling}, gnn.pool_type {diffpool}
+#   gnn.aux_loss_weight
+#
+# INERT (Hetero-Pfad):
+#   gnn.layer_type / att_heads  →  GINConv gepinnt via to_hetero
 # =====================================================================================
 
 out_dir: results
@@ -45,23 +43,20 @@ expression_graph:
     node: true                     # FIX
     topology: true                 # FIX
     # Volles Node-Schema (node+topology+positional) -> active_features bleibt None,
-    # kein Dataset-Slicing. Im Hetero-Pfad zwingend (siehe Stufe 5): eine
-    # Feature-Teilmenge ist mit heterogeneous=true aktuell nicht unterstützt.
+    # kein Dataset-Slicing. Im Hetero-Pfad zwingend: Feature-Teilmenge nicht unterstützt.
     positional: true               # FIX (volles Schema erforderlich für hetero)
     edge: true                     # FIX
   active_features: ""
 
 train:
   mode: custom
-  batch_size: 256                 # == Stufe 5 (heute funktional identisch). HINWEIS: sobald
-                                   # DiffPool-für-hetero im Code ist, hier ggf. auf 1024
-                                   # reduzieren (DiffPool densifiziert Batches -> RAM).
+  batch_size: 128                  # Reduziert wegen DiffPool-Densifizierung (RAM).
   num_workers: 0
   eval_period: 10
   ckpt_period: 20
   epoch_warmup: 5
   epochs: 40
-  restart_period: 20              # Periode für cosine_with_restarts (bei epochs=25 ein Warm-Restart)
+  restart_period: 20              # Periode für cosine_with_restarts
   curated_eval_period: 5
   curated_eval_on_test_highscore: true
   early_stopping: true
@@ -77,17 +72,17 @@ model:
 
 gnn:
   layers_pre_mp: 1
-  layers_mp: 2                     # EINSTELLBAR (Hetero-Pfad liest layers_mp = num_layers)
+  layers_mp: 2                     # EINSTELLBAR (Hetero-Pfad: num_layers)
   layers_post_mp: 2
   dim_inner: 128                   # EINSTELLBAR
-  layer_type: gatv2conv           # INERT im Hetero-Pfad (SAGEConv) -> gepinnt
+  layer_type: gatv2conv            # INERT im Hetero-Pfad (GINConv via to_hetero)
   stage_type: skipsum
   act: prelu
-  dropout: 0.2                     # INERT im Hetero-Pfad (Head hardcodet Dropout) -> gepinnt
-  att_heads: 4                     # INERT im Hetero-Pfad (SAGEConv hat keine Köpfe) -> gepinnt
-  variant: legacy                  # GEPLANT: pooling (sobald hetero-pooling im Code ist)
-  pool_type: diffpool              # GEPLANT-Marker; heute inert für hetero
-  aux_loss_weight: 1.0             # DiffPool link+entropy aux-loss Gewicht (sobald aktiv)
+  dropout: 0.2
+  att_heads: 4                     # INERT im Hetero-Pfad (GINConv hat keine Köpfe)
+  variant: pooling                 # pooling → ein DiffPool-Schritt pro Knoten-Typ
+  pool_type: diffpool              # diffpool (einziger hierarchischer Pool-Typ für hetero)
+  aux_loss_weight: 1.0             # DiffPool link+entropy aux-loss Gewicht
 
 optim:
   optimizer: adamw

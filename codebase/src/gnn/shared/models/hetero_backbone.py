@@ -5,13 +5,20 @@ A true heterogeneous training path for ``heterogeneous: true``: consume ``Hetero
 flattening to a homogeneous graph. Built on ``torch_geometric.nn.to_hetero`` — the library
 transform that lifts a homogeneous GNN to a heterogeneous one over a fixed metadata.
 
-STATUS: stubs only — the tests in ``test_hetero_backbone.py`` specify the behaviour; the
-implementations land next.
-
 Node types are the three from ``get_hetero_node_type`` (global / operator / root). Edge
 types are relation-typed triplets ``(src, relation, dst)``; the set varies per graph, so a
 model built for fixed metadata requires every batched graph to carry every edge type (empty
 ``edge_index`` for the absent ones) — see :func:`pad_edge_types`.
+
+Pooling variants (``variant`` arg):
+  ``legacy`` — flat graph-level readout (mean/add/max) independently per node type.
+  ``pooling`` — one DiffPool step per node type; intra-type edges form the adjacency.
+
+For the ``pooling`` variant, :data:`HETERO_DIFFPOOL_CLUSTERS` clusters are used per
+node type regardless of how many nodes that type has in a given graph.  Small graphs
+(e.g. ``global`` with 1 node) degenerate to a learned soft-assignment but remain
+numerically valid.  The per-type link+entropy losses are summed into ``_last_aux_loss``
+and picked up by the ``_shared_step_with_aux`` monkeypatch in ``loader_graphgym``.
 """
 
 from __future__ import annotations
@@ -20,9 +27,11 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import GINConv, to_hetero
+from torch_geometric.utils import to_dense_adj, to_dense_batch
 
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
 from gnn.shared.models.gnn_backbones import (
+    DiffPoolBlock,
     _gin_mlp,
     functional_activation,
     make_activation,
@@ -33,6 +42,10 @@ from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
 
 # The fixed heterogeneous node-type vocabulary (mirrors graph_utils.get_hetero_node_type).
 HETERO_NODE_TYPES: tuple[str, ...] = ("global", "operator", "root")
+
+# Single DiffPool step: collapse each node type to this many clusters.
+# Expression trees are small, so a compact cluster count is appropriate.
+HETERO_DIFFPOOL_CLUSTERS: int = 4
 
 EdgeType = tuple[str, str, str]
 Metadata = tuple[list[str], list[EdgeType]]
@@ -122,21 +135,20 @@ class HeteroExpressionClassifier(nn.Module):
 
     Args:
         metadata: ``(node_types, edge_types)`` the model is specialised to.
-        in_dim: node feature width (the shared ``NODE_FEATURE_SCHEMA`` length).
         hidden_dim / out_dim / num_layers / aggr: backbone hyperparameters.
+        variant: ``"legacy"`` for flat graph-level readout, ``"pooling"`` for DiffPool.
+        pool_type: ``"diffpool"`` (the only hierarchical pooling supported for hetero).
 
-    A shared ``TwoWayFeatureEncoder`` runs over *every* node type before message passing —
-    the same encoder the homogeneous backbone uses, so categorical columns (``node_type`` /
-    ``label_id``) are embedded by name rather than fed as raw ordinal codes, and continuous
-    columns are LayerNorm'd + linearly projected. All node types share the encoder because
-    they share the ``NODE_FEATURE_SCHEMA`` layout. The model also injects a self-loop edge
-    type ``(nt, 'self_loop', nt)`` for each node type, so types that are only ever an edge
-    source (``global``) are still a destination and get updated — ``to_hetero`` otherwise
-    refuses to build a model where a node type is never updated. The real edge metadata stays
-    untouched (self-loops are an internal model detail, not part of ``build_hetero_metadata``).
-    ``aggr`` is the cross-relation aggregation ``to_hetero`` applies when a node type is the
-    destination of several edge types. ``forward(data)`` takes a (batched) ``HeteroData`` and
-    returns logits of shape ``[num_graphs, out_dim]``.
+    A shared ``TwoWayFeatureEncoder`` runs over *every* node type before message passing.
+    The model injects a self-loop edge type ``(nt, 'self_loop', nt)`` for each node type so
+    ``to_hetero`` can update all node types. The real edge metadata stays untouched.
+
+    When ``variant == "pooling"`` and ``pool_type == "diffpool"``, one
+    :class:`~gnn.shared.models.gnn_backbones.DiffPoolBlock` is built per node type.
+    Each block uses only the intra-type edges (``src_type == dst_type``) as its adjacency;
+    missing intra-type edges fall back to self-loops. The sum of per-type
+    link+entropy losses is accumulated in ``_last_aux_loss`` (scalar tensor) and
+    picked up by the ``_shared_step_with_aux`` monkeypatch.
     """
 
     def __init__(
@@ -150,10 +162,15 @@ class HeteroExpressionClassifier(nn.Module):
         activation: str = "prelu",
         dropout: float = 0.2,
         graph_pooling: str = "mean",
+        variant: str = "legacy",
+        pool_type: str = "diffpool",
     ):
         super().__init__()
         self.node_types = list(metadata[0])
         self.hidden_dim = hidden_dim
+        self.variant = variant
+        self.pool_type = pool_type
+        self._last_aux_loss = torch.zeros(())
         # Graph-level readout, selectable via cfg.model.graph_pooling (mean|add|max).
         self.pool_fn = resolve_global_pool(graph_pooling)
         self._loop_edge_types = [(nt, "self_loop", nt) for nt in self.node_types]
@@ -175,6 +192,11 @@ class HeteroExpressionClassifier(nn.Module):
             hetero_metadata,
             aggr=aggr,
         )
+        if variant == "pooling" and pool_type == "diffpool":
+            self.hetero_diffpool_blocks = nn.ModuleList([
+                DiffPoolBlock(hidden_dim, hidden_dim, HETERO_DIFFPOOL_CLUSTERS, activation)
+                for _ in self.node_types
+            ])
         self.head = nn.Sequential(
             nn.Linear(len(self.node_types) * hidden_dim, hidden_dim),
             make_activation(activation),
@@ -191,6 +213,63 @@ class HeteroExpressionClassifier(nn.Module):
             edge_index_dict[loop_type] = idx.unsqueeze(0).repeat(2, 1)
         return edge_index_dict
 
+    def _intra_type_edges(self, data: HeteroData, node_type: str, device) -> torch.Tensor:
+        """Return edge_index of all intra-type edges (src == dst == node_type).
+
+        Falls back to identity self-loops when no intra-type edges exist, so
+        DenseSAGEConv inside DiffPoolBlock always has a valid (non-empty) adjacency.
+        """
+        parts = []
+        for et in data.edge_types:
+            src_t, _, dst_t = et
+            if src_t == node_type and dst_t == node_type:
+                ei = data[et].edge_index
+                if ei.numel() > 0 and ei.size(1) > 0:
+                    parts.append(ei)
+        if parts:
+            return torch.cat(parts, dim=1)
+        n = data[node_type].x.size(0)
+        idx = torch.arange(n, device=device, dtype=torch.long)
+        return idx.unsqueeze(0).repeat(2, 1)
+
+    def _flat_readout(self, h, h0, data, num_graphs, device):
+        """Flat graph-level readout (pool_fn) per node type."""
+        pooled = []
+        for nt in self.node_types:
+            x = h.get(nt)
+            if x is None:
+                x = h0.get(nt)
+            if x is not None and x.size(0) > 0:
+                pooled.append(self.pool_fn(x, data[nt].batch, size=num_graphs))
+            else:
+                pooled.append(torch.zeros(num_graphs, self.hidden_dim, device=device))
+        return pooled
+
+    def _diffpool_readout(self, h, h0, data, num_graphs, device):
+        """Per-node-type DiffPool readout.
+
+        Returns (list_of_pooled_tensors, aux_loss) where each tensor is
+        ``[num_graphs, hidden_dim]`` and aux_loss is the summed link+entropy loss.
+        """
+        aux = torch.zeros((), device=device)
+        pooled = []
+        for nt_idx, nt in enumerate(self.node_types):
+            x = h.get(nt)
+            if x is None:
+                x = h0.get(nt)
+            if x is None or x.size(0) == 0:
+                pooled.append(torch.zeros(num_graphs, self.hidden_dim, device=device))
+                continue
+            batch_nt = data[nt].batch
+            intra_ei = self._intra_type_edges(data, nt, device)
+            max_nodes = max(1, int(batch_nt.bincount().max().item()))
+            x_dense, mask = to_dense_batch(x, batch_nt, max_num_nodes=max_nodes)
+            adj = to_dense_adj(intra_ei, batch_nt, max_num_nodes=max_nodes)
+            x_dense, _, loss = self.hetero_diffpool_blocks[nt_idx](x_dense, adj, mask)
+            aux = aux + loss
+            pooled.append(x_dense.mean(dim=1))
+        return pooled, aux
+
     def forward(self, data: HeteroData):
         num_graphs = data.num_graphs
         device = self.head[0].weight.device
@@ -200,14 +279,11 @@ class HeteroExpressionClassifier(nn.Module):
         h0 = {nt: self.node_encoder(x)[0] for nt, x in data.x_dict.items()}
         h = self.gnn(h0, self._with_self_loops(data, device))
 
-        pooled = []
-        for nt in self.node_types:
-            x = h.get(nt)
-            if x is None:  # conv stack did not touch this node type
-                x = h0.get(nt)
-            if x is not None and x.size(0) > 0:
-                pooled.append(self.pool_fn(x, data[nt].batch, size=num_graphs))
-            else:
-                pooled.append(torch.zeros(num_graphs, self.hidden_dim, device=device))
+        if self.variant == "pooling" and self.pool_type == "diffpool":
+            pooled, aux = self._diffpool_readout(h, h0, data, num_graphs, device)
+            self._last_aux_loss = aux
+        else:
+            pooled = self._flat_readout(h, h0, data, num_graphs, device)
+            self._last_aux_loss = torch.zeros((), device=device)
 
         return self.head(torch.cat(pooled, dim=-1))

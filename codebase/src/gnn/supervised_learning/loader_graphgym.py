@@ -360,6 +360,8 @@ class ExpressionClassifierNetwork(torch.nn.Module):
                 activation=cfg.gnn.act,
                 dropout=cfg.gnn.dropout,
                 graph_pooling=cfg.model.graph_pooling,
+                variant=getattr(cfg.gnn, "variant", "legacy"),
+                pool_type=getattr(cfg.gnn, "pool_type", "diffpool"),
             )
             return
 
@@ -394,8 +396,9 @@ class ExpressionClassifierNetwork(torch.nn.Module):
     def forward(self, batch):
         if self._hetero:
             # HeteroExpressionClassifier consumes the whole HeteroData batch (x_dict /
-            # edge_index_dict); aux loss stays zero (DiffPool is homogeneous-only).
+            # edge_index_dict); _last_aux_loss is non-zero for the pooling/diffpool variant.
             logits = self.net(batch)
+            self._last_aux_loss = self.net._last_aux_loss
         else:
             logits = self.net(
                 batch.x,

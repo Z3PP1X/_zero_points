@@ -1,28 +1,21 @@
-# grid.yaml — STUFE 6 (Hetero + Diffpool, GERÜST)
-# Heute funktional identisch zu Stufe 5 (Hetero-Pooling/DiffPool ist noch nicht im Code).
-# 2 x 2 = 4 Konfigurationen. layer_type/att_heads sind im Hetero-Pfad inert (SAGEConv)
-# -> nicht gesweept, in der base_config gepinnt.
+# grid.yaml — STUFE 6 (Hetero + DiffPool)
+# 2 x 2 x 2 x 1 = 8 Konfigurationen.
+# layer_type/att_heads sind im Hetero-Pfad inert (GINConv via to_hetero) -> nicht gesweept.
 
 gnn.dim_inner:
   - 64
-  
+  - 128
+
 gnn.layers_mp:
   - 2
   - 4
 
+gnn.variant:
+  - legacy
+  - pooling
+
+gnn.pool_type:
+  - diffpool
+
 gnn.dropout:
   - 0.0
-
-# -------------------------------------------------------------------------------------
-# GEPLANT: DiffPool für heterogene Netze. Aktivieren, sobald der
-# HeteroExpressionClassifier variant/pool_type unterstützt:
-#
-# gnn.variant:
-#   - pooling
-#   - pooling_skip
-# gnn.pool_type:
-#   - topk
-#   - diffpool
-# gnn.aux_loss_weight:
-#   - 1.0
-# -------------------------------------------------------------------------------------

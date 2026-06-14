@@ -109,4 +109,24 @@ def test_network_routes_to_hetero_and_returns_logits_and_y():
     assert logits.shape == (2,)  # single-logit BCE path, squeezed
     assert torch.equal(y.view(-1), torch.tensor([0, 1]))
     assert torch.isfinite(logits).all()
-    assert float(net._last_aux_loss) == 0.0  # no DiffPool aux loss on the hetero path
+    assert float(net._last_aux_loss) == 0.0  # legacy variant: no DiffPool aux loss
+
+
+def test_network_hetero_diffpool_aux_loss():
+    """pooling/diffpool variant produces a non-zero aux loss and finite logits."""
+    data_list = _dataset()
+    padded, edge_types = prepare_hetero_data_list(data_list)
+    _setup_hetero_cfg(edge_types)
+    cfg.gnn.variant = "pooling"
+    cfg.gnn.pool_type = "diffpool"
+
+    net = ExpressionClassifierNetwork(dim_in=len(NODE_FEATURE_SCHEMA), dim_out=1)
+    assert net._hetero is True
+
+    batch = next(iter(DataLoader(padded, batch_size=2)))
+    net.train()
+    logits, y = net(batch)
+
+    assert logits.shape == (2,)
+    assert torch.isfinite(logits).all()
+    assert net._last_aux_loss.item() > 0.0  # DiffPool link+entropy loss is positive
