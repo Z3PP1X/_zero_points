@@ -18,7 +18,9 @@ SPLIT_LABELS = {
     "val": "Validation Synthetic",
     "test": "Validation Curated",
 }
-CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "mean_margin", "brier_score", "dirichlet_energy"]
+# mean_margin excluded: requires calibration to be meaningful; brier_score kept
+# as the single uncalibrated signal.
+CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "brier_score", "dirichlet_energy"]
 SPLIT_COLORS = {
     "train": "#2A9D8F",
     "val": "#E76F51",

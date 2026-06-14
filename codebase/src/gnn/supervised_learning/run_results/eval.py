@@ -71,6 +71,8 @@ class GNNResultEvaluator:
         "time_iter",
         "gpu_memory",
     }
+    # mean_margin, mean_entropy, ece require post-training calibration and are
+    # excluded from plots. brier_score is kept as the single uncalibrated signal.
     HEATMAP_METRICS = [
         "auc",
         "pr_auc",
@@ -78,7 +80,8 @@ class GNNResultEvaluator:
         "recall",
         "f1",
         "precision",
-        *CONFIDENCE_METRICS,
+        "mean_confidence",
+        "brier_score",
     ]
     BOUNDED_METRICS = [
         "auc",
@@ -88,10 +91,7 @@ class GNNResultEvaluator:
         "recall",
         "f1",
         "mean_confidence",
-        "mean_margin",
-        "mean_entropy",
         "brier_score",
-        "ece",
     ]
     DEFAULT_RUNS = ["train_bestepoch", "val_bestepoch", "test_bestepoch"]
     ALL_RUNS = [
@@ -158,8 +158,73 @@ class GNNResultEvaluator:
             "premium_red", ["#FFFFFF", "#F8D7DA", "#842029"]
         )
 
+        self._exp_config: dict = {}
+        self._load_experiment_config()
         self.class_balance = None
         self.load_class_balance()
+
+    def _load_experiment_config(self):
+        """Load base config from run_manifest.json or config_supervised.yaml."""
+        manifest_path = self.base_dir / self.naming_var / "run_manifest.json"
+        if manifest_path.exists():
+            try:
+                import json as _json
+                manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+                self._exp_config = manifest.get("base_config", {}) or {}
+                return
+            except Exception:
+                pass
+        config_file = self.base_dir.parent / "config_supervised.yaml"
+        if config_file.exists():
+            try:
+                import yaml
+                with open(config_file, "r", encoding="utf-8") as f:
+                    self._exp_config = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+
+    def _build_footnote(self, df: pd.DataFrame | None = None) -> str:
+        """Compose a two-line figure footnote: arch config + dataset context."""
+        cfg = self._exp_config
+        expr = cfg.get("expression_graph", {}) or {}
+        dataset_cfg = cfg.get("dataset", {}) or {}
+
+        arch_parts = []
+        if df is not None and "layer_type" in df.columns:
+            vals = sorted({str(v) for v in df["layer_type"].dropna()})
+            if vals:
+                arch_parts.append(f"Architecture: {', '.join(vals)}")
+        if df is not None and "layers_mp" in df.columns:
+            vals = sorted(df["layers_mp"].dropna().unique())
+            if len(vals) == 1:
+                arch_parts.append(f"MP-Layers: {int(vals[0])}")
+            elif len(vals) > 1:
+                arch_parts.append(f"MP-Layers: {int(vals[0])}–{int(vals[-1])}")
+        if df is not None and "dim_inner" in df.columns:
+            vals = sorted(df["dim_inner"].dropna().unique())
+            if len(vals) == 1:
+                arch_parts.append(f"dim_inner: {int(vals[0])}")
+            elif len(vals) > 1:
+                arch_parts.append(f"dim_inner: {int(vals[0])}–{int(vals[-1])}")
+        for key, label in [
+            ("mode", "Mode"), ("edge_direction", "Edge"),
+            ("bidirectional", "Bidirectional"), ("add_kappa", "Kappa"),
+        ]:
+            val = expr.get(key)
+            if val is not None:
+                arch_parts.append(f"{label}: {val}")
+        line1 = " | ".join(arch_parts) if arch_parts else ""
+
+        synthetic_name = (
+            expr.get("synthetic_dataset") or dataset_cfg.get("name") or self.naming_var
+        )
+        line2 = (
+            f"Train: {synthetic_name} (80%-Split, Synthetic)"
+            f"  ·  Val: {synthetic_name} (20%-Split, Synthetic)"
+            f"  ·  Test: CuratedReal (100%)"
+        )
+
+        return "\n".join(p for p in [line1, line2] if p)
 
     def load_class_balance(self):
         """Loads class_balance.json or dynamically computes it as a fallback."""
@@ -376,7 +441,14 @@ class GNNResultEvaluator:
         }
         return labels.get(col, col.replace("_", " ").title())
 
-    def _save_figure(self, fig, output_path: Path, title: str, subtitle_y: float = 0.94):
+    def _save_figure(
+        self,
+        fig,
+        output_path: Path,
+        title: str,
+        subtitle_y: float = 0.94,
+        footnote_df: pd.DataFrame | None = None,
+    ):
         plt.suptitle(title, fontsize=16, fontweight="bold", y=0.98)
         balance_info = self.get_class_balance_str()
         if balance_info:
@@ -389,6 +461,24 @@ class GNNResultEvaluator:
                 fontsize=10,
                 style="italic",
                 color="#555555",
+            )
+        footnote = self._build_footnote(footnote_df)
+        if footnote:
+            plt.figtext(
+                0.5,
+                0.01,
+                footnote,
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="#666666",
+                style="italic",
+                bbox=dict(
+                    boxstyle="round,pad=0.4",
+                    facecolor="#f5f5f5",
+                    edgecolor="#cccccc",
+                    alpha=0.85,
+                ),
             )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(output_path, bbox_inches="tight")
@@ -511,10 +601,11 @@ class GNNResultEvaluator:
         n_cols = min(3, n_metrics)
         n_rows = int(np.ceil(n_metrics / n_cols))
         fig, axes = plt.subplots(
-            n_rows, n_cols, figsize=(6.2 * n_cols, 4.8 * n_rows), dpi=150
+            n_rows, n_cols, figsize=(6.5 * n_cols, 5.2 * n_rows), dpi=150
         )
         axes = np.atleast_1d(axes).flatten()
-        fig.subplots_adjust(hspace=0.45, wspace=0.35)
+        # Reserve 14% at top for suptitle + subtitle, 8% at bottom for footnote.
+        fig.subplots_adjust(hspace=0.55, wspace=0.42, top=0.84, bottom=0.08)
 
         for idx, metric in enumerate(metrics):
             ax = axes[idx]
@@ -546,7 +637,7 @@ class GNNResultEvaluator:
             else "mean across configurations per cell"
         )
         full_title = f"{title}\n{axis_note} — {agg_note}"
-        self._save_figure(fig, output_path, full_title, subtitle_y=0.92)
+        self._save_figure(fig, output_path, full_title, subtitle_y=0.92, footnote_df=plot_df)
         print(f"    Saved heatmap: {output_path}")
         return True
 
@@ -676,7 +767,7 @@ class GNNResultEvaluator:
                 title_fontsize=10,
             )
             ax.set_xticklabels(
-                [m.upper() for m in present_bounded], rotation=0, fontsize=10
+                [m.upper() for m in present_bounded], rotation=45, ha="right", fontsize=9
             )
             for container in ax.containers:
                 for bar in container:
@@ -723,7 +814,7 @@ class GNNResultEvaluator:
             ax.spines["left"].set_color("#cccccc")
             ax.spines["bottom"].set_color("#cccccc")
 
-        self._save_figure(fig, output_path, title, subtitle_y=0.92)
+        self._save_figure(fig, output_path, title, subtitle_y=0.92, footnote_df=overall_df)
         print(f"    Saved summary bars: {output_path}")
         return True
 
@@ -814,7 +905,7 @@ class GNNResultEvaluator:
                 fontsize=10,
                 title_fontsize=11,
             )
-            ax.set_xticklabels([m.upper() for m in bounded], rotation=0, fontsize=10)
+            ax.set_xticklabels([m.upper() for m in bounded], rotation=45, ha="right", fontsize=9)
             panel_idx += 1
 
         if has_loss:
@@ -839,11 +930,17 @@ class GNNResultEvaluator:
             ax.spines["left"].set_color("#cccccc")
             ax.spines["bottom"].set_color("#cccccc")
 
+        footnote_df = None
+        try:
+            footnote_df = self.load_data("val_bestepoch")
+        except FileNotFoundError:
+            pass
         self._save_figure(
             fig,
             output_path,
             f"Split Comparison — {self.naming_var}",
             subtitle_y=0.96,
+            footnote_df=footnote_df,
         )
         print(f"    Saved split comparison plot: {output_path}")
 
@@ -914,11 +1011,13 @@ class GNNResultEvaluator:
         for spine in ("top", "right"):
             ax.spines[spine].set_visible(False)
 
+        footnote_df = combined if not combined.empty else None
         self._save_figure(
             fig,
             output_path,
             f"Generalization Gap — {self.naming_var}",
             subtitle_y=0.90,
+            footnote_df=footnote_df,
         )
         print(f"    Saved generalization gap plot: {output_path}")
 
@@ -949,6 +1048,7 @@ class GNNResultEvaluator:
             )
 
         config_cols = self._config_columns(val_df)
+        # mean_margin, mean_entropy, ece excluded: require calibration, not primary metrics.
         metric_cols = [
             m
             for m in [
@@ -960,10 +1060,7 @@ class GNNResultEvaluator:
                 "accuracy",
                 "loss",
                 "mean_confidence",
-                "mean_margin",
-                "mean_entropy",
                 "brier_score",
-                "ece",
             ]
             if m in val_df.columns
         ]
@@ -980,16 +1077,32 @@ class GNNResultEvaluator:
         if ranked.empty:
             return
 
-        fig_height = max(4, 0.45 * len(ranked) + 1.5)
-        fig, ax = plt.subplots(figsize=(16, fig_height), dpi=150)
+        n_table_cols = len(ranked.columns)
+        fig_width = max(16, 1.6 * n_table_cols)
+        fig_height = max(4, 0.50 * len(ranked) + 2.5)
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=150)
         ax.axis("off")
 
         table_data = ranked.copy()
         for col in metric_cols:
             if col in table_data.columns:
                 table_data[col] = table_data[col].map(lambda v: f"{v:.4f}")
+
+        # Shorten header labels to prevent cell overflow.
+        _HEADER_SHORT = {
+            "Layer Type": "Arch",
+            "Dim Inner": "dim_in",
+            "MP Layers": "MP",
+            "Graph Pooling": "Pooling",
+            "MEAN_CONFIDENCE": "CONF",
+            "BRIER_SCORE": "BRIER",
+        }
         cell_text = table_data.values.tolist()
-        col_labels = [self._format_axis_label(c) if c in self.CONFIG_COLS else c.upper() for c in table_data.columns]
+        col_labels = [
+            self._format_axis_label(c) if c in self.CONFIG_COLS else c.upper()
+            for c in table_data.columns
+        ]
+        col_labels = [_HEADER_SHORT.get(lbl, lbl) for lbl in col_labels]
 
         table = ax.table(
             cellText=cell_text,
@@ -998,14 +1111,24 @@ class GNNResultEvaluator:
             cellLoc="center",
         )
         table.auto_set_font_size(False)
-        table.set_fontsize(8)
-        table.scale(1, 1.4)
+        table.set_fontsize(7)
+        table.auto_set_column_width(col=list(range(n_table_cols)))
+        table.scale(1.0, 1.5)
+
+        # Style header row.
+        for col_idx in range(n_table_cols):
+            cell = table[0, col_idx]
+            cell.set_facecolor("#264653")
+            cell.get_text().set_color("white")
+            cell.get_text().set_fontweight("bold")
+            cell.get_text().set_fontsize(7)
 
         self._save_figure(
             fig,
             output_dir / "leaderboard.png",
             f"Top {len(ranked)} Configurations by Val Synthetic PR-AUC — {self.naming_var}",
             subtitle_y=0.02,
+            footnote_df=ranked,
         )
         print(f"    Saved leaderboard PNG: {output_dir / 'leaderboard.png'}")
 
@@ -1042,7 +1165,7 @@ class GNNResultEvaluator:
 
         x_raw = sub[x_col].to_numpy(dtype=float)
         y = sub[y_col].to_numpy(dtype=float)
-        # Internally both axes maximize; flip x when smaller-is-better (params, ece).
+        # Internally both axes maximize; flip x when smaller-is-better (params, brier_score).
         x_obj = x_raw if maximize_x else -x_raw
         mask = self._pareto_front(np.column_stack([x_obj, y]))
 
@@ -1070,8 +1193,8 @@ class GNNResultEvaluator:
     def generate_pareto(self, output_path: Path):
         """Multi-metric Pareto fronts over val-synthetic best-epoch configs.
 
-        Left: PR-AUC vs model size (params, smaller better). Right: accuracy vs
-        calibration error (ece, smaller better) — only when ece was logged.
+        Left: PR-AUC vs model size (params, smaller better). Right: PR-AUC vs
+        brier_score (lower better) as the single uncalibrated signal.
         """
         try:
             df = self.load_data("val_bestepoch")
@@ -1089,12 +1212,14 @@ class GNNResultEvaluator:
         )
         if has_params:
             panels.append(("params", "pr_auc", "Params", "PR-AUC", False))
-        if "ece" in df.columns and "accuracy" in df.columns:
+        # ECE removed (needs post-training calibration); brier_score kept as
+        # the single uncalibrated signal for the Pareto trade-off view.
+        if "brier_score" in df.columns and "pr_auc" in df.columns:
             panels.append(
-                ("ece", "accuracy", "ECE (calibration error)", "Accuracy", False)
+                ("brier_score", "pr_auc", "Brier Score (↓ better)", "PR-AUC", False)
             )
         if not panels:
-            # Fall back to a PR-AUC vs MP-layers trade-off when params/ece absent.
+            # Fall back to a PR-AUC vs MP-layers trade-off when no cost axis available.
             if "layers_mp" in df.columns:
                 panels.append(("layers_mp", "pr_auc", "MP Layers", "PR-AUC", False))
             else:
@@ -1121,6 +1246,7 @@ class GNNResultEvaluator:
             output_path,
             f"Pareto Fronts (Val Synthetic, Best Epoch) — {self.naming_var}",
             subtitle_y=0.92,
+            footnote_df=df,
         )
         print(f"    Saved Pareto plot: {output_path}")
 
