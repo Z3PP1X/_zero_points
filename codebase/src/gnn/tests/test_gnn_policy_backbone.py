@@ -31,15 +31,23 @@ def test_filter_real_subgraph_drops_virtual_edges():
     assert real_edge_attr.squeeze(-1).tolist() == [1.0, 5.0]
 
 
-def test_virtual_nodes_excluded_from_message_passing():
+def test_supernode_participates_in_message_passing():
+    """The structural aggregator roots (old node_type codes 6/9/10 = f_root/d1_root/d2_root)
+    were removed: ``VIRTUAL_NODE_TYPES`` is now empty and the supernode (code 5) is an ordinary
+    message-passing node (graph_utils: 'so the model treats it as an ordinary message-passing
+    node rather than a task aggregator'). So no node type is excluded by ``filter_real_subgraph``,
+    and an edge incident to the supernode DOES influence the readout — the inverse of the
+    removed virtual-root exclusion. (``filter_real_subgraph`` itself is unit-tested above.)"""
     layout = FeatureLayout(node_input_dim=4, global_input_dim=6, edge_input_dim=4)
     hidden_dim = 16
     heads = 2
     num_layers = 2
 
+    torch.manual_seed(0)
     x = torch.randn(4, layout.padded_node_feature_count)
-    # Node types 6/9 are the structural aggregator (virtual) roots f_root/d1_root.
-    x[:, NODE_TYPE_COL] = torch.tensor([1.0, 2.0, 6.0, 9.0])
+    # Valid current codes: operator(1), root(2), supernode(5), operator(1). Node 2 is the
+    # supernode; edge index 2 (2 -> 0) is incident to it.
+    x[:, NODE_TYPE_COL] = torch.tensor([1.0, 2.0, 5.0, 1.0])
     edge_index = torch.tensor([[0, 1, 2, 3, 0], [1, 2, 0, 0, 3]], dtype=torch.long)
     edge_attr = torch.randn(edge_index.size(1), layout.padded_edge_feature_count)
     batch_index = torch.zeros(4, dtype=torch.long)
@@ -62,7 +70,8 @@ def test_virtual_nodes_excluded_from_message_passing():
         out_perturbed = backbone(x, edge_index, batch_index, global_features, edge_attr=perturbed)
 
     assert out_base.shape == (1, hidden_dim)
-    assert torch.allclose(out_base, out_perturbed, atol=1e-5)
+    # The supernode is NOT excluded: its incident edge's features reach the readout.
+    assert not torch.allclose(out_base, out_perturbed, atol=1e-5)
 
 
 def test_backbone_forward_pass_all_combinations():

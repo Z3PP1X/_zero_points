@@ -90,9 +90,10 @@ def test_variant_pool_classifier():
             assert torch.isfinite(out).all(), (variant, pool_type)
 
 
-def test_label_id_embedding_breaks_ordinal_assumption():
-    """Two graphs differing only in a function label must be separable through the
-    label embedding rather than a linear scaling of the raw id."""
+def test_categorical_features_embedded_not_ordinal():
+    """Categorical node columns (node_type, root_color) are embedded via nn.Embedding, not
+    fed as raw ordinal codes which would impose a spurious linear scale. Each embedding table
+    must cover the canonical vocabulary so every code present in the data maps to a row."""
     batch = _build_batch()
     model = TestGraphNetwork(
         input_dim=len(NODE_FEATURE_SCHEMA),
@@ -101,19 +102,19 @@ def test_label_id_embedding_breaks_ordinal_assumption():
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
     )
-    # The label embedding table must cover the full canonical vocabulary.
-    assert (
-        model.node_encoder.embeddings["label_id"].num_embeddings
-        >= int(batch.x[:, 1].max().item()) + 1
-    )
+    for name in ("node_type", "root_color"):
+        col = NODE_FEATURE_SCHEMA.index(name)
+        emb = model.node_encoder.embeddings[name]
+        assert isinstance(emb, torch.nn.Embedding)
+        assert emb.num_embeddings >= int(batch.x[:, col].max().item()) + 1
 
 
 def test_classifier_forward_with_feature_subset():
     """The encoder locates categoricals BY NAME, so a reordered active-feature subset
-    that does not start with node_type/label_id still embeds them and forwards."""
+    that does not start with node_type still embeds the categoricals and forwards."""
     batch = _build_batch()
-    # Reordered subset: node_type is no longer at column 0.
-    active_features = ["value", "node_type", "label_id", "depth"]
+    # Reordered subset: node_type is no longer at column 0; both categoricals included.
+    active_features = ["subtree_size", "node_type", "root_color", "subtree_depth"]
     sub_x = batch.x[:, [NODE_FEATURE_SCHEMA.index(f) for f in active_features]]
     model = TestGraphNetwork(
         input_dim=len(active_features),
@@ -125,7 +126,7 @@ def test_classifier_forward_with_feature_subset():
     )
     model.eval()
     # Both categoricals are embedded despite the reorder (no plain-linear fallback).
-    assert set(model.node_encoder.embeddings.keys()) == {"node_type", "label_id"}
+    assert set(model.node_encoder.embeddings.keys()) == {"node_type", "root_color"}
     with torch.no_grad():
         out = model(
             sub_x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr
