@@ -20,7 +20,12 @@ SPLIT_LABELS = {
     "val": "Validation Synthetic",
     "test": "Validation Curated",
 }
-CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "mean_margin", "brier_score", "dirichlet_energy"]
+CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "mean_margin", "brier_score"]
+
+_CONFIG_COLS = {
+    "layer_type", "layers_mp", "dim_inner", "dropout", "graph_pooling",
+    "act", "base_lr", "variant", "pool_type", "aux_loss_weight", "mode", "edge_direction",
+}
 SPLIT_COLORS = {
     "train": "#2A9D8F",
     "val": "#E76F51",
@@ -117,13 +122,6 @@ class TrainingCurvePlotter:
         ]
         if not available_metrics:
             return False
-
-        val_df = series.get("val")
-        if val_df is not None and not val_df.empty and best_epoch is not None and "dirichlet_energy" in val_df.columns:
-            best_row = val_df[val_df["epoch"] == best_epoch]
-            if not best_row.empty:
-                best_dirichlet = best_row.iloc[0]["dirichlet_energy"]
-                title = f"{title}\n(Best Val Dirichlet Energy: {best_dirichlet:.6f} at epoch {best_epoch})"
 
         n_metrics = len(available_metrics)
         fig, axes = plt.subplots(n_metrics, 1, figsize=(11, 3.2 * n_metrics), dpi=150)
@@ -247,27 +245,7 @@ class TrainingCurvePlotter:
             return
 
         ranked = pd.read_csv(leaderboard_csv).head(top_k)
-        config_cols = [
-            c
-            for c in ranked.columns
-            if c
-            not in {
-                "epoch",
-                "loss",
-                "accuracy",
-                "precision",
-                "recall",
-                "f1",
-                "auc",
-                "pr_auc",
-                "lr",
-                "base_lr",
-                "params",
-                "time_iter",
-                "gpu_memory",
-            }
-            and not c.endswith("_std")
-        ]
+        config_cols = [c for c in ranked.columns if c in _CONFIG_COLS]
 
         out_root = self.output_dir / "top_configs"
         for idx, row in ranked.iterrows():
