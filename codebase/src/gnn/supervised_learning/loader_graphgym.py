@@ -580,6 +580,10 @@ def set_custom_cfg(cfg):
     cfg.train.early_stopping_patience = 10    # epochs without improvement before stopping
     cfg.train.early_stopping_min_delta = 0.0  # min change that counts as an improvement
     cfg.params = 0
+    # set_run_dir() writes cfg.run_dir at runtime and dump_cfg persists it to config.yaml.
+    # Pre-register the key here so load_cfg can merge saved configs without a YACS
+    # 'Non-existent config key: run_dir' error during diagnostic/eval reloads.
+    cfg.run_dir = ""
 
 
 
