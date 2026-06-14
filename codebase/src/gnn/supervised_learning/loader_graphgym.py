@@ -429,20 +429,26 @@ def _shared_step_with_aux(self, batch, split):
 GraphGymModule._shared_step = _shared_step_with_aux
 
 
-def cosine_with_warmup_scheduler(optimizer, max_epoch):
-    from torch_geometric.graphgym.config import cfg
+def _make_lr_lambda(warmup_epochs: int, post_fn):
+    """Linear ramp from 0→1 over warmup_epochs, then delegates to post_fn(epoch)."""
+    _warmup_f = float(max(1, warmup_epochs))
 
-    warmup_epochs = getattr(cfg.train, "epoch_warmup", 5)
-
-    def lr_lambda(epoch):
+    def lr_lambda(epoch: int) -> float:
         if epoch < warmup_epochs:
-            return float(epoch) / float(max(1, warmup_epochs))
-        progress = float(epoch - warmup_epochs) / float(
-            max(1, max_epoch - warmup_epochs)
-        )
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+            return float(epoch) / _warmup_f
+        return post_fn(epoch)
 
-    return LambdaLR(optimizer, lr_lambda)
+    return lr_lambda
+
+
+def cosine_with_warmup_scheduler(optimizer, max_epoch):
+    warmup_epochs = getattr(cfg.train, "epoch_warmup", 5)
+    _scale = float(max(1, max_epoch - warmup_epochs))
+
+    def post(epoch: int) -> float:
+        return 0.5 * (1.0 + math.cos(math.pi * float(epoch - warmup_epochs) / _scale))
+
+    return LambdaLR(optimizer, _make_lr_lambda(warmup_epochs, post))
 
 
 register_scheduler("cosine_with_warmup", cosine_with_warmup_scheduler)
@@ -459,24 +465,19 @@ register_optimizer("adamw", adamw_optimizer)
 
 
 def cosine_with_restarts_scheduler(optimizer, max_epoch):
-    """Linear warmup, then cosine annealing with warm restarts (SGDR).
+    """Linear warmup then cosine annealing with warm restarts (SGDR).
 
-    Mirrors cosine_with_warmup but restarts the cosine every
-    cfg.train.restart_period epochs. Read from cfg.train (not via from_config)
-    so no extra cfg.optim keys are required.
+    Restarts the cosine every cfg.train.restart_period epochs (default 20).
     """
-    from torch_geometric.graphgym.config import cfg
-
     warmup_epochs = getattr(cfg.train, "epoch_warmup", 5)
     period = max(1, int(getattr(cfg.train, "restart_period", 20)))
+    _period_f = float(period)
 
-    def lr_lambda(epoch):
-        if epoch < warmup_epochs:
-            return float(epoch) / float(max(1, warmup_epochs))
-        progress = float(epoch - warmup_epochs) % period / float(period)
+    def post(epoch: int) -> float:
+        progress = float(epoch - warmup_epochs) % period / _period_f
         return 0.5 * (1.0 + math.cos(math.pi * progress))
 
-    return LambdaLR(optimizer, lr_lambda)
+    return LambdaLR(optimizer, _make_lr_lambda(warmup_epochs, post))
 
 
 register_scheduler("cosine_with_restarts", cosine_with_restarts_scheduler)
@@ -807,6 +808,22 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         print(f"[GraphGym] Saved class balance info to {agg_dir / 'class_balance.json'}")
     except Exception as e:
         print(f"[Warning] Failed to calculate or save class balance info: {e}")
+
+    # Save per-run split DataFrames as CSV training artifacts for reproducibility
+    try:
+        split_dir = Path(cfg.out_dir)
+        split_dir.mkdir(parents=True, exist_ok=True)
+        pipeline.train_dataset.df.to_csv(split_dir / "split_train.csv", index=False)
+        if synthetic:
+            pipeline.test_dataset.df.to_csv(split_dir / "split_val.csv", index=False)
+            pipeline.curated_dataset.df.to_csv(split_dir / "split_test.csv", index=False)
+        else:
+            holdout_df = pipeline.test_dataset.df
+            holdout_df.iloc[0::2].reset_index(drop=True).to_csv(split_dir / "split_val.csv", index=False)
+            holdout_df.iloc[1::2].reset_index(drop=True).to_csv(split_dir / "split_test.csv", index=False)
+        print(f"[GraphGym] Saved split CSVs to {split_dir}/split_{{train,val,test}}.csv")
+    except Exception as e:
+        print(f"[Warning] Failed to save split CSVs: {e}")
 
     if heterogeneous:
         all_data_list, edge_types = prepare_hetero_data_list(all_data_list)

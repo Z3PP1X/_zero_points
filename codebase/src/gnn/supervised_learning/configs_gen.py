@@ -1,4 +1,5 @@
 import argparse
+import copy
 from datetime import datetime
 from pathlib import Path
 import itertools
@@ -120,8 +121,6 @@ def generate_configs(
     name. ``run_timestamp`` groups one grid's configs under a shared stamp (run_all passes
     its experiment timestamp); when omitted a fresh stamp is generated.
     """
-    import copy
-
     if not config_path.exists():
         raise FileNotFoundError(f"Base config not found at {config_path}")
     if not grid_path.exists():

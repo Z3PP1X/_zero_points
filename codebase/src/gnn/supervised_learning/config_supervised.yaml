@@ -60,6 +60,7 @@ train:
   eval_period: 10
   ckpt_period: 20
   epoch_warmup: 5
+  restart_period: 20       # cosine restart period in epochs (only used by cosine_with_restarts)
   epochs: 25
   # Curated real-world holdout: not every epoch — periodic and/or on synthetic-test highscore
   curated_eval_period: 5          # run every Nth epoch (5, 10, 15, …); 0 disables periodic runs
@@ -98,7 +99,7 @@ gnn:
 
 # --- Optimizations ---
 optim:
-  optimizer: adam
+  optimizer: adamw
   base_lr: 0.0001
   weight_decay: 0.0005
-  scheduler: cosine_with_warmup
+  scheduler: cosine_with_restarts
