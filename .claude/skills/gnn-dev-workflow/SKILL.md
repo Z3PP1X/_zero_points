@@ -15,23 +15,32 @@ conda activate pytorch
 
 Workflows are normally run from `codebase/src/gnn/` or a sub-package. The runnable scripts (`main.py`, `train_best.py`, etc.) self-insert `codebase/src` and `codebase/src/gnn` onto `sys.path` at startup, so running them directly works. Tests do **not** — see below.
 
-## Running tests (non-obvious — read this before debugging import errors)
+## Running tests
 
-Tests live in `codebase/src/gnn/tests/` (27 files) but there is **no conftest or pytest config wiring up paths**, and tests use **two different import styles**:
-
-- Package style: `from gnn.shared.utils.feature_config import ...` → needs `codebase/src` on `PYTHONPATH`.
-- Bare-module style: `from reward import ...`, `from graph_utils import ...`, `from feature_layout import ...`, `from unified_loader import ...`, `from network_gateway import ...` → needs the *module's own directory* on `PYTHONPATH` (`shared/utils`, `reinforcement_learning`, `supervised_learning`).
-
-So `python -m pytest codebase/src/gnn/tests` from the repo root fails with `ModuleNotFoundError: No module named 'gnn'`. The working invocation, from the repo root inside the `pytorch` env, sets all roots:
+Tests live in `codebase/src/gnn/tests/` (40 files). Path wiring lives in
+`pyproject.toml` (`[tool.pytest.ini_options]` → `pythonpath` + `testpaths`), so a
+plain invocation from the repo root just works inside the `pytorch` env — **no
+hand-rolled `PYTHONPATH` needed**:
 
 ```bash
-PYTHONPATH=codebase/src:codebase/src/gnn/shared/utils:codebase/src/gnn/reinforcement_learning:codebase/src/gnn/supervised_learning \
-  python -m pytest codebase/src/gnn/tests -q
+conda activate pytorch
+pytest                                            # whole suite
+pytest codebase/src/gnn/tests/test_reward.py      # single file
 ```
 
-Run a single file the same way, e.g. `... python -m pytest codebase/src/gnn/tests/test_reward.py -q`. (Pure-Python tests like `test_reward` pass even in the base env; anything importing torch/PyG needs the `pytorch` env.) Tip: export that `PYTHONPATH` once in the shell for the session.
+(Pure-Python tests like `test_reward` pass even in the base env; anything importing
+torch/PyG needs the `pytorch` env.)
 
-If you add a test, follow the existing import style for the module under test and make sure its directory is one of the four roots above.
+**Why the config is needed** — tests use two import styles: package style
+(`from gnn.shared.utils.feature_config import ...`, needs `codebase/src`) and
+bare-module style (`from reward import ...`, `from network_gateway import ...`,
+`from classifiers import ...`, needs the *module's own directory*). The `pythonpath`
+list registers all six roots: `codebase/src`, plus — under `codebase/src/gnn/` —
+`shared/utils`, `shared/models`, `reinforcement_learning`,
+`reinforcement_learning/gateway`, and `supervised_learning`.
+
+If you add a test, follow the import style of the module under test; if that module
+lives in a directory not yet listed, add it to `pythonpath` in `pyproject.toml`.
 
 ## Code conventions
 
@@ -58,9 +67,21 @@ flake8 codebase/src
 - `docs/quick_overview.md`, `docs/in_depth_reference.md` — augmented graph loader API.
 - `changenotes.md` — latest schema/backbone decisions (native edge features, node schema 27→19, etc.).
 
-## CI
+## CI / branch workflow
 
-`.github/workflows/` only builds & pushes a Docker image to GHCR on push to `main` (the RunPod solver workspace). **There is no test job in CI** — run the suite locally before pushing.
+Branch chain is **`dev` → `main`** (no long-lived feature branches):
+
+- `.github/workflows/tests.yml` runs the full `pytest` suite on every push to
+  `dev` (and on PRs). On green it **auto-merges the tested commit into `main`**;
+  on red, `main` is left untouched and you fix forward on `dev`.
+- CI installs CPU torch (from the PyTorch CPU wheel index) + `requirements-ci.txt`
+  (pinned to the `pytorch` env; `torch_scatter` is intentionally absent — the suite
+  doesn't exercise it).
+- `.github/workflows/docker-build.yml` builds/pushes the RunPod solver image to
+  GHCR on push to `main` (needs a `Dockerfile` at the repo root).
+
+Do day-to-day work on `dev` and let the gate promote to `main`. Still run `pytest`
+locally before pushing so you don't burn a CI cycle on an obvious failure.
 
 ## Related skills
 `graph-data-pipeline` (shared data/feature core), `supervised-gnn-training`, `rl-ppo-workflow`.
