@@ -40,9 +40,11 @@ METRIC_COLS = {
     "mean_confidence", "mean_margin", "mean_entropy", "brier_score", "ece",
     "lr", "base_lr", "params", "time_iter", "gpu_memory",
 }
+# ece excluded from leaderboard: requires post-training calibration; brier_score
+# kept as the single uncalibrated signal alongside mean_confidence.
 LEADERBOARD_METRICS = (
     "pr_auc", "auc", "f1", "recall", "precision", "accuracy", "loss",
-    "ece", "brier_score",
+    "mean_confidence", "brier_score",
 )
 CALIBRATION_METRICS = ("ece", "brier_score", "mean_confidence", "mean_entropy")
 
