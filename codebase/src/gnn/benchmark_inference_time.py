@@ -4,9 +4,9 @@ Benchmark: GINConv inference time vs. graph size across 8 structural variants.
 
 Measures median inference time for 107 graphs (7 real + 100 synthetic) under
 each structural variant.  Outputs:
-  - benchmark_results.csv  — raw per-(graph, structure) measurements
-  - benchmark_config.json  — reproducibility metadata
-  - inference_time_vs_size.{svg,pdf}  — log-log plot with power-law fits
+  - benchmark_results.csv  - raw per-(graph, structure) measurements
+  - benchmark_config.json  - reproducibility metadata
+  - inference_time_vs_size.{svg,pdf}  - log-log plot with power-law fits
 
 Usage:
     conda activate pytorch
@@ -44,7 +44,7 @@ try:
 except ImportError:
     HAS_MPL = False
 
-# ─── Structural variants ───────────────────────────────────────────────────────
+# --- Structural variants -------------------------------------------------------
 
 STRUCTURES: list[dict] = [
     dict(id=1, label="tree (top-down)",       mode="tree",             edge_direction="top_down",      add_kappa=False, add_virtual_supernode=False),
@@ -58,7 +58,7 @@ STRUCTURES: list[dict] = [
 ]
 
 
-# ─── Model ────────────────────────────────────────────────────────────────────
+# --- Model --------------------------------------------------------------------
 
 def _gin_mlp(in_dim: int, out_dim: int) -> nn.Sequential:
     return nn.Sequential(
@@ -93,7 +93,7 @@ class GINBenchmarkModel(nn.Module):
         return global_mean_pool(x, batch)
 
 
-# ─── Timing ───────────────────────────────────────────────────────────────────
+# --- Timing -------------------------------------------------------------------
 
 def _sync(device: torch.device) -> None:
     if device.type == "cuda":
@@ -132,7 +132,7 @@ def measure_inference_time(
     return t_median, t_iqr
 
 
-# ─── Graph loading ─────────────────────────────────────────────────────────────
+# --- Graph loading -------------------------------------------------------------
 
 def _load_kappa_map(csv_path: Path) -> dict[str, float]:
     """Read {Problem_ID: kappa_value} from a benchmark CSV."""
@@ -208,7 +208,7 @@ def _build_base_sizes(
     return base_sizes
 
 
-# ─── Benchmark loop ────────────────────────────────────────────────────────────
+# --- Benchmark loop ------------------------------------------------------------
 
 def run_benchmark(args: argparse.Namespace) -> list[dict]:
     device = torch.device(
@@ -278,7 +278,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             if not loaded:
                 continue
 
-            # Build model once — input_dim from first valid graph.
+            # Build model once - input_dim from first valid graph.
             if model is None:
                 first = next(iter(loaded.values()))
                 input_dim = int(first.x.shape[1])
@@ -319,7 +319,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
 
                 print(
                     f"    {gid:20s}  base={size_base:5d}  proc={size_processed:5d}"
-                    f"  t={t_median * 1e6:8.1f} µs  iqr={t_iqr * 1e6:6.1f} µs"
+                    f"  t={t_median * 1e6:8.1f} us  iqr={t_iqr * 1e6:6.1f} us"
                 )
 
         print()
@@ -327,7 +327,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     return rows
 
 
-# ─── Plot ─────────────────────────────────────────────────────────────────────
+# --- Plot ---------------------------------------------------------------------
 
 _COLORS = [
     "#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
@@ -336,14 +336,14 @@ _COLORS = [
 
 
 def _power_fit(xs: np.ndarray, ys: np.ndarray) -> tuple[float, float]:
-    """Fit t ≈ a · size^k in log space; return (k, a)."""
+    """Fit t ~ a * size^k in log space; return (k, a)."""
     log_k, log_a = np.polyfit(np.log(xs), np.log(ys), 1)
     return float(log_k), float(np.exp(log_a))
 
 
 def plot_benchmark(rows: list[dict], output_dir: Path, x_axis: str) -> None:
     if not HAS_MPL:
-        print("matplotlib not available — skipping plot.")
+        print("matplotlib not available - skipping plot.")
         return
 
     for show_fit in (False, True):
@@ -413,7 +413,7 @@ def _plot_benchmark_variant(
     plt.close(fig)
 
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+# --- Entry point --------------------------------------------------------------
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -476,7 +476,7 @@ def main() -> None:
     print(f"CSV saved: {csv_path}  ({len(rows)} rows)")
 
     plot_benchmark(rows, output_dir, x_axis=args.x_axis)
-    print(f"\nDone — {len(rows)} data points across {len(STRUCTURES)} structures.")
+    print(f"\nDone - {len(rows)} data points across {len(STRUCTURES)} structures.")
 
 
 if __name__ == "__main__":
