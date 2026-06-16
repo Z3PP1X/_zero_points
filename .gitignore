@@ -50,9 +50,8 @@ codebase/src/gnn/supervised_learning/visualizations/
 # 1-WL distinguishability study outputs (regenerable via weisfeiler_lehman/main.py)
 codebase/src/gnn/weisfeiler_lehman/results/
 
-# Datasets and their archive (bulk input data, unpacked locally — never commit)
-datasets/
-datasets.zip
+# Cached converted graph tensors (regenerable; can be hundreds of MB)
+# The source files (JSON, CSV, kappas) in datasets/ are tracked; only .pt caches are excluded via *.pt below.
 
 # Cached converted graph tensors
 *.pt
