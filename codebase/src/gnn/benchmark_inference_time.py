@@ -415,13 +415,13 @@ def _plot_benchmark_variant(
             )
 
     x_label = (
-        "|V|+|E| nach Augmentierung (size_processed)"
+        "|V|+|E| after augmentation (size_processed)"
         if x_axis == "processed"
-        else "|V|+|E| Ausgangsgraph (size_base)"
+        else "|V|+|E| base graph (size_base)"
     )
     ax.set_xlabel(x_label, fontsize=12)
-    ax.set_ylabel("Inferenzzeit [s]  (Median uber 100 Schritte)", fontsize=12)
-    ax.set_title("GINConv Inferenzzeit vs. Graphgroesse - Log-Log-Plot", fontsize=14)
+    ax.set_ylabel("Inference time [s]  (median over 100 steps)", fontsize=12)
+    ax.set_title("GINConv inference time vs. graph size - log-log plot", fontsize=14)
     ax.legend(fontsize=9, loc="upper left", framealpha=0.85)
     ax.grid(True, which="both", alpha=0.3, linestyle="--")
     plt.tight_layout()
@@ -563,7 +563,7 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
     from matplotlib.patches import Patch
     layer_handles = [
         Line2D([0], [0], color=_LAYER_COLORS[i], lw=2,
-               label=f"{n} MP-Layer{'s' if n > 1 else ''}")
+               label=f"{n} MP-layer{'s' if n > 1 else ''}")
         for i, n in enumerate(_PARAM_N_LAYERS)
     ]
     marker_handles = [
@@ -572,16 +572,16 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
         for i, d in enumerate(_PARAM_HIDDEN_DIMS)
     ]
     leg1 = ax.legend(handles=layer_handles, loc="upper left",
-                     fontsize=9, framealpha=0.85, title="Tiefe")
+                     fontsize=9, framealpha=0.85, title="Depth")
     ax.add_artist(leg1)
     ax.legend(handles=marker_handles, loc="lower right",
-              fontsize=9, framealpha=0.85, title="Breite")
+              fontsize=9, framealpha=0.85, title="Width")
 
-    ax.set_xlabel("Gesamtanzahl Parameter", fontsize=12)
-    ax.set_ylabel("Inferenzzeit gesamt [s]  (Median uber Datensatz-Pass)", fontsize=12)
+    ax.set_xlabel("Total parameter count", fontsize=12)
+    ax.set_ylabel("Total inference time [s]  (median over dataset pass)", fontsize=12)
     ax.set_title(
-        "GINConv Inferenzzeit vs. Parameteranzahl\n"
-        "(mode=graph, 7 reale Graphen, Fehlerbalken = IQR)",
+        "GINConv inference time vs. parameter count\n"
+        "(mode=graph, 7 real graphs, error bars = IQR)",
         fontsize=13,
     )
     ax.grid(True, which="both", alpha=0.3, linestyle="--")
