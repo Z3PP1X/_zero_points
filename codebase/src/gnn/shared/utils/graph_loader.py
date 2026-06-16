@@ -32,6 +32,7 @@ class GraphDataLoader:
         kappas_dir: Union[Path, str, None] = None,
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
+        kappa_map: Union[dict, None] = None,
     ):
         self.name = name
         self.mode = mode
@@ -40,6 +41,7 @@ class GraphDataLoader:
         self.edge_direction = validate_edge_direction(edge_direction)
         self.add_kappa = add_kappa
         self.add_virtual_supernode = add_virtual_supernode
+        self.kappa_map: dict[str, float] = {str(k): float(v) for k, v in (kappa_map or {}).items()}
         self.converter = ExpressionGraphConverter()
 
         self.source_path = self._resolve_source(name, base_dir)
@@ -187,6 +189,10 @@ class GraphDataLoader:
         gid_str = str(graph_id)
         if gid_str not in self._raw_sources:
             raise KeyError(f"Graph ID '{gid_str}' not found in loaded graphs.")
+
+        # Resolve kappa_value: explicit arg wins; fall back to kappa_map lookup.
+        if self.add_kappa and kappa_value is None:
+            kappa_value = self.kappa_map.get(gid_str)
 
         mem_key = f"{gid_str}_k{kappa_value}" if kappa_value is not None else gid_str
         if mem_key in self._converted_cache:
