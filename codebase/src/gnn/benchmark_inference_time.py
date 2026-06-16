@@ -446,41 +446,40 @@ _HIDDEN_MARKERS = ["o", "s", "^", "D", "P"]
 
 
 def run_param_benchmark(args: argparse.Namespace) -> list[dict]:
-    """Measure total dataset-pass time vs. total parameter count.
+    """Measure mean per-step inference time vs. total parameter count.
 
-    For every (n_layers, hidden_dim) combination the full real graph dataset
-    (mode=graph, top_down) is run through GINFlexModel.  One 'pass' is the
-    sequential inference over all graphs in the dataset.  We record the median
-    of n_param_passes timed passes after n_param_warmup warmup passes.
+    A single fixed graph (args.param_graph_id, mode=graph, add_kappa=True) is
+    run through each (n_layers, hidden_dim) configuration.  After
+    args.param_n_warmup warmup forward passes the model is timed over
+    args.param_n_steps individual forward passes; the mean step time is recorded.
     """
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
     )
     print(f"\n=== Parameter benchmark (device: {device}) ===")
 
+    real_kappa_map, _ = _build_kappa_maps()
     loader = _make_loader(
         is_synthetic=False,
         mode="graph",
         edge_direction="top_down",
-        add_kappa=False,
+        add_kappa=True,
         add_virtual_supernode=False,
+        kappa_map=real_kappa_map,
     )
-    graph_ids = sorted(loader.list_graph_ids())
-    graphs: list[Data] = []
-    for gid in graph_ids:
-        try:
-            g = loader.get_graph(gid)
-            if g.num_nodes > 0:
-                graphs.append(g.to(device))
-        except Exception as exc:
-            print(f"  [skip] {gid}: {exc}")
 
-    if not graphs:
-        print("  No graphs loaded - skipping param benchmark.")
-        return []
+    gid = args.param_graph_id
+    if not loader.has_graph(gid):
+        available = sorted(loader.list_graph_ids())[:10]
+        print(f"  Graph ID '{gid}' not found. Available: {available}")
+        gid = available[0]
+        print(f"  Falling back to '{gid}'.")
 
-    input_dim = int(graphs[0].x.shape[1])
-    print(f"  {len(graphs)} graphs, input_dim={input_dim}")
+    graph = loader.get_graph(gid).to(device)
+    n_nodes = int(graph.num_nodes)
+    n_edges = int(graph.edge_index.shape[1])
+    input_dim = int(graph.x.shape[1])
+    print(f"  Graph '{gid}': {n_nodes} nodes, {n_edges} edges, input_dim={input_dim}")
 
     rows: list[dict] = []
 
@@ -492,38 +491,38 @@ def run_param_benchmark(args: argparse.Namespace) -> list[dict]:
 
             with torch.no_grad():
                 for _ in range(args.param_n_warmup):
-                    for g in graphs:
-                        model(g)
+                    model(graph)
             _sync(device)
 
-            pass_times: list[float] = []
+            step_times: list[float] = []
             with torch.no_grad():
-                for _ in range(args.param_n_passes):
+                for _ in range(args.param_n_steps):
                     _sync(device)
                     t0 = time.perf_counter()
-                    for g in graphs:
-                        model(g)
+                    model(graph)
                     _sync(device)
-                    pass_times.append(time.perf_counter() - t0)
+                    step_times.append(time.perf_counter() - t0)
 
-            arr = np.array(pass_times)
-            t_median = float(np.median(arr))
-            t_iqr = float(np.percentile(arr, 75) - np.percentile(arr, 25))
+            arr = np.array(step_times)
+            t_mean = float(np.mean(arr))
+            t_std  = float(np.std(arr))
 
             rows.append({
                 "n_layers": n_layers,
                 "hidden_dim": hidden_dim,
                 "total_params": total_params,
-                "t_median_pass": t_median,
-                "t_iqr_pass": t_iqr,
-                "n_passes": args.param_n_passes,
-                "n_graphs": len(graphs),
+                "t_mean": t_mean,
+                "t_std": t_std,
+                "n_steps": args.param_n_steps,
+                "graph_id": gid,
+                "n_nodes": n_nodes,
+                "n_edges": n_edges,
             })
             print(
                 f"  layers={n_layers}  hidden={hidden_dim:3d}"
                 f"  params={total_params:7d}"
-                f"  t_pass={t_median * 1e3:7.3f} ms"
-                f"  iqr={t_iqr * 1e3:.3f} ms"
+                f"  t_mean={t_mean * 1e6:8.1f} us"
+                f"  std={t_std * 1e6:.1f} us"
             )
 
     return rows
@@ -533,9 +532,17 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
     if not HAS_MPL or not rows:
         return
 
+    # Graph metadata is identical for all rows.
+    graph_id = rows[0]["graph_id"]
+    n_nodes  = rows[0]["n_nodes"]
+    n_edges  = rows[0]["n_edges"]
+    n_steps  = rows[0]["n_steps"]
+
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_xscale("log")
     ax.set_yscale("log")
+
+    from matplotlib.lines import Line2D
 
     for li, n_layers in enumerate(_PARAM_N_LAYERS):
         pts = [r for r in rows if r["n_layers"] == n_layers]
@@ -543,24 +550,21 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
             continue
         pts.sort(key=lambda r: r["total_params"])
 
-        xs = np.array([r["total_params"] for r in pts], dtype=float)
-        ys = np.array([r["t_median_pass"] for r in pts], dtype=float)
-        errs = np.array([r["t_iqr_pass"] for r in pts], dtype=float)
+        xs   = np.array([r["total_params"] for r in pts], dtype=float)
+        ys   = np.array([r["t_mean"]       for r in pts], dtype=float)
+        errs = np.array([r["t_std"]        for r in pts], dtype=float)
         color = _LAYER_COLORS[li % len(_LAYER_COLORS)]
 
         ax.plot(xs, ys, color=color, linewidth=1.6, zorder=2)
         for mi, (x, y, e, r) in enumerate(zip(xs, ys, errs, pts)):
             marker = _HIDDEN_MARKERS[mi % len(_HIDDEN_MARKERS)]
             ax.errorbar(
-                x, y, yerr=[[min(e / 2, y * 0.9)], [e / 2]],
+                x, y,
+                yerr=[[min(e, y * 0.9)], [e]],
                 fmt=marker, color=color, markersize=7,
                 capsize=3, elinewidth=0.8, zorder=3,
-                label=f"{n_layers}L h={r['hidden_dim']}" if li == 0 else None,
             )
 
-    # Legend: layer count lines + hidden dim markers separately.
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
     layer_handles = [
         Line2D([0], [0], color=_LAYER_COLORS[i], lw=2,
                label=f"{n} MP-layer{'s' if n > 1 else ''}")
@@ -568,7 +572,7 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
     ]
     marker_handles = [
         Line2D([0], [0], marker=_HIDDEN_MARKERS[i], color="grey",
-               lw=0, markersize=7, label=f"hidden={d}")
+               lw=0, markersize=7, label=f"hidden dim = {d}")
         for i, d in enumerate(_PARAM_HIDDEN_DIMS)
     ]
     leg1 = ax.legend(handles=layer_handles, loc="upper left",
@@ -578,12 +582,22 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
               fontsize=9, framealpha=0.85, title="Width")
 
     ax.set_xlabel("Total parameter count", fontsize=12)
-    ax.set_ylabel("Total inference time [s]  (median over dataset pass)", fontsize=12)
+    ax.set_ylabel("Mean inference time per step [s]", fontsize=12)
     ax.set_title(
         "GINConv inference time vs. parameter count\n"
-        "(mode=graph, 7 real graphs, error bars = IQR)",
+        f"(graph ID '{graph_id}', mode=graph + kappa, {n_steps} steps, error bars = 1 std)",
         fontsize=13,
     )
+
+    # Graph size annotation in lower-left corner.
+    ax.text(
+        0.02, 0.03,
+        f"Benchmark graph: {n_nodes} nodes, {n_edges} edges",
+        transform=ax.transAxes, fontsize=9,
+        verticalalignment="bottom", horizontalalignment="left",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#bdc3c7", alpha=0.85),
+    )
+
     ax.grid(True, which="both", alpha=0.3, linestyle="--")
     plt.tight_layout()
 
@@ -618,8 +632,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42, help="RNG seed.")
     parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available.")
     parser.add_argument("--include-synthetic", action="store_true", help="Also include 100 synthetic graphs (default: real graphs only).")
-    parser.add_argument("--param-n-warmup", type=int, default=3, help="Warmup dataset passes for param benchmark.")
-    parser.add_argument("--param-n-passes", type=int, default=10, help="Timed dataset passes for param benchmark.")
+    parser.add_argument("--param-graph-id", type=str, default="1", help="Graph ID used as fixed benchmark problem for the param benchmark.")
+    parser.add_argument("--param-n-warmup", type=int, default=50, help="Warmup forward passes for param benchmark.")
+    parser.add_argument("--param-n-steps",  type=int, default=1000, help="Timed forward passes for param benchmark.")
     parser.add_argument("--skip-param-benchmark", action="store_true", help="Skip the parameter-count benchmark.")
     return parser.parse_args()
 
@@ -666,7 +681,7 @@ def main() -> None:
         if param_rows:
             param_csv = output_dir / "param_benchmark_results.csv"
             param_fields = ["n_layers", "hidden_dim", "total_params",
-                            "t_median_pass", "t_iqr_pass", "n_passes", "n_graphs"]
+                            "t_mean", "t_std", "n_steps", "graph_id", "n_nodes", "n_edges"]
             with open(param_csv, "w", newline="", encoding="utf-8") as fh:
                 writer = csv.DictWriter(fh, fieldnames=param_fields)
                 writer.writeheader()
