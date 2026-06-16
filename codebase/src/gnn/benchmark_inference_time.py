@@ -346,6 +346,13 @@ def plot_benchmark(rows: list[dict], output_dir: Path, x_axis: str) -> None:
         print("matplotlib not available — skipping plot.")
         return
 
+    for show_fit in (False, True):
+        _plot_benchmark_variant(rows, output_dir, x_axis, show_fit=show_fit)
+
+
+def _plot_benchmark_variant(
+    rows: list[dict], output_dir: Path, x_axis: str, show_fit: bool
+) -> None:
     x_col = "size_processed" if x_axis == "processed" else "size_base"
     by_struct: dict[int, list[dict]] = {}
     for row in rows:
@@ -369,15 +376,21 @@ def plot_benchmark(rows: list[dict], output_dir: Path, x_axis: str) -> None:
             continue
 
         color = _COLORS[(sid - 1) % len(_COLORS)]
-        k, a = _power_fit(xs, ys)
-        x_fit = np.linspace(xs.min(), xs.max(), 300)
-        y_fit = a * x_fit ** k
 
-        ax.scatter(xs, ys, color=color, alpha=0.45, s=22, zorder=3)
-        ax.plot(
-            x_fit, y_fit, color=color, linewidth=1.8,
-            label=f"#{sid} {struct['label']}  (k≈{k:.2f})",
-        )
+        if show_fit:
+            k, a = _power_fit(xs, ys)
+            x_fit = np.linspace(xs.min(), xs.max(), 300)
+            y_fit = a * x_fit ** k
+            ax.scatter(xs, ys, color=color, alpha=0.45, s=22, zorder=3)
+            ax.plot(
+                x_fit, y_fit, color=color, linewidth=1.8,
+                label=f"#{sid} {struct['label']}  (k={k:.2f})",
+            )
+        else:
+            ax.scatter(
+                xs, ys, color=color, alpha=0.55, s=22, zorder=3,
+                label=f"#{sid} {struct['label']}",
+            )
 
     x_label = (
         "|V|+|E| nach Augmentierung (size_processed)"
@@ -385,14 +398,15 @@ def plot_benchmark(rows: list[dict], output_dir: Path, x_axis: str) -> None:
         else "|V|+|E| Ausgangsgraph (size_base)"
     )
     ax.set_xlabel(x_label, fontsize=12)
-    ax.set_ylabel("Inferenzzeit [s]  (Median über 100 Schritte)", fontsize=12)
-    ax.set_title("GINConv Inferenzzeit vs. Graphgröße — Log-Log-Plot", fontsize=14)
+    ax.set_ylabel("Inferenzzeit [s]  (Median uber 100 Schritte)", fontsize=12)
+    ax.set_title("GINConv Inferenzzeit vs. Graphgroesse - Log-Log-Plot", fontsize=14)
     ax.legend(fontsize=9, loc="upper left", framealpha=0.85)
     ax.grid(True, which="both", alpha=0.3, linestyle="--")
     plt.tight_layout()
 
+    suffix = "with_fit" if show_fit else "scatter"
     for fmt in ("svg", "pdf"):
-        path = output_dir / f"inference_time_vs_size.{fmt}"
+        path = output_dir / f"inference_time_vs_size_{suffix}.{fmt}"
         plt.savefig(path, format=fmt, bbox_inches="tight")
         print(f"Saved: {path}")
 
