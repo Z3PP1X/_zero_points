@@ -240,7 +240,8 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
         model: Optional[GINBenchmarkModel] = None
         input_dim: Optional[int] = None
 
-        for is_synth in (False, True):
+        sources = [False] if args.real_only else [False, True]
+        for is_synth in sources:
             synth_tag = "synth" if is_synth else "real"
             mode_key = f"{mode}_synth" if is_synth else mode
             kappa_map = synth_kappa_map if is_synth else real_kappa_map
@@ -404,6 +405,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-dim", type=int, default=128, help="GINConv hidden dimension.")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed.")
     parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available.")
+    parser.add_argument("--real-only", action="store_true", help="Use only the 7 real graphs (P1–P7), skip synthetic.")
     return parser.parse_args()
 
 
@@ -420,6 +422,7 @@ def main() -> None:
         "device": device_str,
         "seed": args.seed,
         "x_axis": args.x_axis,
+        "real_only": args.real_only,
         "structures": STRUCTURES,
     }
     cfg_path = output_dir / "benchmark_config.json"
