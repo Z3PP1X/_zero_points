@@ -262,24 +262,41 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
             graph_ids = sorted(loader.list_graph_ids())
             print(f"  [{synth_tag}] {len(graph_ids)} graphs …")
 
+            # Pre-load all graphs so the global warm-up can cycle through them.
+            loaded: dict[str, Data] = {}
             for gid in graph_ids:
                 try:
                     data = loader.get_graph(gid)
                 except Exception as exc:
                     print(f"    [skip] {gid}: {exc}")
                     continue
-
                 if data.num_nodes == 0:
                     print(f"    [skip] {gid}: empty graph")
                     continue
+                loaded[gid] = data
 
-                # Build model once — input_dim from first valid graph.
-                if model is None:
-                    input_dim = int(data.x.shape[1])
-                    model = GINBenchmarkModel(input_dim, hidden_dim=args.hidden_dim).to(device)
-                    model.eval()
-                    print(f"    Model built: input_dim={input_dim}, hidden_dim={args.hidden_dim}")
+            if not loaded:
+                continue
 
+            # Build model once — input_dim from first valid graph.
+            if model is None:
+                first = next(iter(loaded.values()))
+                input_dim = int(first.x.shape[1])
+                model = GINBenchmarkModel(input_dim, hidden_dim=args.hidden_dim).to(device)
+                model.eval()
+                print(f"    Model built: input_dim={input_dim}, hidden_dim={args.hidden_dim}")
+
+            # Global pre-warm: cycle through all graphs so model weights and
+            # PyTorch's internal caches are hot before any timed measurement.
+            print(f"    Pre-warming …", end=" ", flush=True)
+            with torch.no_grad():
+                for _ in range(args.n_warmup):
+                    for data in loaded.values():
+                        model(data.to(device))
+            _sync(device)
+            print("done")
+
+            for gid, data in loaded.items():
                 size_processed = data.num_nodes + int(data.edge_index.shape[1])
                 size_base = base_sizes.get((mode_key, gid), size_processed)
 
