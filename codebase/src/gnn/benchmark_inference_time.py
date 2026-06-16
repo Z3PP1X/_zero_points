@@ -221,11 +221,11 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.seed)
 
-    print("Loading per-graph kappa values from benchmark CSVs…")
+    print("Loading per-graph kappa values from benchmark CSVs...")
     real_kappa_map, synth_kappa_map = _build_kappa_maps()
     print(f"  {len(real_kappa_map)} real, {len(synth_kappa_map)} synthetic kappa entries.\n")
 
-    print("Building base-size reference (top_down, no kappa, no supernode)…")
+    print("Building base-size reference (top_down, no kappa, no supernode)...")
     base_sizes = _build_base_sizes(real_kappa_map, synth_kappa_map)
     print(f"  Cached {len(base_sizes)} base-size entries.\n")
 
@@ -260,7 +260,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
                 continue
 
             graph_ids = sorted(loader.list_graph_ids())
-            print(f"  [{synth_tag}] {len(graph_ids)} graphs …")
+            print(f"  [{synth_tag}] {len(graph_ids)} graphs ...")
 
             # Pre-load all graphs so the global warm-up can cycle through them.
             loaded: dict[str, Data] = {}
@@ -288,7 +288,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
 
             # Global pre-warm: cycle through all graphs so model weights and
             # PyTorch's internal caches are hot before any timed measurement.
-            print(f"    Pre-warming …", end=" ", flush=True)
+            print(f"    Pre-warming ...", end=" ", flush=True)
             with torch.no_grad():
                 for _ in range(args.n_warmup):
                     for data in loaded.values():
