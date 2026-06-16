@@ -42,11 +42,9 @@ class GraphDataLoader:
         self.add_virtual_supernode = add_virtual_supernode
         self.converter = ExpressionGraphConverter()
 
-        # Resolve the source path (root graphs vs legacy fallbacks)
         self.source_path = self._resolve_source(name, base_dir)
-        print(f"[GraphDataLoader] Resolved graph source for '{name}' to: {self.source_path}")
+        logger.info("Resolved graph source for '%s' to: %s", name, self.source_path)
 
-        # Resolve repo_root for default kappas_dir
         current = Path(__file__).resolve()
         repo_root = None
         for parent in current.parents:
@@ -63,22 +61,20 @@ class GraphDataLoader:
             self.kappas_dir = repo_root / "datasets" / "kappas"
             self.kappas_dir_explicit = False
 
-        # Setup disk cache directory
         if self.source_path.is_file():
             self.cache_dir = self.source_path.parent / ".pt_cache" / self.source_path.stem
         else:
             self.cache_dir = self.source_path / ".pt_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[GraphDataLoader] Using disk cache at: {self.cache_dir}")
+        logger.info("Using disk cache at: %s", self.cache_dir)
 
         self._raw_sources: dict[str, Union[dict, Path]] = {}
         self._converted_cache: dict[str, Union[Data, HeteroData]] = {}
 
         self._discover_graphs()
-        print(f"[GraphDataLoader] Discovered {len(self._raw_sources)} graph IDs.")
+        logger.info("Discovered %d graph IDs.", len(self._raw_sources))
 
     def _resolve_source(self, name: str, base_dir: Union[Path, str, None]) -> Path:
-        # Walk up to find the repository root containing '.git' or name '_zero_points'
         current = Path(__file__).resolve()
         repo_root = None
         for parent in current.parents:
@@ -88,19 +84,16 @@ class GraphDataLoader:
         if repo_root is None:
             repo_root = current.parents[5]
 
-        # Use base_dir directly if provided and exists
         if base_dir is not None:
             p = Path(base_dir)
             if p.exists():
                 return p
 
-        # Parse run_key if slash is present (e.g. run_key/dataset_name)
         if "/" in name:
             run_key, _ = name.split("/", 1)
         else:
             run_key = name
 
-        # Candidates search order
         candidates = []
         if self.is_synthetic:
             candidates.extend([
@@ -126,19 +119,16 @@ class GraphDataLoader:
         for cand in candidates:
             if cand.exists():
                 if cand.is_dir():
-                    # Check if there is a unified JSON file inside the directory matching its name or 'graphs.json'
                     file_match = cand / f"{cand.name}.json"
                     if file_match.exists() and file_match.is_file():
                         return file_match
                     graphs_file = cand / "graphs.json"
                     if graphs_file.exists() and graphs_file.is_file():
                         return graphs_file
-                    # Skip directories with no json files
                     if not any(cand.glob("**/*.json")):
                         continue
                 return cand
 
-        # Default fallback target if none exists yet
         return repo_root / "datasets" / f"{name}.json"
 
     def _discover_graphs(self):
@@ -147,7 +137,6 @@ class GraphDataLoader:
             return
 
         if self.source_path.is_file():
-            # Load all graphs from a single JSON file into memory raw cache
             try:
                 with open(self.source_path, "r", encoding="utf-8") as f:
                     raw_data = json.load(f)
@@ -156,14 +145,11 @@ class GraphDataLoader:
             except Exception as e:
                 print(f"[GraphDataLoader] Error reading single JSON file {self.source_path}: {e}")
         elif self.source_path.is_dir():
-            # Discover file paths in directory for lazy load
             json_files = list(self.source_path.glob("**/*.json"))
-            # Prioritize meta files
             for path in json_files:
                 if path.stem.endswith("_meta"):
                     graph_id = path.stem.removesuffix("_meta")
                     self._raw_sources[graph_id] = path
-            # Fallback to standard json files if meta is missing
             for path in json_files:
                 if not path.stem.endswith("_meta"):
                     graph_id = path.stem
@@ -179,12 +165,10 @@ class GraphDataLoader:
                     parsed[str(graph_id)] = item
             return parsed
         elif isinstance(raw_data, dict):
-            # Check if it represents a single graph
             if any(k in raw_data for k in ["nodes", "edges", "graphml_f"]):
                 graph_id = raw_data.get("id", name)
                 return {str(graph_id): raw_data}
             else:
-                # Dict of graphs
                 parsed = {}
                 for k, v in raw_data.items():
                     if isinstance(v, dict):
@@ -204,13 +188,10 @@ class GraphDataLoader:
         if gid_str not in self._raw_sources:
             raise KeyError(f"Graph ID '{gid_str}' not found in loaded graphs.")
 
-        # Memory cache key includes kappa so callers with different values don't collide.
         mem_key = f"{gid_str}_k{kappa_value}" if kappa_value is not None else gid_str
         if mem_key in self._converted_cache:
             return self._converted_cache[mem_key].clone()
 
-        # Kappa augmentation is opt-in (add_kappa); on top of that the kappa folder
-        # must exist and contain json files.
         use_augmented = False
         if self.add_kappa and self.kappas_dir.exists() and any(self.kappas_dir.glob("**/*.json")):
             source_str = str(self.source_path)
@@ -222,9 +203,6 @@ class GraphDataLoader:
             if self.kappas_dir_explicit or not is_temp:
                 use_augmented = True
 
-        # Disk cache key: include kappa value when selective merging is active so each
-        # (graph, kappa) pair gets its own file.  The supernode marker prevents collisions
-        # with supernode-augmented variants.
         clean_gid = "".join(c for c in gid_str if c.isalnum() or c in ('_', '-'))
         sn_marker = "_sn" if self.add_virtual_supernode else ""
         if use_augmented:
@@ -294,9 +272,6 @@ class GraphDataLoader:
         """
         result = {}
         for gid in self._raw_sources.keys():
-            # In selective mode (a map was supplied) a graph with no kappa entry
-            # gets NO h-function (default 0.0 -> not in the kappa file -> no merge),
-            # matching a kappa=0 row. Only the no-map case falls back to merging all.
             kv = kappa_map.get(gid, 0.0) if kappa_map else None
             result[gid] = self.get_graph(gid, kappa_value=kv)
         return result

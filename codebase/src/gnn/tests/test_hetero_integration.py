@@ -35,8 +35,6 @@ def _raw(node_specs, edge_specs, gid):
 def _hetero(gid, node_specs, edge_specs, label):
     raw = _raw(node_specs, edge_specs, gid)
     data = ExpressionGraphConverter().convert(raw, heterogeneous=True, mode="graph")
-    if hasattr(data, "laplacian"):
-        del data.laplacian
     data.y = torch.tensor([label], dtype=torch.long)
     return data
 

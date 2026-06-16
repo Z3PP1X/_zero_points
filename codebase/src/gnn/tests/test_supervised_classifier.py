@@ -31,8 +31,6 @@ def _sample_raw():
 def _build_batch():
     converter = ExpressionGraphConverter()
     data = converter.convert(_sample_raw(), heterogeneous=False, mode="graph")
-    if hasattr(data, "laplacian"):
-        del data.laplacian
     data.global_features = torch.zeros((1, 2), dtype=torch.float)
     data.y = torch.tensor([1], dtype=torch.long)
     loader = DataLoader([data], batch_size=1)

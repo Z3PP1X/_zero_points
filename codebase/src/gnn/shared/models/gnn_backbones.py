@@ -474,119 +474,90 @@ class UniformPoolMixin:
 # Edge-aware stacks
 # ------------------------------------------------------------------ #
 
-class GATv2StackNetwork(UniformPoolMixin, nn.Module):
+class _EdgeAwareStack(UniformPoolMixin, nn.Module):
+    """Shared body for edge-aware 3-layer stacks (GATv2, GINE).
+
+    Subclasses set ``architecture`` and implement ``_build_convs_legacy`` to
+    return the three conv modules for the fixed-width legacy/standard path.
+    """
+
+    architecture: str = ""
+
+    def _build_convs_legacy(
+        self, input_dim: int, hidden_dim: int, heads: int, edge_dim: int, activation: str
+    ) -> List[nn.Module]:
+        raise NotImplementedError
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 128,
+        global_dim: int = 8,
+        heads: int = 4,
+        edge_dim: int = 4,
+        activation: str = "prelu",
+        variant: str = "legacy",
+        pool_type: str = "topk",
+    ):
+        super().__init__()
+        self.edge_dim = edge_dim
+        self.activation_name = activation
+        self.variant = variant
+        self.pool_type = pool_type
+        self.conv1, self.conv2, self.conv3 = self._build_convs_legacy(
+            input_dim, hidden_dim, heads, edge_dim, activation
+        )
+        self.shared = _graph_mlp_tail(hidden_dim, global_dim, activation)
+        self.layer_activations = nn.ModuleList([make_activation(activation) for _ in range(3)])
+        self.output_dim = hidden_dim
+        self._last_aux_loss = torch.zeros(())
+        if variant not in LEGACY_VARIANTS:
+            self._init_uniform_pool(
+                first_in_dim=input_dim, hidden_dim=hidden_dim, num_layers=3, heads=heads,
+                edge_dim=edge_dim, architecture=self.architecture, activation_name=activation,
+                variant=variant, pool_type=pool_type, tail_in_dim=hidden_dim,
+            )
+
+    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
+        edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
+        if self.variant in LEGACY_VARIANTS:
+            x = self.layer_activations[0](apply_edge_conv(self.conv1, x, edge_index, edge_attr))
+            x = self.layer_activations[1](apply_edge_conv(self.conv2, x, edge_index, edge_attr))
+            x = self.layer_activations[2](apply_edge_conv(self.conv3, x, edge_index, edge_attr))
+            x = global_mean_pool(x, batch_index)
+        else:
+            num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
+            x = self._uniform_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
+        if global_features is not None:
+            global_features = global_features.view(x.size(0), -1)
+            x = torch.cat([x, global_features], dim=-1)
+        return self.shared(x)
+
+
+class GATv2StackNetwork(_EdgeAwareStack):
     """Three GATv2 layers with edge features + graph pooling + MLP."""
 
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 128,
-        global_dim: int = 8,
-        heads: int = 4,
-        edge_dim: int = 4,
-        activation: str = "prelu",
-        variant: str = "legacy",
-        pool_type: str = "topk",
-    ):
-        super().__init__()
-        self.edge_dim = edge_dim
-        self.architecture = "gatv2_stack"
-        self.activation_name = activation
-        self.variant = variant
-        self.pool_type = pool_type
-        self.conv1 = GATv2Conv(input_dim, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
-        self.conv2 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim)
-        self.conv3 = GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim)
-        self.shared = _graph_mlp_tail(hidden_dim, global_dim, activation)
-        self.layer_activations = nn.ModuleList([make_activation(activation) for _ in range(3)])
-        self.output_dim = hidden_dim
-        self._last_aux_loss = torch.zeros(())
-        if variant not in LEGACY_VARIANTS:
-            self._init_uniform_pool(
-                first_in_dim=input_dim,
-                hidden_dim=hidden_dim,
-                num_layers=3,
-                heads=heads,
-                edge_dim=edge_dim,
-                architecture=self.architecture,
-                activation_name=activation,
-                variant=variant,
-                pool_type=pool_type,
-                tail_in_dim=hidden_dim,
-            )
+    architecture = "gatv2_stack"
 
-    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
-        if self.variant in LEGACY_VARIANTS:
-            x = self.layer_activations[0](apply_edge_conv(self.conv1, x, edge_index, edge_attr))
-            x = self.layer_activations[1](apply_edge_conv(self.conv2, x, edge_index, edge_attr))
-            x = self.layer_activations[2](apply_edge_conv(self.conv3, x, edge_index, edge_attr))
-            x = global_mean_pool(x, batch_index)
-        else:
-            num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
-            x = self._uniform_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
-        if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
-            x = torch.cat([x, global_features], dim=-1)
-        return self.shared(x)
+    def _build_convs_legacy(self, input_dim, hidden_dim, heads, edge_dim, activation):
+        return [
+            GATv2Conv(input_dim, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim),
+            GATv2Conv(hidden_dim * heads, hidden_dim, heads=heads, concat=True, edge_dim=edge_dim),
+            GATv2Conv(hidden_dim * heads, hidden_dim, heads=1, concat=False, edge_dim=edge_dim),
+        ]
 
 
-class GINEStackNetwork(UniformPoolMixin, nn.Module):
+class GINEStackNetwork(_EdgeAwareStack):
     """Three GINE layers with edge features + graph pooling + MLP."""
 
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 128,
-        global_dim: int = 8,
-        heads: int = 4,
-        edge_dim: int = 4,
-        activation: str = "prelu",
-        variant: str = "legacy",
-        pool_type: str = "topk",
-    ):
-        super().__init__()
-        _ = heads
-        self.edge_dim = edge_dim
-        self.architecture = "gine_stack"
-        self.activation_name = activation
-        self.variant = variant
-        self.pool_type = pool_type
-        self.conv1 = GINEConv(_gin_mlp(input_dim, hidden_dim, activation), edge_dim=edge_dim)
-        self.conv2 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
-        self.conv3 = GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim)
-        self.shared = _graph_mlp_tail(hidden_dim, global_dim, activation)
-        self.layer_activations = nn.ModuleList([make_activation(activation) for _ in range(3)])
-        self.output_dim = hidden_dim
-        self._last_aux_loss = torch.zeros(())
-        if variant not in LEGACY_VARIANTS:
-            self._init_uniform_pool(
-                first_in_dim=input_dim,
-                hidden_dim=hidden_dim,
-                num_layers=3,
-                heads=heads,
-                edge_dim=edge_dim,
-                architecture=self.architecture,
-                activation_name=activation,
-                variant=variant,
-                pool_type=pool_type,
-                tail_in_dim=hidden_dim,
-            )
+    architecture = "gine_stack"
 
-    def forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
-        if self.variant in LEGACY_VARIANTS:
-            x = self.layer_activations[0](apply_edge_conv(self.conv1, x, edge_index, edge_attr))
-            x = self.layer_activations[1](apply_edge_conv(self.conv2, x, edge_index, edge_attr))
-            x = self.layer_activations[2](apply_edge_conv(self.conv3, x, edge_index, edge_attr))
-            x = global_mean_pool(x, batch_index)
-        else:
-            num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
-            x = self._uniform_pool_forward(x, edge_index, edge_attr, batch_index, num_graphs)
-        if global_features is not None:
-            global_features = global_features.view(x.size(0), -1)
-            x = torch.cat([x, global_features], dim=-1)
-        return self.shared(x)
+    def _build_convs_legacy(self, input_dim, hidden_dim, heads, edge_dim, activation):
+        return [
+            GINEConv(_gin_mlp(input_dim, hidden_dim, activation), edge_dim=edge_dim),
+            GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim),
+            GINEConv(_gin_mlp(hidden_dim, hidden_dim, activation), edge_dim=edge_dim),
+        ]
 
 
 # ------------------------------------------------------------------ #

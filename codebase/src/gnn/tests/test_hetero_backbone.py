@@ -74,8 +74,6 @@ def _raw_minimal():
 
 def _hetero(raw, label=1):
     data = ExpressionGraphConverter().convert(raw, heterogeneous=True, mode="graph")
-    if hasattr(data, "laplacian"):
-        del data.laplacian
     data.y = torch.tensor([label], dtype=torch.long)
     return data
 

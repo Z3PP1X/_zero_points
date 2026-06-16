@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 from torch_geometric.graphgym.config import cfg
 from torch_geometric.graphgym.register import register_loader, register_config
@@ -15,13 +14,6 @@ import math
 from torch.optim.lr_scheduler import LambdaLR
 from torch.optim import AdamW
 from torch_geometric.graphgym.register import register_scheduler, register_optimizer
-
-gnn_root = Path(__file__).resolve().parents[2]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[3]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
 
 from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa: F401
 from gnn.supervised_learning.run_results.eval_metrics import compute_confidence_metrics

@@ -1,18 +1,9 @@
 import re
-import sys
 
 import pandas as pd
 from pathlib import Path
 import json
 import shutil
-
-
-gnn_root = Path(__file__).resolve().parents[2]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[3]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
 
 
 _LEGACY_HEADER_ALIASES: dict[str, str] = {

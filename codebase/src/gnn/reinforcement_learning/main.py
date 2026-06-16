@@ -1,17 +1,8 @@
-import sys
 import argparse
 from pathlib import Path
 import torch
 
 import mlflow
-
-# Dynamic sys.path resolution to support package imports when run as scripts
-gnn_root = Path(__file__).resolve().parents[1]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[2]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
 
 from gnn.reinforcement_learning.gateway.gateway_state_logger import GatewayStateLogger
 from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway

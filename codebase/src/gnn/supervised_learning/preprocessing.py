@@ -1,17 +1,10 @@
-import sys
 import numpy as np
 import torch
+from collections import Counter
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
-
-# Dynamic sys.path resolution to support package imports when run as scripts
-gnn_root = Path(__file__).resolve().parents[2]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[3]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
+from torch_geometric.loader import DataLoader
 
 from gnn.supervised_learning.dataset import DatasetLoader
 from gnn.shared.utils.graph_utils import (
@@ -47,6 +40,29 @@ class FeatureEngineering:
             "conserved_step_rel",
             self._loader.data["Newton_iterSteps"] / self._loader.data["GMGF_iterSteps"],
         )
+
+
+def _pid_split(df, test_size, seed, stratify=False):
+    """Split a DataFrame by problem_id, stratifying on faster_algorithm when possible."""
+    pids = df["problem_id"].unique()
+    labels = [df[df["problem_id"] == p]["faster_algorithm"].iloc[0] for p in pids]
+    can_strat = stratify and all(c >= 2 for c in Counter(labels).values())
+    train_ids, test_ids = train_test_split(
+        pids, test_size=test_size, random_state=seed,
+        stratify=labels if can_strat else None,
+    )
+    train_set, test_set = set(train_ids), set(test_ids)
+    return df[df["problem_id"].isin(train_set)], df[df["problem_id"].isin(test_set)], can_strat
+
+
+def _compute_class_weights(df, label_col="faster_algorithm"):
+    """Inverse-frequency class weights as a float32 tensor [w0, w1]."""
+    counts = df[label_col].value_counts()
+    total, n = len(df), len(counts)
+    return torch.tensor(
+        [total / (n * counts.get(0, 1)), total / (n * counts.get(1, 1))],
+        dtype=torch.float,
+    ), counts
 
 
 class GraphPipeline:
@@ -170,61 +186,27 @@ class GraphPipeline:
             test_df = df_curated[df_curated["problem_id"].isin(graph_ids_curated)].copy()
             train_df = df_synth[df_synth["problem_id"].isin(graph_ids_synth)].copy()
             
-            # Split synthetic dataset based on problem_id
-            unique_synth_pids = train_df["problem_id"].unique()
-            unique_synth_labels = [
-                train_df[train_df["problem_id"] == p]["faster_algorithm"].iloc[0]
-                for p in unique_synth_pids
-            ]
-            
-            from collections import Counter
-            synth_class_counts = Counter(unique_synth_labels)
-            can_stratify_synth = stratify and all(count >= 2 for count in synth_class_counts.values())
-            
-            train_synth_pids, test_synth_pids = train_test_split(
-                unique_synth_pids,
-                test_size=test_size,
-                random_state=self.seed,
-                stratify=unique_synth_labels if can_stratify_synth else None,
+            # Split synthetic dataset by problem_id
+            synthetic_train_df, synthetic_test_df, _ = _pid_split(
+                train_df, test_size, self.seed, stratify
             )
-            
-            train_synth_pids_set = set(train_synth_pids)
-            test_synth_pids_set = set(test_synth_pids)
-            
-            synthetic_train_df = train_df[train_df["problem_id"].isin(train_synth_pids_set)]
-            synthetic_test_df = train_df[train_df["problem_id"].isin(test_synth_pids_set)]
-            
-            # Calculate class weights for synthetic training dataset
-            class_counts = synthetic_train_df["faster_algorithm"].value_counts()
-            total_train = len(synthetic_train_df)
-            num_classes = len(class_counts)
-            
-            weight_0 = total_train / (num_classes * class_counts.get(0, 1))
-            weight_1 = total_train / (num_classes * class_counts.get(1, 1))
-            self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
-            
+            self.class_weights, class_counts = _compute_class_weights(synthetic_train_df)
+
             # Assign datasets
+            pin = torch.cuda.is_available()
             self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, active_features=self.active_features)
             self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, active_features=self.active_features)
             self.curated_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, active_features=self.active_features)
-            
-            from torch_geometric.loader import DataLoader
-            
-            self.train_loader = DataLoader(
-                self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available()
-            )
-            self.test_loader = DataLoader(
-                self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
-            )
-            self.curated_loader = DataLoader(
-                self.curated_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
-            )
-            
+            self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin)
+            self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin)
+            self.curated_loader = DataLoader(self.curated_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin)
+
+            w0, w1 = self.class_weights.tolist()
             print("-" * 40)
-            print(f"[Synthetic Mode] Train-IDs (synthetic): {len(train_synth_pids)}, Test-IDs (synthetic): {len(test_synth_pids)}, Curated-IDs (real): {len(test_df['problem_id'].unique())}")
+            print(f"[Synthetic Mode] Train-IDs (synthetic): {len(synthetic_train_df['problem_id'].unique())}, Test-IDs (synthetic): {len(synthetic_test_df['problem_id'].unique())}, Curated-IDs (real): {len(test_df['problem_id'].unique())}")
             print(f"[Synthetic Mode] Train-runs: {len(self.train_dataset)}, Test-runs: {len(self.test_dataset)}, Curated-runs: {len(self.curated_dataset)}")
             print(f"[Synthetic Mode] Train class distribution: 0: {class_counts.get(0, 0)}, 1: {class_counts.get(1, 0)}")
-            print(f"[Synthetic Mode] Computed Weights: 0: {weight_0:.4f}, 1: {weight_1:.4f}")
+            print(f"[Synthetic Mode] Computed Weights: 0: {w0:.4f}, 1: {w1:.4f}")
             print("-" * 40)
             
             return self.train_loader, self.test_loader, self.class_weights
@@ -234,67 +216,24 @@ class GraphPipeline:
             graph_ids = set(self.graphs.keys())
             df_matched = df[df["problem_id"].isin(graph_ids)].copy()
 
-            unique_problem_ids = df_matched["problem_id"].unique()
-
-            unique_problem_labels = [
-                df_matched[df_matched["problem_id"] == p]["faster_algorithm"].iloc[0]
-                for p in unique_problem_ids
-            ]
-
-            # Ensure stratification is only applied if every class has at least 2 problem instances
-            from collections import Counter
-            class_counts = Counter(unique_problem_labels)
-            can_stratify = stratify and all(count >= 2 for count in class_counts.values())
+            train_df, test_df, can_stratify = _pid_split(df_matched, test_size, self.seed, stratify)
             if stratify and not can_stratify:
-                print("[Warning] Cannot stratify because one of the classes has fewer than 2 members in unique_problem_labels. Disabling stratification.")
+                print("[Warning] Cannot stratify: a class has fewer than 2 members. Disabling stratification.")
+            self.class_weights, class_counts = _compute_class_weights(train_df)
 
-            train_pids, test_pids = train_test_split(
-                unique_problem_ids,
-                test_size=test_size,
-                random_state=self.seed,
-                stratify=unique_problem_labels if can_stratify else None,
-            )
-
-            train_pids_set = set(train_pids)
-            test_pids_set = set(test_pids)
-
-            train_df = df_matched[df_matched["problem_id"].isin(train_pids_set)]
-            test_df = df_matched[df_matched["problem_id"].isin(test_pids_set)]
-
-            class_counts = train_df["faster_algorithm"].value_counts()
-            total_train = len(train_df)
-            num_classes = len(class_counts)
-
-            weight_0 = total_train / (num_classes * class_counts.get(0, 1))
-            weight_1 = total_train / (num_classes * class_counts.get(1, 1))
-            self.class_weights = torch.tensor([weight_0, weight_1], dtype=torch.float)
-
+            pin = torch.cuda.is_available()
             self.train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, active_features=self.active_features)
             self.test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, active_features=self.active_features)
+            self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin)
+            self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin)
 
-            from torch_geometric.loader import DataLoader
-
-            self.train_loader = DataLoader(
-                self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available()
-            )
-            self.test_loader = DataLoader(
-                self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=torch.cuda.is_available()
-            )
-
+            w0, w1 = self.class_weights.tolist()
+            n_pids = len(df_matched["problem_id"].unique())
             print("-" * 40)
-            print(
-                f"IDs gesamt: {len(unique_problem_ids)} "
-                f"(Train-IDs: {len(train_pids)}, Test-IDs: {len(test_pids)})"
-            )
-            print(
-                f"Runs gesamt: {len(df_matched)} "
-                f"(Train: {len(self.train_dataset)}, Test: {len(self.test_dataset)})"
-            )
-            print(
-                f"Trainings-Verteilung: 0: {class_counts.get(0, 0)}, "
-                f"1: {class_counts.get(1, 0)}"
-            )
-            print(f"Berechnete Gewichte: 0: {weight_0:.4f}, 1: {weight_1:.4f}")
+            print(f"IDs gesamt: {n_pids} (Train-IDs: {len(train_df['problem_id'].unique())}, Test-IDs: {len(test_df['problem_id'].unique())})")
+            print(f"Runs gesamt: {len(df_matched)} (Train: {len(self.train_dataset)}, Test: {len(self.test_dataset)})")
+            print(f"Trainings-Verteilung: 0: {class_counts.get(0, 0)}, 1: {class_counts.get(1, 0)}")
+            print(f"Berechnete Gewichte: 0: {w0:.4f}, 1: {w1:.4f}")
             print("-" * 40)
 
             return self.train_loader, self.test_loader, self.class_weights
@@ -396,9 +335,5 @@ class ProblemRunDataset(Dataset):
         # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:
             data.x = slice_active_features(data.x, self.active_features)
-
-        # Remove laplacian if present to prevent PyG collation mismatch errors
-        if hasattr(data, "laplacian"):
-            del data.laplacian
 
         return data

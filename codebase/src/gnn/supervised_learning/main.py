@@ -14,13 +14,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
 
-gnn_root = Path(__file__).resolve().parents[2]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[3]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
-
 from gnn.supervised_learning.supervised_config import (
     apply_expression_graph_overrides,
     bootstrap_graphgym_cfg,

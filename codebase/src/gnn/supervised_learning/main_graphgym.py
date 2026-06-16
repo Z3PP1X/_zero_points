@@ -1,4 +1,3 @@
-import sys
 import warnings
 # Suppress harmless PyG internal GraphGym InMemoryDataset deprecation warning
 warnings.filterwarnings("ignore", message=".*InMemoryDataset.*")
@@ -13,13 +12,6 @@ from torch_geometric.graphgym.checkpoint import get_ckpt_dir
 from torch_geometric.graphgym.logger import LoggerCallback
 from torch_geometric.graphgym.imports import pl
 
-
-gnn_root = Path(__file__).resolve().parents[2]
-if str(gnn_root) not in sys.path:
-    sys.path.insert(0, str(gnn_root))
-src_root = Path(__file__).resolve().parents[3]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
 
 import gnn.supervised_learning.loader_graphgym  # noqa
 from gnn.supervised_learning.run_results.feature_importance import (

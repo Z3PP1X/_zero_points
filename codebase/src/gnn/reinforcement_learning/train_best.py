@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import os
 import random
-import sys
 from typing import Optional
 
 import numpy as np
@@ -23,16 +22,6 @@ import mlflow
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
-# Dynamic sys.path resolution to support package imports when run as scripts
-from pathlib import Path
-sys_path_root = Path(__file__).resolve().parents[1]
-if str(sys_path_root) not in sys.path:
-    sys.path.insert(0, str(sys_path_root))
-sys_path_src = Path(__file__).resolve().parents[2]
-if str(sys_path_src) not in sys.path:
-    sys.path.insert(0, str(sys_path_src))
-
-# Pipeline imports
 from gnn.reinforcement_learning.gateway.gateway_state_logger import GatewayStateLogger
 from gnn.reinforcement_learning.gateway.network_gateway import NetworkGateway, CONTROL_FRESH_TRIAL_ENV
 from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTrafficMonitor

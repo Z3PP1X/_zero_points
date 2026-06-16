@@ -136,12 +136,6 @@ def test_enriched_graph_features(tmp_path):
         assert child1_features[col] == 0.0
         assert child2_features[col] == 0.0
 
-    assert hasattr(data, "laplacian")
-    assert data.laplacian.shape == (3, 3)
-    assert torch.allclose(data.laplacian, data.laplacian.T)
-    diag = torch.diag(data.laplacian).tolist()
-    assert diag == [2.0, 1.0, 1.0]
-
     assert data.edge_index.shape == (2, 4)
 
 
