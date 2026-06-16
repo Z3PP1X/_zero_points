@@ -134,12 +134,38 @@ def measure_inference_time(
 
 # ─── Graph loading ─────────────────────────────────────────────────────────────
 
+def _load_kappa_map(csv_path: Path) -> dict[str, float]:
+    """Read {Problem_ID: kappa_value} from a benchmark CSV."""
+    kappa_map: dict[str, float] = {}
+    if not csv_path.exists():
+        return kappa_map
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            pid = row.get("Problem_ID") or row.get("problem_id")
+            kappa_str = row.get("kappa")
+            if pid and kappa_str is not None:
+                try:
+                    kappa_map[pid] = float(kappa_str)
+                except (ValueError, TypeError):
+                    pass
+    return kappa_map
+
+
+def _build_kappa_maps() -> tuple[dict[str, float], dict[str, float]]:
+    """Return (real_kappa_map, synth_kappa_map) loaded from benchmark CSVs."""
+    real_csv = _REPO / "datasets" / "run_20260603_123013" / "parallel_benchmark_results.csv"
+    synth_csv = _REPO / "datasets" / "run_20260604_154509" / "parallel_benchmark_results.csv"
+    return _load_kappa_map(real_csv), _load_kappa_map(synth_csv)
+
+
 def _make_loader(
     is_synthetic: bool,
     mode: str,
     edge_direction: str,
     add_kappa: bool,
     add_virtual_supernode: bool,
+    kappa_map: dict[str, float] | None = None,
 ) -> GraphDataLoader:
     return GraphDataLoader(
         "graphs",
@@ -148,10 +174,14 @@ def _make_loader(
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
         is_synthetic=is_synthetic,
+        kappa_map=kappa_map,
     )
 
 
-def _build_base_sizes() -> dict[tuple[str, str], int]:
+def _build_base_sizes(
+    real_kappa_map: dict[str, float],
+    synth_kappa_map: dict[str, float],
+) -> dict[tuple[str, str], int]:
     """Load all graphs in their base form (top_down, no kappa, no supernode)
     and record |V|+|E|.  Keyed by (mode_synth_tag, graph_id)."""
     base_sizes: dict[tuple[str, str], int] = {}
@@ -191,8 +221,12 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(args.seed)
 
+    print("Loading per-graph kappa values from benchmark CSVs…")
+    real_kappa_map, synth_kappa_map = _build_kappa_maps()
+    print(f"  {len(real_kappa_map)} real, {len(synth_kappa_map)} synthetic kappa entries.\n")
+
     print("Building base-size reference (top_down, no kappa, no supernode)…")
-    base_sizes = _build_base_sizes()
+    base_sizes = _build_base_sizes(real_kappa_map, synth_kappa_map)
     print(f"  Cached {len(base_sizes)} base-size entries.\n")
 
     rows: list[dict] = []
@@ -209,6 +243,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
         for is_synth in (False, True):
             synth_tag = "synth" if is_synth else "real"
             mode_key = f"{mode}_synth" if is_synth else mode
+            kappa_map = synth_kappa_map if is_synth else real_kappa_map
 
             try:
                 loader = _make_loader(
@@ -217,6 +252,7 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
                     edge_direction=struct["edge_direction"],
                     add_kappa=struct["add_kappa"],
                     add_virtual_supernode=struct["add_virtual_supernode"],
+                    kappa_map=kappa_map if struct["add_kappa"] else None,
                 )
             except Exception as exc:
                 print(f"  [loader failed] {synth_tag}: {exc}")

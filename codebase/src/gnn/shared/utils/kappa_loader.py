@@ -537,27 +537,24 @@ def LoadAugmentedFunctionGraph(
     # Kappa subgraphs are static — parse and normalize once, reuse via O(1) dict lookup.
     kappa_lookup = _load_normalized_kappas(kappas_path)
 
-    if kappa_value is not None:
-        kv = float(kappa_value)
-        entry = kappa_lookup.get(kv)
-        if entry is None:
-            # kappa == 0 (and any value outside the curve set) intentionally has
-            # no h-function: nothing is attached. Only genuinely unexpected values
-            # are worth a warning.
-            if kv != 0.0:
-                logger.warning(
-                    f"Kappa value {kv} not found for graph '{graphId}'; "
-                    f"available: {sorted(kappa_lookup)}. No kappa merged."
-                )
-        else:
-            original_root, normalized = entry
-            kappa_root_id = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
-            _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
+    if kappa_value is None:
+        logger.debug("LoadAugmentedFunctionGraph called without kappa_value — no kappa merged.")
+        return mainGraph
+
+    kv = float(kappa_value)
+    entry = kappa_lookup.get(kv)
+    if entry is None:
+        # kappa == 0 intentionally has no h-function.  Any other unknown value is a
+        # misconfiguration worth flagging, but the graph is still returned unchanged.
+        if kv != 0.0:
+            logger.warning(
+                f"Kappa value {kv} not found for graph '{graphId}'; "
+                f"available: {sorted(kappa_lookup)}. No kappa merged."
+            )
     else:
-        # Backward compat: merge all kappas (used when kappa value is unknown at load time)
-        for kv, (original_root, normalized) in kappa_lookup.items():
-            kappa_root_id = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
-            _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
+        original_root, normalized = entry
+        kappa_root_id = mainGraph.MergePrenormalizedSubgraph(original_root, normalized)
+        _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
 
     return mainGraph
 

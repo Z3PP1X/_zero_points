@@ -108,6 +108,13 @@ class UnifiedDataLoader:
             addTraces=self.add_traces,
             base_dir=self.base_dir,
         )
+        kappa_map: dict[str, float] = {}
+        if self.add_kappa:
+            try:
+                kappa_map = self._extract_kappa_map(self.dataset_loader.data)
+            except Exception as e:
+                logger.warning(f"Could not build kappa_map from tabular data: {e}")
+
         self.graph_loader = GraphDataLoader(
             name=graph_loader_name,
             mode=self.mode,
@@ -117,6 +124,7 @@ class UnifiedDataLoader:
             edge_direction=self.edge_direction,
             add_kappa=self.add_kappa,
             add_virtual_supernode=self.add_virtual_supernode,
+            kappa_map=kappa_map,
         )
 
         # Automatically enrich missing x0/startwert values from graph data
@@ -182,6 +190,20 @@ class UnifiedDataLoader:
     def has_graph(self, graph_id: Any) -> bool:
         """Forwards checking if the graph exists."""
         return self.graph_loader.has_graph(graph_id)
+
+    @staticmethod
+    def _extract_kappa_map(df: "pd.DataFrame") -> dict[str, float]:
+        """Return {graph_id: kappa_value} from a DataFrame that has a 'kappa' column."""
+        id_col = next((c for c in ("problem_id", "Problem_ID") if c in df.columns), None)
+        if "kappa" not in df.columns or id_col is None:
+            return {}
+        return (
+            df.dropna(subset=["kappa"])
+            .groupby(id_col)["kappa"]
+            .first()
+            .apply(float)
+            .to_dict()
+        )
 
     def build_kappa_map(self) -> dict[str, float]:
         """Build a {graph_id: kappa_value} mapping from the tabular dataset.

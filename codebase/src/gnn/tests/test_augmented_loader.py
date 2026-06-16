@@ -162,74 +162,7 @@ def test_load_graph_from_local_structure(tmp_path, sample_main_graph_dict):
 def test_load_augmented_function_graph(
     tmp_path, sample_main_graph_dict, sample_kappa_dict, sample_kappa_graphml
 ):
-    """Tests the full orchestration of loading and merging multiple kappas."""
-    graphs_dir = tmp_path / "graphs"
-    graphs_dir.mkdir()
-    kappas_dir = tmp_path / "kappas"
-    kappas_dir.mkdir()
-
-    # Write basis graph
-    (graphs_dir / "P-mock-1.json").write_text(
-        json.dumps(sample_main_graph_dict), encoding="utf-8"
-    )
-
-    # Write kappa h-functions
-    (kappas_dir / "kappa_1.json").write_text(
-        json.dumps(sample_kappa_dict), encoding="utf-8"
-    )
-    (kappas_dir / "kappa_2.json").write_text(
-        json.dumps(sample_kappa_graphml), encoding="utf-8"
-    )
-
-    # Load augmented graph
-    mainGraph = LoadAugmentedFunctionGraph(
-        graphId="P-mock-1",
-        graphsFolder=graphs_dir,
-        kappasFolder=kappas_dir
-    )
-
-    # Check that base nodes are loaded
-    assert mainGraph.has_node("n1")
-    assert mainGraph.has_node("n2")
-    assert mainGraph.has_node("n3")
-
-    # Check that a virtual global node exists (or created)
-    assert mainGraph.HasGlobalNode()
-    globalNode = mainGraph.GetGlobalNode()
-
-    # Check that both kappas were merged
-    assert mainGraph.has_node("kappa_1_k_root")
-    assert mainGraph.has_node("kappa_2_1")
-
-    # Check that forward and backward edges exist
-    assert mainGraph.has_edge(globalNode, "kappa_1_k_root")
-    assert mainGraph.has_edge("kappa_1_k_root", globalNode)
-    assert mainGraph.has_edge(globalNode, "kappa_2_1")
-    assert mainGraph.has_edge("kappa_2_1", globalNode)
-
-    # Verify weights on edges
-    edge_1_fwd = mainGraph.edges[globalNode, "kappa_1_k_root"]
-    assert edge_1_fwd["kappa_weight"] == -15.5
-    assert edge_1_fwd["etype"] == "GlobalToKappa"
-    assert edge_1_fwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["GlobalToKappa"]
-
-    edge_1_bwd = mainGraph.edges["kappa_1_k_root", globalNode]
-    assert edge_1_bwd["kappa_weight"] == -15.5
-    assert edge_1_bwd["etype"] == "KappaToGlobal"
-    assert edge_1_bwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["KappaToGlobal"]
-
-    edge_2_fwd = mainGraph.edges[globalNode, "kappa_2_1"]
-    assert edge_2_fwd["kappa_weight"] == -25.0
-
-    edge_2_bwd = mainGraph.edges["kappa_2_1", globalNode]
-    assert edge_2_bwd["kappa_weight"] == -25.0
-
-
-def test_filter_active_kappa_nodes_edges(
-    tmp_path, sample_main_graph_dict, sample_kappa_dict, sample_kappa_graphml
-):
-    """Tests that filter_active_kappa correctly filters out inactive kappa subgraphs."""
-    # Build augmented graph using LoadAugmentedFunctionGraph
+    """Only the requested kappa is merged; no kappa_value → base graph returned unchanged."""
     graphs_dir = tmp_path / "graphs"
     graphs_dir.mkdir()
     kappas_dir = tmp_path / "kappas"
@@ -239,11 +172,75 @@ def test_filter_active_kappa_nodes_edges(
     (kappas_dir / "kappa_1.json").write_text(json.dumps(sample_kappa_dict), encoding="utf-8")
     (kappas_dir / "kappa_2.json").write_text(json.dumps(sample_kappa_graphml), encoding="utf-8")
 
-    mainGraph = LoadAugmentedFunctionGraph(
-        graphId="P-mock-1",
-        graphsFolder=graphs_dir,
-        kappasFolder=kappas_dir
+    # ── kappa_value=None → no kappa merged ──────────────────────────────────
+    base = LoadAugmentedFunctionGraph(
+        graphId="P-mock-1", graphsFolder=graphs_dir, kappasFolder=kappas_dir
     )
+    assert base.has_node("n1") and base.has_node("n2") and base.has_node("n3")
+    assert not any(n.startswith("kappa_") for n in base.nodes)
+
+    # ── kappa_value=-15.5 → only kappa_1 merged ─────────────────────────────
+    g1 = LoadAugmentedFunctionGraph(
+        graphId="P-mock-1", graphsFolder=graphs_dir, kappasFolder=kappas_dir,
+        kappa_value=-15.5,
+    )
+    assert g1.HasGlobalNode()
+    globalNode = g1.GetGlobalNode()
+    assert g1.has_node("kappa_1_k_root")
+    assert not any(n.startswith("kappa_2_") for n in g1.nodes)
+
+    edge_fwd = g1.edges[globalNode, "kappa_1_k_root"]
+    assert edge_fwd["kappa_weight"] == -15.5
+    assert edge_fwd["etype"] == "GlobalToKappa"
+    assert edge_fwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["GlobalToKappa"]
+
+    edge_bwd = g1.edges["kappa_1_k_root", globalNode]
+    assert edge_bwd["kappa_weight"] == -15.5
+    assert edge_bwd["etype"] == "KappaToGlobal"
+    assert edge_bwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["KappaToGlobal"]
+
+    # ── kappa_value=-25.0 → only kappa_2 merged ─────────────────────────────
+    # Counter resets per call, so the merged node gets prefix "kappa_1_" regardless.
+    g2 = LoadAugmentedFunctionGraph(
+        graphId="P-mock-1", graphsFolder=graphs_dir, kappasFolder=kappas_dir,
+        kappa_value=-25.0,
+    )
+    globalNode2 = g2.GetGlobalNode()
+    kappa_nodes_g2 = [n for n in g2.nodes if str(n).startswith("kappa_")]
+    assert len(kappa_nodes_g2) > 0
+    # All kappa edges must carry weight -25.0
+    for n in kappa_nodes_g2:
+        if g2.has_edge(globalNode2, n):
+            assert g2.edges[globalNode2, n]["kappa_weight"] == -25.0
+        if g2.has_edge(n, globalNode2):
+            assert g2.edges[n, globalNode2]["kappa_weight"] == -25.0
+
+
+def test_filter_active_kappa_nodes_edges(
+    tmp_path, sample_main_graph_dict, sample_kappa_dict, sample_kappa_graphml
+):
+    """filter_active_kappa strips all-but-active kappa nodes from a multi-kappa PyG graph."""
+    from kappa_loader import _load_normalized_kappas, _tag_and_connect_kappa
+
+    graphs_dir = tmp_path / "graphs"
+    graphs_dir.mkdir()
+    kappas_dir = tmp_path / "kappas"
+    kappas_dir.mkdir()
+
+    (graphs_dir / "P-mock-1.json").write_text(json.dumps(sample_main_graph_dict), encoding="utf-8")
+    (kappas_dir / "kappa_1.json").write_text(json.dumps(sample_kappa_dict), encoding="utf-8")
+    (kappas_dir / "kappa_2.json").write_text(json.dumps(sample_kappa_graphml), encoding="utf-8")
+
+    # Build a multi-kappa graph manually (merge both kappas) to exercise filter_active_kappa.
+    mainGraph = LoadGraphFromLocalStructure(folder=graphs_dir, id="P-mock-1")
+    if not mainGraph.HasGlobalNode():
+        mainGraph.CreateVirtualGlobalNode(nodeType="GlobalContext")
+    globalNode = mainGraph.GetGlobalNode()
+
+    kappa_lookup = _load_normalized_kappas(kappas_dir)
+    for kv, (orig_root, normalized) in kappa_lookup.items():
+        kappa_root_id = mainGraph.MergePrenormalizedSubgraph(orig_root, normalized)
+        _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
 
     # Convert to PyG homogeneous Data
     from graph_utils import ExpressionGraphConverter, filter_active_kappa
