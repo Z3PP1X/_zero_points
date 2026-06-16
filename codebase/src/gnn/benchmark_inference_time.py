@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -35,6 +37,12 @@ from torch_geometric.data import Data
 from torch_geometric.nn import GINConv, global_mean_pool
 
 from gnn.shared.utils.graph_loader import GraphDataLoader
+
+try:
+    from torch.profiler import profile as torch_profile, ProfilerActivity
+    HAS_PROFILER = True
+except ImportError:
+    HAS_PROFILER = False
 
 try:
     import matplotlib
@@ -445,13 +453,39 @@ _LAYER_COLORS   = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3"]
 _HIDDEN_MARKERS = ["o", "s", "^", "D", "P"]
 
 
-def run_param_benchmark(args: argparse.Namespace) -> list[dict]:
-    """Measure mean per-step inference time vs. total parameter count.
+def _profile_model(model: nn.Module, graph: Data, n_warmup: int,
+                   out_path: Path) -> None:
+    """Run torch profiler and save the key-averages table to a text file."""
+    if not HAS_PROFILER:
+        return
+    with torch.inference_mode():
+        for _ in range(n_warmup):
+            model(graph)
+        with torch_profile(activities=[ProfilerActivity.CPU],
+                           record_shapes=False) as prof:
+            for _ in range(100):
+                model(graph)
+    table = prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=25)
+    out_path.write_text(table, encoding="utf-8")
+    print(f"    Profiler saved: {out_path}")
 
-    A single fixed graph (args.param_graph_id, mode=graph, add_kappa=True) is
-    run through each (n_layers, hidden_dim) configuration.  After
-    args.param_n_warmup warmup forward passes the model is timed over
-    args.param_n_steps individual forward passes; the mean step time is recorded.
+
+def run_param_benchmark(args: argparse.Namespace, output_dir: Path) -> list[dict]:
+    """Measure per-step inference time vs. total parameter count.
+
+    Two complementary methods per (n_layers, hidden_dim) configuration:
+
+    Method 1 - loop (absolute mean):
+        GC disabled, N=param_n_steps iterations in one block, divide wall time by N.
+        Minimises per-call overhead from perf_counter and GC pauses.
+
+    Method 2 - distribution (2000 individual measurements):
+        Each call timed separately; results sorted to extract median, min, p95.
+        Median / min are the most honest estimate of pure compute time;
+        p95 captures OS-scheduling jitter.
+
+    torch.set_num_threads(1): thread-pool dispatch overhead exceeds compute time
+    for tiny GNN ops; single-thread gives stable, comparable numbers.
     """
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
@@ -480,50 +514,85 @@ def run_param_benchmark(args: argparse.Namespace) -> list[dict]:
     n_edges = int(graph.edge_index.shape[1])
     input_dim = int(graph.x.shape[1])
     print(f"  Graph '{gid}': {n_nodes} nodes, {n_edges} edges, input_dim={input_dim}")
+    print(f"  Loop steps: {args.param_n_steps}  |  Distribution steps: 2000  |  Warmup: {args.param_n_warmup}")
 
+    prof_dir = output_dir / "profiler"
+    if args.param_profile:
+        prof_dir.mkdir(parents=True, exist_ok=True)
+
+    orig_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
     rows: list[dict] = []
 
-    for n_layers in _PARAM_N_LAYERS:
-        for hidden_dim in _PARAM_HIDDEN_DIMS:
-            model = GINFlexModel(input_dim, hidden_dim, n_layers).to(device)
-            model.eval()
-            total_params = sum(p.numel() for p in model.parameters())
+    try:
+        for n_layers in _PARAM_N_LAYERS:
+            for hidden_dim in _PARAM_HIDDEN_DIMS:
+                model = GINFlexModel(input_dim, hidden_dim, n_layers).to(device)
+                model.eval()
+                total_params = sum(p.numel() for p in model.parameters())
 
-            with torch.no_grad():
-                for _ in range(args.param_n_warmup):
-                    model(graph)
-            _sync(device)
+                # --- Warmup ---------------------------------------------------
+                with torch.inference_mode():
+                    for _ in range(args.param_n_warmup):
+                        model(graph)
+                _sync(device)
 
-            step_times: list[float] = []
-            with torch.no_grad():
-                for _ in range(args.param_n_steps):
+                # --- Method 1: loop, GC off, single wall-clock ---------------
+                gc.collect()
+                gc.disable()
+                N = args.param_n_steps
+                with torch.inference_mode():
                     _sync(device)
                     t0 = time.perf_counter()
-                    model(graph)
+                    for _ in range(N):
+                        model(graph)
                     _sync(device)
-                    step_times.append(time.perf_counter() - t0)
+                    t1 = time.perf_counter()
+                gc.enable()
+                t_mean_loop = (t1 - t0) / N
 
-            arr = np.array(step_times)
-            t_mean = float(np.mean(arr))
-            t_std  = float(np.std(arr))
+                # --- Method 2: individual measurements, distribution ----------
+                dist_times: list[float] = []
+                with torch.inference_mode():
+                    for _ in range(2000):
+                        _sync(device)
+                        t0 = time.perf_counter()
+                        model(graph)
+                        _sync(device)
+                        dist_times.append(time.perf_counter() - t0)
+                dist_times.sort()
+                t_median = statistics.median(dist_times)
+                t_min    = dist_times[0]
+                t_p95    = dist_times[int(0.95 * len(dist_times))]
 
-            rows.append({
-                "n_layers": n_layers,
-                "hidden_dim": hidden_dim,
-                "total_params": total_params,
-                "t_mean": t_mean,
-                "t_std": t_std,
-                "n_steps": args.param_n_steps,
-                "graph_id": gid,
-                "n_nodes": n_nodes,
-                "n_edges": n_edges,
-            })
-            print(
-                f"  layers={n_layers}  hidden={hidden_dim:3d}"
-                f"  params={total_params:7d}"
-                f"  t_mean={t_mean * 1e6:8.1f} us"
-                f"  std={t_std * 1e6:.1f} us"
-            )
+                # --- Optional profiler ----------------------------------------
+                if args.param_profile:
+                    prof_path = prof_dir / f"layers{n_layers}_hidden{hidden_dim}.txt"
+                    _profile_model(model, graph, args.param_n_warmup, prof_path)
+
+                rows.append({
+                    "n_layers":     n_layers,
+                    "hidden_dim":   hidden_dim,
+                    "total_params": total_params,
+                    "t_mean_loop":  t_mean_loop,
+                    "t_median":     t_median,
+                    "t_min":        t_min,
+                    "t_p95":        t_p95,
+                    "n_steps_loop": N,
+                    "graph_id":     gid,
+                    "n_nodes":      n_nodes,
+                    "n_edges":      n_edges,
+                })
+                print(
+                    f"  layers={n_layers}  hidden={hidden_dim:3d}"
+                    f"  params={total_params:7d}"
+                    f"  mean(loop)={t_mean_loop*1e6:7.2f} us"
+                    f"  median={t_median*1e6:7.2f} us"
+                    f"  min={t_min*1e6:6.2f} us"
+                    f"  p95={t_p95*1e6:7.2f} us"
+                )
+    finally:
+        torch.set_num_threads(orig_threads)
 
     return rows
 
@@ -536,7 +605,6 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
     graph_id = rows[0]["graph_id"]
     n_nodes  = rows[0]["n_nodes"]
     n_edges  = rows[0]["n_edges"]
-    n_steps  = rows[0]["n_steps"]
 
     fig, ax = plt.subplots(figsize=(10, 7))
     ax.set_xscale("log")
@@ -550,17 +618,19 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
             continue
         pts.sort(key=lambda r: r["total_params"])
 
-        xs   = np.array([r["total_params"] for r in pts], dtype=float)
-        ys   = np.array([r["t_mean"]       for r in pts], dtype=float)
-        errs = np.array([r["t_std"]        for r in pts], dtype=float)
+        xs    = np.array([r["total_params"] for r in pts], dtype=float)
+        ys    = np.array([r["t_median"]     for r in pts], dtype=float)
+        y_min = np.array([r["t_min"]        for r in pts], dtype=float)
+        y_p95 = np.array([r["t_p95"]        for r in pts], dtype=float)
         color = _LAYER_COLORS[li % len(_LAYER_COLORS)]
 
         ax.plot(xs, ys, color=color, linewidth=1.6, zorder=2)
-        for mi, (x, y, e, r) in enumerate(zip(xs, ys, errs, pts)):
+        for mi, (x, y, lo, hi) in enumerate(zip(xs, ys, y_min, y_p95)):
             marker = _HIDDEN_MARKERS[mi % len(_HIDDEN_MARKERS)]
+            # lower bar: median - min  |  upper bar: p95 - median
             ax.errorbar(
                 x, y,
-                yerr=[[min(e, y * 0.9)], [e]],
+                yerr=[[y - lo], [hi - y]],
                 fmt=marker, color=color, markersize=7,
                 capsize=3, elinewidth=0.8, zorder=3,
             )
@@ -582,10 +652,11 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
               fontsize=9, framealpha=0.85, title="Width")
 
     ax.set_xlabel("Total parameter count", fontsize=12)
-    ax.set_ylabel("Mean inference time per step [s]", fontsize=12)
+    ax.set_ylabel("Inference time per step [s]  (median)", fontsize=12)
     ax.set_title(
         "GINConv inference time vs. parameter count\n"
-        f"(graph ID '{graph_id}', mode=graph + kappa, {n_steps} steps, error bars = 1 std)",
+        f"(graph ID '{graph_id}', mode=graph + kappa,"
+        f" error bars: lower=min, upper=p95)",
         fontsize=13,
     )
 
@@ -633,8 +704,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available.")
     parser.add_argument("--include-synthetic", action="store_true", help="Also include 100 synthetic graphs (default: real graphs only).")
     parser.add_argument("--param-graph-id", type=str, default="1", help="Graph ID used as fixed benchmark problem for the param benchmark.")
-    parser.add_argument("--param-n-warmup", type=int, default=50, help="Warmup forward passes for param benchmark.")
-    parser.add_argument("--param-n-steps",  type=int, default=1000, help="Timed forward passes for param benchmark.")
+    parser.add_argument("--param-n-warmup", type=int, default=50,    help="Warmup forward passes for param benchmark.")
+    parser.add_argument("--param-n-steps",  type=int, default=10000, help="Loop-method iterations for param benchmark (mean = wall/N).")
+    parser.add_argument("--param-profile",  action="store_true",     help="Run torch profiler per architecture and save tables.")
     parser.add_argument("--skip-param-benchmark", action="store_true", help="Skip the parameter-count benchmark.")
     return parser.parse_args()
 
@@ -677,11 +749,12 @@ def main() -> None:
     plot_benchmark(rows, output_dir, x_axis=args.x_axis)
 
     if not args.skip_param_benchmark:
-        param_rows = run_param_benchmark(args)
+        param_rows = run_param_benchmark(args, output_dir)
         if param_rows:
             param_csv = output_dir / "param_benchmark_results.csv"
             param_fields = ["n_layers", "hidden_dim", "total_params",
-                            "t_mean", "t_std", "n_steps", "graph_id", "n_nodes", "n_edges"]
+                            "t_mean_loop", "t_median", "t_min", "t_p95",
+                            "n_steps_loop", "graph_id", "n_nodes", "n_edges"]
             with open(param_csv, "w", newline="", encoding="utf-8") as fh:
                 writer = csv.DictWriter(fh, fieldnames=param_fields)
                 writer.writeheader()
