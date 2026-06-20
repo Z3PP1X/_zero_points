@@ -31,7 +31,7 @@ def _sample_raw():
 def _build_batch():
     converter = ExpressionGraphConverter()
     data = converter.convert(_sample_raw(), heterogeneous=False, mode="graph")
-    data.global_features = torch.zeros((1, 2), dtype=torch.float)
+    data.global_features = torch.zeros((1, 5), dtype=torch.float)
     data.y = torch.tensor([1], dtype=torch.long)
     loader = DataLoader([data], batch_size=1)
     return next(iter(loader))
@@ -46,13 +46,13 @@ def test_classifier_forward_with_feature_encoder():
         model = TestGraphNetwork(
             input_dim=input_dim,
             hidden_dim=32,
-            global_dim=2,
+            global_dim=5,
             edge_dim=edge_dim,
             architecture=arch,
         )
         model.eval()
         assert model.node_encoder is not None
-        assert model.edge_encoder is not None
+        assert model.edge_encoder is None
         with torch.no_grad():
             out = model(
                 batch.x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr
@@ -72,7 +72,7 @@ def test_variant_pool_classifier():
             model = TestGraphNetwork(
                 input_dim=input_dim,
                 hidden_dim=32,
-                global_dim=2,
+                global_dim=5,
                 edge_dim=edge_dim,
                 architecture="gatv2_stack",
                 activation="prelu",
@@ -96,7 +96,7 @@ def test_categorical_features_embedded_not_ordinal():
     model = TestGraphNetwork(
         input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=32,
-        global_dim=2,
+        global_dim=5,
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
     )
@@ -117,7 +117,7 @@ def test_classifier_forward_with_feature_subset():
     model = TestGraphNetwork(
         input_dim=len(active_features),
         hidden_dim=32,
-        global_dim=2,
+        global_dim=5,
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
         active_features=active_features,

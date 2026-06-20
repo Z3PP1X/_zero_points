@@ -42,7 +42,7 @@ def _build_batch():
         ],
     }
     data = ExpressionGraphConverter().convert(raw, heterogeneous=False, mode="graph")
-    data.global_features = torch.zeros((1, 2), dtype=torch.float)
+    data.global_features = torch.zeros((1, 5), dtype=torch.float)
     data.y = torch.tensor([1], dtype=torch.long)
     return next(iter(DataLoader([data], batch_size=1)))
 
@@ -96,6 +96,7 @@ def test_energy_measured_for_legacy():
     model = TestGraphNetwork(
         input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=16,
+        global_dim=5,
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         variant="legacy",
     )
@@ -109,6 +110,7 @@ def test_energy_measured_for_uniform_variants():
         model = TestGraphNetwork(
             input_dim=len(NODE_FEATURE_SCHEMA),
             hidden_dim=16,
+            global_dim=5,
             edge_dim=len(EDGE_FEATURE_SCHEMA),
             variant=variant,
             pool_type=pool_type,

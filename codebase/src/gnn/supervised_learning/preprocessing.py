@@ -250,7 +250,7 @@ class GraphPipeline:
 
     @property
     def global_dim(self) -> int:
-        return 2
+        return 5
 
     @property
     def edge_dim(self) -> int:
@@ -319,16 +319,11 @@ class ProblemRunDataset(Dataset):
         cx_val = parse_float(row.get("x0", 0.0))
         yt_val = parse_float(row.get("y_target", 0.0))
         fx_val = parse_float(row.get("fx", 0.0))
-        # Local derivative state at x0. These are the physically decisive signals
-        # for a Newton (uses f') vs gMGF/Halley (uses f'') decision. They are
-        # injected onto the d1_root / d2_root aggregator nodes so the message
-        # passing in graph mode can use them; when absent in the dataset they
-        # default to 0.0 (previous behaviour).
         d1x_val = parse_float(row.get("d1x", 0.0))
         d2x_val = parse_float(row.get("d2x", 0.0))
 
         data.global_features = torch.tensor(
-            [cx_val, yt_val], dtype=torch.float
+            [cx_val, yt_val, fx_val, d1x_val, d2x_val], dtype=torch.float
         )
         data.pid = pid
 
