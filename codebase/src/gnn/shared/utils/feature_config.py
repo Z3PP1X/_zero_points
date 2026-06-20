@@ -10,52 +10,49 @@ from gnn.shared.utils.graph_utils import (
     ANCHOR_GROUP_FEATURES,
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
-    NUM_EDGE_TYPES,
-    NUM_LABELS,
-    NUM_NODE_TYPES,
-    NUM_ROOT_COLORS,
 )
 
 FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional", "edge")
-# The positional feature class is the anchor-based positional encoding: one independently
-# selectable member per semantic anchor group. (Replaces the former lpe/rwpe encodings.)
 POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ANCHOR_GROUP_FEATURES
 
 NODE_FEATURES: tuple[str, ...] = (
-    "node_type",
-    "root_color",
+    "node_type_global",
+    "node_type_operator",
+    "node_type_root",
+    "node_type_supernode",
+    "root_color_none",
+    "root_color_f",
+    "root_color_d1",
+    "root_color_d2",
+    "root_color_kappa",
+    "label_UNK",
+    "label_CONSTANT",
+    "label_GLOBAL",
+    "label_x",
+    "label_E",
+    "label_Log",
+    "label_Pi",
+    "label_Sin",
+    "label_Cos",
+    "label_Tan",
 )
 
 TOPOLOGY_FEATURES: tuple[str, ...] = (
     "subtree_size",
     "subtree_depth",
-    "hist_additive",
-    "hist_multiplicative",
     "hist_trigonometric",
     "hist_exponential",
-    "hist_transcendental",
     "hist_variables",
     "hist_constants",
 )
 
-# Each anchor group is a single positional-encoding column (identity mapping); the dict is
-# kept so resolution stays uniform with the historical multi-column-per-encoding form.
 POSITIONAL_ENCODING_FEATURES: dict[str, tuple[str, ...]] = {
     name: (name,) for name in POSITIONAL_ENCODING_CHOICES
 }
 
 EDGE_FEATURES: tuple[str, ...] = tuple(EDGE_FEATURE_SCHEMA)
 
-# Categorical features that the model encodes with a learnable nn.Embedding, mapped to
-# (vocab_size, embedding_dim). All other columns are treated as continuous (linear path).
-# `direction` is deliberately NOT here — relation_type already encodes forward/reverse.
-NODE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {
-    "node_type": (NUM_NODE_TYPES, 6),
-    "root_color": (NUM_ROOT_COLORS, 4),
-}
-EDGE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {
-    "relation_type": (NUM_EDGE_TYPES, 8),
-}
+NODE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {}
 
 
 def full_node_schema() -> list[str]:
@@ -116,8 +113,7 @@ def validate_positional_encodings(encodings: Iterable[str]) -> list[str]:
     return encodings_list
 
 
-# Selectable members per feature category. Each category accepts the same uniform
-# flat form in config/CLI: ``true`` (all members), ``false`` (none), or a list subset.
+
 CATEGORY_MEMBERS: dict[str, tuple[str, ...]] = {
     "node": NODE_FEATURES,
     "topology": TOPOLOGY_FEATURES,
@@ -200,13 +196,6 @@ def _apply_list_override(
 
 @dataclass
 class FeatureSelection:
-    """Resolved feature toggles for one experiment run.
-
-    ``node`` and ``topology`` are either a bool (all/none) or a tuple subset of
-    member names. ``positional`` is represented by the derived
-    ``positional_enabled`` + ``positional_encodings`` pair. ``edge`` stays a bool
-    (per-edge-feature slicing is deferred).
-    """
 
     node: bool | tuple[str, ...] = True
     topology: bool | tuple[str, ...] = True
@@ -241,21 +230,16 @@ def default_feature_selection() -> FeatureSelection:
 
 
 class PositionalSupernodeConflictError(ValueError):
-    """Raised when anchor positional encoding is combined with a virtual supernode."""
+    """Raised when anchor positional encoding is combined with a virtual supernode.
+        Anchor positional encoding is defined as the shortest distance from a 
+        node to a specific anchor group. A virtual node would set this distance to 2 for all of them, 
+        rendering the feature obsolete.
+    """
 
 
 def validate_positional_supernode_compatibility(
     selection: FeatureSelection, add_virtual_supernode: bool
 ) -> None:
-    """Reject the anchor-PE + virtual-supernode combination.
-
-    The anchor positional encoding measures shortest-path proximity to operator anchors,
-    but a fully-connected virtual supernode collapses every pairwise distance to at most
-    two hops during message passing — destroying the positional signal the encoding is
-    meant to provide. The two options are mutually exclusive; enabling both is almost
-    always a configuration mistake, so we fail fast instead of training on a corrupted
-    positional encoding.
-    """
     if (
         add_virtual_supernode
         and selection.positional_enabled
@@ -263,22 +247,16 @@ def validate_positional_supernode_compatibility(
     ):
         raise PositionalSupernodeConflictError(
             "Anchor positional encoding is incompatible with the virtual supernode: a "
-            "fully-connected supernode makes every node reachable in <=2 hops, which "
+            "fully-connected supernode makes every node reachable in <=2 hops. Which "
             "destroys the shortest-path anchor distances the encoding relies on. Disable "
-            "one of them — either drop the positional feature group "
-            "(features.positional: false / --positional-encoding none) or turn off the "
-            "supernode (add_virtual_supernode: false)."
+            "one of them — either drop the positional feature group"
         )
 
 
 def parse_feature_selection_from_mapping(
     expression_graph: dict[str, Any] | None,
 ) -> FeatureSelection:
-    """Read grouped feature toggles from an expression_graph YAML/CFG mapping.
-
-    Every category uses the uniform flat form: ``true``/omitted -> all members,
-    ``false`` -> none, a list -> only the listed members.
-    """
+    
     expression_graph = plain_dict(expression_graph)
     features = plain_dict(expression_graph.get("features"))
 

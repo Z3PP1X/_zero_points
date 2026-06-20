@@ -6,7 +6,6 @@ from graph_utils import (
     LoadGraphFromLocalStructure,
     LoadAugmentedFunctionGraph,
     AugmentedFunctionGraph,
-    CANONICAL_EDGE_TYPE_VOCAB,
 )
 
 
@@ -192,12 +191,12 @@ def test_load_augmented_function_graph(
     edge_fwd = g1.edges[globalNode, "kappa_1_k_root"]
     assert edge_fwd["kappa_weight"] == -15.5
     assert edge_fwd["etype"] == "GlobalToKappa"
-    assert edge_fwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["GlobalToKappa"]
+    assert edge_fwd["edge_type"] == 0
 
     edge_bwd = g1.edges["kappa_1_k_root", globalNode]
     assert edge_bwd["kappa_weight"] == -15.5
     assert edge_bwd["etype"] == "KappaToGlobal"
-    assert edge_bwd["edge_type"] == CANONICAL_EDGE_TYPE_VOCAB["KappaToGlobal"]
+    assert edge_bwd["edge_type"] == 0
 
     # ── kappa_value=-25.0 → only kappa_2 merged ─────────────────────────────
     # Counter resets per call, so the merged node gets prefix "kappa_1_" regardless.
@@ -247,7 +246,6 @@ def test_filter_active_kappa_nodes_edges(
     converter = ExpressionGraphConverter()
     data = converter.convert(
         mainGraph,
-        heterogeneous=False,
         mode="graph",
         edge_direction="top_down",
     )

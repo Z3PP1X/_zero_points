@@ -11,7 +11,7 @@ from gnn.shared.utils.graph_vocab import (
     NUM_HISTOGRAM_BINS, HISTOGRAM_FEATURES,
     NODE_FEATURE_SCHEMA,
     SUPERNODE_NODE_ID, SUPERNODE_NODE_TYPE, ROOT_COLOR_VOCAB,
-    encode_label,
+    LABEL_ONEHOT_NAMES,
     anchor_group_for_node,
 )
 
@@ -80,8 +80,7 @@ def _histogram_bin_for_node(label: str, orig_type: str) -> int:
         return HISTOGRAM_VARIABLE_BIN
     if orig_type == "constant":
         return HISTOGRAM_CONSTANT_BIN
-    # Unknown operator/function → transcendental bin
-    return 4
+    return HISTOGRAM_CONSTANT_BIN
 
 
 def _compute_subtree_histograms(G: nx.DiGraph) -> dict:
@@ -215,19 +214,27 @@ def inject_virtual_supernode(
     existing_nodes = [nid for nid in node_ids if nid != SUPERNODE_NODE_ID]
 
     supernode_attrs: dict[str, Any] = {
+        # node_type one-hot: supernode (code 5 → index 3)
+        "node_type_global": 0.0, "node_type_operator": 0.0,
+        "node_type_root": 0.0, "node_type_supernode": 1.0,
+        # root_color one-hot: none (0)
+        "root_color_none": 1.0, "root_color_f": 0.0,
+        "root_color_d1": 0.0, "root_color_d2": 0.0, "root_color_kappa": 0.0,
+        # label one-hot: GLOBAL (index 2)
+        **{name: 0.0 for name in LABEL_ONEHOT_NAMES},
+        "label_GLOBAL": 1.0,
+        # topology
+        "subtree_size": 0.0, "subtree_depth": 0.0,
+        # histograms
+        **{name: 0.0 for name in HISTOGRAM_FEATURES},
+        # anchor PE
+        **{name: 0.0 for name in ANCHOR_GROUP_FEATURES},
+        # non-schema attrs for G_directed compat
         "node_type": SUPERNODE_NODE_TYPE,
         "root_color": 0.0,
-        "label_id": encode_label("GLOBAL"),
+        "label_id": 2,
         "type": "supernode",
         "label": "GLOBAL",
-        "subtree_size": 0.0,
-        "subtree_depth": 0.0,
-        "anchor_additive": 0.0,
-        "anchor_scaling": 0.0,
-        "anchor_periodic": 0.0,
-        "anchor_exponential": 0.0,
-        "anchor_transcendental": 0.0,
-        **{name: 0.0 for name in HISTOGRAM_FEATURES},
     }
 
     G_enriched.add_node(SUPERNODE_NODE_ID, **supernode_attrs)

@@ -5,14 +5,16 @@ import torch
 import networkx as nx
 import numpy as np
 from pathlib import Path
-from torch_geometric.data import Data, HeteroData
+from torch_geometric.data import Data
 from torch_geometric.utils import from_networkx
 from gnn.shared.utils.graph_vocab import (
     CANONICAL_LABEL_VOCAB, ROOT_COLOR_VOCAB,
     NUM_HISTOGRAM_BINS, HISTOGRAM_FEATURES, ANCHOR_GROUP_FEATURES,
     SUPERNODE_NODE_ID, SUPERNODE_NODE_TYPE,
     NODE_FEATURE_SCHEMA,
-    encode_label, encode_edge_type, validate_edge_direction,
+    LABEL_ONEHOT_NAMES,
+    encode_label, validate_edge_direction,
+    node_type_onehot, root_color_onehot, label_onehot,
 )
 from gnn.shared.utils.feature_extraction import (
     TopologicalFeatureExtractor, _compute_subtree_histograms,
@@ -21,20 +23,6 @@ from gnn.shared.utils.feature_extraction import (
 
 logger = logging.getLogger(__name__)
 
-
-def get_hetero_node_type(raw_type: str) -> str:
-    """Map internal node type strings to the heterogeneous node type names.
-
-    All expression-tree nodes collapse to "operator"; root nodes keep their "root"
-    type for identity-aware message passing; global and supernode become "global".
-    """
-    if raw_type == "root":
-        return "root"
-    elif raw_type in ("global", "supernode"):
-        return "global"
-    else:
-        # operator, function, variable, constant → unified "operator"
-        return "operator"
 
 
 def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
@@ -117,9 +105,6 @@ def _mark_function_roots(raw: dict) -> None:
 class ExpressionGraphData(Data):
     pass
 
-
-class ExpressionHeteroData(HeteroData):
-    pass
 
 
 def parse_graphml_node_name(name_str: str) -> str:
@@ -299,11 +284,11 @@ def create_virtual_global_node(
 
     # Connect global directly to each function tree root.
     for r in roots_f:
-        G_combined.add_edge("global", f"f_{r}", edge_type=encode_edge_type("child_of"))
+        G_combined.add_edge("global", f"f_{r}", edge_type=0)
     for r in roots_d1:
-        G_combined.add_edge("global", f"d1_{r}", edge_type=encode_edge_type("child_of"))
+        G_combined.add_edge("global", f"d1_{r}", edge_type=0)
     for r in roots_d2:
-        G_combined.add_edge("global", f"d2_{r}", edge_type=encode_edge_type("child_of"))
+        G_combined.add_edge("global", f"d2_{r}", edge_type=0)
 
     return G_combined
 
@@ -383,16 +368,37 @@ class ExpressionGraphConverter:
                     enriched_attrs[_name] = 0.0
 
             enriched_attrs.setdefault("root_color", float(ROOT_COLOR_VOCAB["none"]))
+
+            # One-hot columns for node_type
+            nt_code = int(enriched_attrs.get("node_type", 1))
+            nt_oh = node_type_onehot(nt_code)
+            enriched_attrs["node_type_global"] = nt_oh[0]
+            enriched_attrs["node_type_operator"] = nt_oh[1]
+            enriched_attrs["node_type_root"] = nt_oh[2]
+            enriched_attrs["node_type_supernode"] = nt_oh[3]
+
+            # One-hot columns for root_color
+            rc_oh = root_color_onehot(int(enriched_attrs["root_color"]))
+            enriched_attrs["root_color_none"] = rc_oh[0]
+            enriched_attrs["root_color_f"] = rc_oh[1]
+            enriched_attrs["root_color_d1"] = rc_oh[2]
+            enriched_attrs["root_color_d2"] = rc_oh[3]
+            enriched_attrs["root_color_kappa"] = rc_oh[4]
+
+            # One-hot columns for label
+            lb_oh = label_onehot(enriched_attrs.get("label", "<UNK>"))
+            for _i, _lname in enumerate(LABEL_ONEHOT_NAMES):
+                enriched_attrs[_lname] = lb_oh[_i]
+
             G_enriched.add_node(node, **enriched_attrs)
 
     def convert(
         self,
         source: Union[str, Path, dict, nx.DiGraph],
-        heterogeneous: bool = False,
         mode: str = "graph",
         edge_direction: str = "top_down",
         add_virtual_supernode: bool = False,
-    ) -> Union[Data, HeteroData]:
+    ) -> Data:
         edge_direction = validate_edge_direction(edge_direction)
 
         if isinstance(source, nx.DiGraph):
@@ -563,16 +569,10 @@ class ExpressionGraphConverter:
                 if key not in G_enriched.edges[u, v]:
                     G_enriched.edges[u, v][key] = None
 
-        if heterogeneous:
-            from gnn.shared.utils.heterogeneous_converter import to_hetero
-            data = to_hetero(G_enriched, raw or {}, topo)
-            data.__class__ = ExpressionHeteroData
-            data.node_ids = node_ids
-        else:
-            from gnn.shared.utils.homogeneous_converter import to_homogeneous
-            data = to_homogeneous(G_enriched, raw or {})
-            data.__class__ = ExpressionGraphData
-            data.node_ids = node_ids
+        from gnn.shared.utils.homogeneous_converter import to_homogeneous
+        data = to_homogeneous(G_enriched, raw or {})
+        data.__class__ = ExpressionGraphData
+        data.node_ids = node_ids
 
         data.node_kappas = node_kappas
 
@@ -584,9 +584,8 @@ class ExpressionGraphConverter:
             dtype=torch.long,
         )
 
-        if not heterogeneous:
-            data.node_type = node_type_tensor
-            data.root_color = root_color_tensor
+        data.node_type = node_type_tensor
+        data.root_color = root_color_tensor
 
         # Add global graph features
         data.tree_depth = topo["tree_depth"]
@@ -608,9 +607,6 @@ class ExpressionGraphConverter:
     def _encode_label(self, label: str) -> int:
         return encode_label(label)
 
-    def _encode_edge_type(self, etype: str) -> int:
-        return encode_edge_type(etype)
-
     def _build_networkx(self, raw: dict) -> nx.DiGraph:
         G = nx.DiGraph()
         for node in raw["nodes"]:
@@ -628,6 +624,6 @@ class ExpressionGraphConverter:
             G.add_edge(
                 edge["source"],
                 edge["target"],
-                edge_type=self._encode_edge_type(edge["type"]),
+                edge_type=0,
             )
         return G

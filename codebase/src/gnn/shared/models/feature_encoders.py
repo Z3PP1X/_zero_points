@@ -94,8 +94,11 @@ class TwoWayFeatureEncoder(nn.Module):
             if name == "node_type":
                 node_type_ids = ids
 
-        fused = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
-        encoded = self.activation(self.fusion(fused))
+        if not parts:
+            encoded = x.new_zeros(x.size(0), self.fusion.out_features)
+        else:
+            fused = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
+            encoded = self.activation(self.fusion(fused))
 
         if node_type_ids is None:
             node_type_ids = x.new_zeros(x.size(0), dtype=torch.long)

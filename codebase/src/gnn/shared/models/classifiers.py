@@ -14,10 +14,7 @@ from gnn.shared.models.gnn_backbones import (
     make_activation,
     pool_split_embeddings,
     resolve_global_pool,
-    resolve_node_feature_names,
 )
-from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
-from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
 
 
 class TestGraphNetwork(UniformPoolMixin, nn.Module):
@@ -72,15 +69,10 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         self._last_aux_loss = torch.zeros(())
         self.num_layers = num_layers
 
-        # node_type is an integer code; TwoWayFeatureEncoder embeds it BY NAME so it
-        # works under any active-feature subset/reorder.
-        self.node_feature_names = resolve_node_feature_names(active_features)
-        self._node_col = {name: idx for idx, name in enumerate(self.node_feature_names)}
-        self.node_encoder = TwoWayFeatureEncoder(
-            self.node_feature_names,
-            hidden_dim,
-            NODE_CATEGORICAL_REGISTRY,
-            activation=make_activation(activation),
+        self.node_encoder = nn.Sequential(
+            nn.LayerNorm(input_dim),
+            nn.Linear(input_dim, hidden_dim),
+            make_activation(activation),
         )
         conv_in_dim = hidden_dim
         self.conv_in_dim = conv_in_dim
@@ -153,9 +145,6 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         global_dim = getattr(pipeline, "global_dim", 0)
         edge_dim = getattr(pipeline, "edge_dim", 4)
         architecture = getattr(pipeline, "architecture", "gatv2_stack")
-        # The encoder locates categorical columns BY NAME, so an active-feature
-        # subset/reorder is handled correctly — thread the names through.
-        kwargs.setdefault("active_features", getattr(pipeline, "active_features", None))
         return cls(
             input_dim=input_dim,
             global_dim=global_dim,
@@ -190,19 +179,13 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         return self.classifier(x_pooled)
 
     def _legacy_forward(self, x, edge_index, batch, edge_attr=None):
-        # Derive virtual/real partition from the raw node_type column before any
-        # encoding (the encoder consumes that column). Resolve the column BY NAME so
-        # it survives active-feature subset/reorder. Virtual aggregator types (6, 9, 10)
-        # have been removed from the pipeline; is_virtual is always all-False on current
-        # graphs, but the split-pooling path is preserved for backward compatibility.
-        node_type_col = self._node_col.get("node_type", 0)
-        node_types = x[:, node_type_col].round().long()
-        is_virtual = (node_types == 6) | (node_types == 9) | (node_types == 10)
+        # Virtual aggregator types (6, 9, 10) removed; is_virtual is always empty.
+        is_virtual = torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
         is_real = ~is_virtual
 
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
 
-        x, _ = self.node_encoder(x)
+        x = self.node_encoder(x)
 
         real_edge_index, real_edge_attr, _ = filter_real_subgraph(edge_index, edge_attr, is_real)
 
@@ -236,8 +219,8 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
     def _uniform_forward(self, x, edge_index, batch, edge_attr=None):
         # Whole-graph hierarchical pooling: no real/virtual split.
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
-        x, _ = self.node_encoder(x)
+        x = self.node_encoder(x)
         if self.edge_encoder is not None:
-            edge_attr, _ = self.edge_encoder(edge_attr)
+            edge_attr = self.edge_encoder(edge_attr)
         num_graphs = int(batch.max().item() + 1) if batch.numel() > 0 else 0
         return self._uniform_pool_forward(x, edge_index, edge_attr, batch, num_graphs)

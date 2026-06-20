@@ -2,17 +2,19 @@
 # module without changing any call site.
 from gnn.shared.utils.graph_vocab import (
     CANONICAL_LABELS, CANONICAL_LABEL_VOCAB,
-    ANCHOR_GROUP_FEATURES, ANCHOR_GROUP_BY_LABEL, TRANSCENDENTAL_ANCHOR_GROUP,
+    ANCHOR_GROUP_FEATURES, ANCHOR_GROUP_BY_LABEL,
     ANCHOR_EXCLUDED_NODE_IDS, NUM_ANCHOR_GROUPS,
     ROOT_COLOR_VOCAB, NUM_ROOT_COLORS,
     HISTOGRAM_GROUP_BY_LABEL, HISTOGRAM_VARIABLE_BIN, HISTOGRAM_CONSTANT_BIN,
     NUM_HISTOGRAM_BINS, HISTOGRAM_FEATURES,
-    CANONICAL_EDGE_TYPES, CANONICAL_EDGE_TYPE_VOCAB,
     VIRTUAL_NODE_TYPES,
-    NUM_NODE_TYPES, NUM_LABELS, NUM_EDGE_TYPES,
+    NUM_NODE_TYPES, NUM_CANONICAL_LABELS,
+    NODE_TYPE_ONEHOT, NODE_TYPE_ONEHOT_DIM,
+    LABEL_ONEHOT_NAMES,
     SUPERNODE_NODE_TYPE, SUPERNODE_NODE_ID,
     NODE_FEATURE_SCHEMA, EDGE_FEATURE_SCHEMA, EDGE_DIRECTIONS,
-    _is_numeric_label, encode_label, encode_edge_type,
+    _is_numeric_label, encode_label,
+    node_type_onehot, root_color_onehot, label_onehot,
     anchor_group_for_node, validate_edge_direction,
 )
 from gnn.shared.utils.feature_extraction import (
@@ -23,10 +25,9 @@ from gnn.shared.utils.feature_extraction import (
     compute_normalized_dirichlet_energy,
 )
 from gnn.shared.utils.graph_converter import (
-    get_hetero_node_type, get_relation_type,
+    get_relation_type,
     _find_global_node_id, _mark_function_roots,
-    ExpressionGraphData, ExpressionHeteroData, ExpressionGraphConverter,
-    build_augmented_math_graph,
+    ExpressionGraphData, ExpressionGraphConverter,
     parse_graphml_node_name, _determine_node_type_from_label,
     _parse_constant_value, find_roots, parse_graphml_to_nodes_and_edges,
     create_virtual_global_node,

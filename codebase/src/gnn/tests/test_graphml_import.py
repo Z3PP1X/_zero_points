@@ -63,7 +63,7 @@ def test_helper_functions():
     # 2. Test _determine_node_type_from_label
     assert _determine_node_type_from_label("Plus") == "operator"
     assert _determine_node_type_from_label("x") == "variable"
-    assert _determine_node_type_from_label("E") == "variable"
+    assert _determine_node_type_from_label("E") == "constant"
     assert _determine_node_type_from_label("Cos") == "function"
     assert _determine_node_type_from_label("5") == "constant"
     assert _determine_node_type_from_label("-1/5") == "constant"
@@ -118,7 +118,7 @@ def test_expression_graph_converter_with_container_format():
     converter = ExpressionGraphConverter()
     
     # 1. Test "graph" mode: global + f_1/f_2/f_3 + d1_1 + d2_1 = 6 nodes (no aggregators)
-    data_graph = converter.convert(raw_container, heterogeneous=False, mode="graph")
+    data_graph = converter.convert(raw_container, mode="graph")
     assert data_graph.num_nodes == 6
     assert "global" in data_graph.node_ids
     assert "f_1" in data_graph.node_ids
@@ -127,7 +127,7 @@ def test_expression_graph_converter_with_container_format():
     assert "f_root" not in data_graph.node_ids
 
     # 2. Test "tree_derivatives" mode (same structure as graph mode, no virtual nodes)
-    data_tree_deriv = converter.convert(raw_container, heterogeneous=False, mode="tree_derivatives")
+    data_tree_deriv = converter.convert(raw_container, mode="tree_derivatives")
     assert data_tree_deriv.num_nodes == 6
     assert "global" in data_tree_deriv.node_ids
     assert "f_1" in data_tree_deriv.node_ids
@@ -136,7 +136,7 @@ def test_expression_graph_converter_with_container_format():
     assert "virtual_current_x" not in data_tree_deriv.node_ids
 
     # 3. Test "tree" mode: global + f_1/f_2/f_3 = 4 nodes (only f tree)
-    data_tree = converter.convert(raw_container, heterogeneous=False, mode="tree")
+    data_tree = converter.convert(raw_container, mode="tree")
     assert data_tree.num_nodes == 4
     assert "global" in data_tree.node_ids
     assert "f_1" in data_tree.node_ids

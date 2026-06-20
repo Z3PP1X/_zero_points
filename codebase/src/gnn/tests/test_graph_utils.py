@@ -77,7 +77,7 @@ def test_enriched_graph_features(tmp_path):
 
     converter = ExpressionGraphConverter()
     data = converter.convert(
-        raw, heterogeneous=False, mode="tree", edge_direction="bidirectional"
+        raw,  mode="tree", edge_direction="bidirectional"
     )
 
     assert data.nodes == 3
@@ -91,50 +91,61 @@ def test_enriched_graph_features(tmp_path):
     assert getattr(data, "edge_attr", None) is None
 
     root_idx = 0
-    child1_idx = 1
-    child2_idx = 2
+    child1_idx = 1   # x (variable)
+    child2_idx = 2   # 2 (constant)
 
-    st_size = NODE_FEATURE_SCHEMA.index("subtree_size")
-    st_depth = NODE_FEATURE_SCHEMA.index("subtree_depth")
-    hist_add = NODE_FEATURE_SCHEMA.index("hist_additive")
-    hist_var = NODE_FEATURE_SCHEMA.index("hist_variables")
-    hist_const = NODE_FEATURE_SCHEMA.index("hist_constants")
+    nt_operator = NODE_FEATURE_SCHEMA.index("node_type_operator")
+    nt_global   = NODE_FEATURE_SCHEMA.index("node_type_global")
+    rc_none     = NODE_FEATURE_SCHEMA.index("root_color_none")
+    st_size     = NODE_FEATURE_SCHEMA.index("subtree_size")
+    st_depth    = NODE_FEATURE_SCHEMA.index("subtree_depth")
+    hist_trig   = NODE_FEATURE_SCHEMA.index("hist_trigonometric")
+    hist_var    = NODE_FEATURE_SCHEMA.index("hist_variables")
+    hist_const  = NODE_FEATURE_SCHEMA.index("hist_constants")
 
-    root_features = data.x[root_idx].tolist()
-    assert root_features[0] == 1.0           # node_type=1 (operator; no global → Plus not marked root)
-    assert root_features[1] == 0.0           # root_color=0 (none)
-    assert root_features[st_size] == 3.0     # subtree_size: Plus + x + 2
-    assert root_features[st_depth] == 1.0    # subtree_depth=1 (height)
-    assert root_features[hist_add] == 1.0    # hist_additive: Plus
-    assert root_features[hist_var] == 1.0    # hist_variables: x
-    assert root_features[hist_const] == 1.0  # hist_constants: 2
-
-    child2_features = data.x[child2_idx].tolist()
-    assert child2_features[0] == 1.0         # node_type=1 (all non-global/non-root → operator)
-    assert child2_features[1] == 0.0         # root_color=0
-    assert child2_features[st_size] == 1.0   # subtree_size=1 (leaf)
-    assert child2_features[st_depth] == 0.0  # subtree_depth=0
-    assert child2_features[hist_const] == 1.0  # hist_constants: constant leaf
-
-    # Anchor positional encoding (the 5 anchor_* columns): proximity 1/(1+hops) to the
-    # nearest operator anchor of each semantic group, within the node's own function.
-    # f1 is Plus -> an additive anchor, so it scores 1.0 on anchor_additive and its two
-    # children (1 hop away) score 0.5; all other anchor groups are absent here.
+    root_features   = data.x[root_idx].tolist()
     child1_features = data.x[child1_idx].tolist()
-    add_col = NODE_FEATURE_SCHEMA.index("anchor_additive")
-    assert root_features[add_col] == pytest.approx(1.0)
-    assert child1_features[add_col] == pytest.approx(0.5)
-    assert child2_features[add_col] == pytest.approx(0.5)
-    for name in (
-        "anchor_scaling",
-        "anchor_periodic",
-        "anchor_exponential",
-        "anchor_transcendental",
-    ):
-        col = NODE_FEATURE_SCHEMA.index(name)
-        assert root_features[col] == 0.0
-        assert child1_features[col] == 0.0
-        assert child2_features[col] == 0.0
+    child2_features = data.x[child2_idx].tolist()
+
+    # node_type: Plus / x / 2 are all code-1 (operator) since there is no global node
+    assert root_features[nt_operator] == 1.0
+    assert root_features[nt_global]   == 0.0
+    assert root_features[rc_none]     == 1.0   # no root_color marking without global
+
+    assert root_features[st_size]  == 3.0   # Plus + x + 2
+    assert root_features[st_depth] == 1.0   # height = 1
+    assert root_features[hist_trig]  == 0.0  # no trig node in subtree
+    assert root_features[hist_var]   == 1.0  # x in subtree
+    # Plus (operator, not in HISTOGRAM_GROUP_BY_LABEL) → hist_constants; plus literal 2
+    assert root_features[hist_const] == 2.0
+
+    assert child2_features[nt_operator] == 1.0
+    assert child2_features[rc_none]     == 1.0
+    assert child2_features[st_size]  == 1.0   # leaf
+    assert child2_features[st_depth] == 0.0
+    assert child2_features[hist_const] == 1.0  # constant leaf
+
+    # Anchor PE (new 3-group scheme): proximity 1/(1+hops) to the nearest node in each
+    # anchor group. The tree is Plus[x, 2].  x is an anchor (anchor_variable group);
+    # E/Log/Sin/Cos/Tan are absent so anchor_trigonometric and anchor_exponential = 0.
+    anc_trig = NODE_FEATURE_SCHEMA.index("anchor_trigonometric")
+    anc_exp  = NODE_FEATURE_SCHEMA.index("anchor_exponential")
+    anc_var  = NODE_FEATURE_SCHEMA.index("anchor_variable")
+
+    # Plus: 1 hop to x → anchor_variable = 0.5; no trig/exp anchors
+    assert root_features[anc_var]  == pytest.approx(0.5)
+    assert root_features[anc_trig] == 0.0
+    assert root_features[anc_exp]  == 0.0
+
+    # x: is the variable anchor → anchor_variable = 1.0
+    assert child1_features[anc_var]  == pytest.approx(1.0)
+    assert child1_features[anc_trig] == 0.0
+    assert child1_features[anc_exp]  == 0.0
+
+    # 2 (constant): 2 hops to x → anchor_variable = 1/3
+    assert child2_features[anc_var]  == pytest.approx(1.0 / 3.0)
+    assert child2_features[anc_trig] == 0.0
+    assert child2_features[anc_exp]  == 0.0
 
     assert data.edge_index.shape == (2, 4)
 
@@ -149,7 +160,7 @@ def test_edge_direction_top_down_has_parent_to_child_only():
         "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
     }
     data = ExpressionGraphConverter().convert(
-        raw, heterogeneous=False, mode="tree", edge_direction="top_down"
+        raw,  mode="tree", edge_direction="top_down"
     )
     assert data.edge_index.shape == (2, 1)
     src, dst = data.edge_index[:, 0].tolist()
@@ -166,7 +177,7 @@ def test_edge_direction_bottom_up_has_child_to_parent_only():
         "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
     }
     data = ExpressionGraphConverter().convert(
-        raw, heterogeneous=False, mode="tree", edge_direction="bottom_up"
+        raw,  mode="tree", edge_direction="bottom_up"
     )
     assert data.edge_index.shape == (2, 1)
     src, dst = data.edge_index[:, 0].tolist()
@@ -186,7 +197,7 @@ def test_ast_edge_direction_respected_for_belongs_to_edges():
         ],
     }
     data = ExpressionGraphConverter().convert(
-        raw, heterogeneous=False, mode="graph", edge_direction="top_down"
+        raw,  mode="graph", edge_direction="top_down"
     )
     assert "virtual_current_x" not in data.node_ids
     x1_idx = data.node_ids.index("x1")

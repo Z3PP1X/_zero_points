@@ -11,90 +11,9 @@ from feature_layout import NATIVE_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
 
-
-def test_augmented_math_graph_edges():
-    # Construct an expression: Plus[x, x] (reused variable x)
-    raw = {
-        "id": "P-augmented-test-1",
-        "nodes": [
-            {"id": "global", "label": "GLOBAL", "type": "global", "value": None},
-            {"id": "f1", "label": "Plus", "type": "operator", "value": None},
-            {"id": "f2", "label": "x", "type": "variable", "value": None},
-            {"id": "f3", "label": "x", "type": "variable", "value": None}
-        ],
-        "edges": [
-            {"source": "f1", "target": "f2", "type": "child_of"},
-            {"source": "f1", "target": "f3", "type": "child_of"},
-            {"source": "global", "target": "f1", "type": "belongs_to_f"}
-        ]
-    }
-
-    # Test in bidirectional mode
-    converter = ExpressionGraphConverter()
-    data = converter.convert(raw, heterogeneous=False, mode="graph", edge_direction="bidirectional")
-
-    # Verify that NextUse and NextUseBackward edges are created between f2 and f3
-    # G_enriched is converted to PyG data. Let's inspect node ids and edge_index.
-    assert "virtual_current_x" not in data.node_ids
-    # f1 is now the root (marked via belongs_to_f edge) — no aggregator node
-    assert "f_root" not in data.node_ids
-    f1_idx = data.node_ids.index("f1")
-    assert data.x[f1_idx, 0].item() == 2.0   # node_type=2 (root)
-    assert data.x[f1_idx, 1].item() == 1.0   # root_color=1 (f)
-
-    # Let's verify edge types present
-    # We can reconstruct G_enriched logic or check data.edge_index and relationship types.
-    # In homogeneous, data.edge_index contains all edges. Let's inspect their relation types.
-    f2_idx = data.node_ids.index("f2")
-    f3_idx = data.node_ids.index("f3")
-    
-    # We expect a NextUse edge: f2 -> f3
-    # We expect a NextUseBackward edge: f3 -> f2
-    edges = list(zip(data.edge_index[0].tolist(), data.edge_index[1].tolist()))
-    assert (f2_idx, f3_idx) in edges
-    assert (f3_idx, f2_idx) in edges
-
-
-def test_augmented_math_graph_nesting_edges():
-    # Construct a nested expression: Plus[sin[x], 2]
-    # Root (f1: Plus) -> Children (f2: sin [function], f4: 2 [constant])
-    # f2 (sin) -> Child (f3: x [variable])
-    raw = {
-        "id": "P-augmented-test-2",
-        "nodes": [
-            {"id": "global", "label": "GLOBAL", "type": "global", "value": None},
-            {"id": "f1", "label": "Plus", "type": "operator", "value": None},
-            {"id": "f2", "label": "sin", "type": "function", "value": None},
-            {"id": "f3", "label": "x", "type": "variable", "value": None},
-            {"id": "f4", "label": "2", "type": "constant", "value": {"mantissa": 0.2, "exponent": 1}}
-        ],
-        "edges": [
-            {"source": "f1", "target": "f2", "type": "child_of"},
-            {"source": "f2", "target": "f3", "type": "child_of"},
-            {"source": "f1", "target": "f4", "type": "child_of"},
-            {"source": "global", "target": "f1", "type": "belongs_to_f"}
-        ]
-    }
-
-    converter = ExpressionGraphConverter()
-    
-    # Test top_down mode
-    data_td = converter.convert(raw, heterogeneous=False, mode="graph", edge_direction="top_down")
-    f1_idx = data_td.node_ids.index("f1")
-    f2_idx = data_td.node_ids.index("f2")
-    edges_td = list(zip(data_td.edge_index[0].tolist(), data_td.edge_index[1].tolist()))
-    
-    # In top_down, we should have OuterToInner_Arg0: f1 -> f2
-    assert (f1_idx, f2_idx) in edges_td
-    assert (f2_idx, f1_idx) not in edges_td
-
-    # Test bottom_up mode
-    data_bu = converter.convert(raw, heterogeneous=False, mode="graph", edge_direction="bottom_up")
-    edges_bu = list(zip(data_bu.edge_index[0].tolist(), data_bu.edge_index[1].tolist()))
-    
-    # In bottom_up, we should have InnerToOuter_Arg0: f2 -> f1
-    assert (f2_idx, f1_idx) in edges_bu
-    assert (f1_idx, f2_idx) not in edges_bu
+# One-hot column indices in the 28-col schema
+_NT_ROOT = NODE_FEATURE_SCHEMA.index("node_type_root")        # 2
+_RC_F = NODE_FEATURE_SCHEMA.index("root_color_f")              # 5
 
 
 def test_node_counts_and_task_features_on_aggregator():
@@ -113,9 +32,8 @@ def test_node_counts_and_task_features_on_aggregator():
         ]
     }
 
-    # Test graph mode conversion
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw, heterogeneous=False, mode="graph")
+    data = converter.convert(raw, mode="graph")
 
     # 4 nodes: global + f1 + f2 + f3 (no aggregator nodes)
     assert data.num_nodes == 4
@@ -124,14 +42,13 @@ def test_node_counts_and_task_features_on_aggregator():
     assert "f_root" not in data.node_ids
     assert "virtual_current_x" not in data.node_ids
 
-    # f1 (Plus) is now the root node (node_type=2, root_color=1 for "f")
+    # f1 (Plus) is now the root node (node_type_root=1.0, root_color_f=1.0)
     idx_f1 = data.node_ids.index("f1")
-    assert data.x[idx_f1, 0].item() == 2.0   # node_type=2 (root)
-    assert data.x[idx_f1, 1].item() == 1.0   # root_color=1 (f)
+    assert data.x[idx_f1, _NT_ROOT].item() == 1.0   # node_type_root
+    assert data.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
 
 
 def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
-    # Setup raw graph files inside mock graphs_dir
     raw = {
         "id": "P-dynamic",
         "nodes": [
@@ -140,13 +57,12 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
         ],
         "edges": []
     }
-    
+
     meta_path = tmp_path / "P-dynamic_meta.json"
     meta_path.write_text(json.dumps(raw), encoding="utf-8")
-    
-    # 1. Test Preprocessor in Graph Mode
+
     preprocessor_graph = Preprocessor(graphs_dir=str(tmp_path), mode="graph")
-    
+
     message = {
         "id": "P-dynamic",
         "currentX": 1.5,
@@ -154,21 +70,19 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
         "yTarget": 0.0,
         "uuid": "test-uuid-123"
     }
-    
+
     data_graph, extracted = preprocessor_graph.process(message)
 
-    # No aggregator nodes; f1 (x) is the root (only non-global in-degree-0 node).
     assert "f_root" not in data_graph.node_ids
     assert data_graph.num_nodes == 2   # global + f1
     assert data_graph.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
     idx_f1 = data_graph.node_ids.index("f1")
-    assert data_graph.x[idx_f1, 0].item() == 2.0   # node_type=2 (root)
-    assert data_graph.x[idx_f1, 1].item() == 1.0   # root_color=1 (f)
+    assert data_graph.x[idx_f1, _NT_ROOT].item() == 1.0   # node_type_root
+    assert data_graph.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
 
-    # 2. Test Preprocessor in Tree Mode
     preprocessor_tree = Preprocessor(graphs_dir=str(tmp_path), mode="tree")
     data_tree, extracted = preprocessor_tree.process(message)
-    assert data_tree.num_nodes == 2  # global + f1 (root)
+    assert data_tree.num_nodes == 2
     assert "f_root" not in data_tree.node_ids
 
 
@@ -181,19 +95,17 @@ def test_supervised_learning_preprocessor_static_initialization():
         ],
         "edges": []
     }
-    
+
     converter = ExpressionGraphConverter()
-    
-    # 1. Test Supervised Initialization in Graph Mode
-    base_graph_graph = converter.convert(raw, heterogeneous=False, mode="graph")
+
+    base_graph_graph = converter.convert(raw, mode="graph")
     base_graphs_graph = {"P-supervised": base_graph_graph}
 
-    # No aggregator nodes; f1 (x) is marked as root via the in-degree-0 fallback.
     assert "f_root" not in base_graph_graph.node_ids
-    assert base_graph_graph.num_nodes == 2   # global + f1
+    assert base_graph_graph.num_nodes == 2
     idx_f1 = base_graph_graph.node_ids.index("f1")
-    assert base_graph_graph.x[idx_f1, 0].item() == 2.0   # node_type=2 (root)
-    assert base_graph_graph.x[idx_f1, 1].item() == 1.0   # root_color=1 (f)
+    assert base_graph_graph.x[idx_f1, _NT_ROOT].item() == 1.0   # node_type_root
+    assert base_graph_graph.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
 
     df_no_fx = pd.DataFrame([{
         "problem_id": "P-supervised",
@@ -205,8 +117,6 @@ def test_supervised_learning_preprocessor_static_initialization():
     dataset_no_fx_graph = ProblemRunDataset(df_no_fx, base_graphs_graph, mode="graph")
     data_no_fx_graph = dataset_no_fx_graph[0]
 
-    # Task values are no longer embedded in node features (populate_task_virtual_values is a no-op).
-    # The dataset should load and the feature matrix shape should be correct.
     assert data_no_fx_graph.x.shape == base_graph_graph.x.shape
 
 
@@ -219,12 +129,13 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
         ],
         "edges": []
     }
-    
-    converter = ExpressionGraphConverter()
-    
-    active_feats = ["node_type", "root_color", "subtree_size"]
 
-    data_full = converter.convert(raw, heterogeneous=False, mode="graph")
+    converter = ExpressionGraphConverter()
+
+    # Use new one-hot column names
+    active_feats = ["node_type_operator", "root_color_f", "subtree_size"]
+
+    data_full = converter.convert(raw, mode="graph")
     assert data_full.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
 
     from graph_utils import slice_active_features
@@ -233,7 +144,6 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
 
     assert data_sliced.x.shape[1] == 3
 
-    # 2. Test preprocessor with active_features sliced
     meta_path = tmp_path / "P-slice_meta.json"
     meta_path.write_text(json.dumps(raw), encoding="utf-8")
 

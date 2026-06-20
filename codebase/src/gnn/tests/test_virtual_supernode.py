@@ -96,21 +96,3 @@ def test_supernode_works_in_all_modes(sample_raw, mode):
         sample_raw, mode=mode, edge_direction="top_down", add_virtual_supernode=True
     )
     assert SUPERNODE_NODE_ID in data.node_ids
-
-
-def test_supernode_heterogeneous(sample_raw):
-    """In the heterogeneous representation the supernode joins the 'virtual' type and
-    its edges form supernode_connection metapaths."""
-    converter = ExpressionGraphConverter()
-    data = converter.convert(
-        sample_raw,
-        heterogeneous=True,
-        mode="graph",
-        edge_direction="top_down",
-        add_virtual_supernode=True,
-    )
-    # Supernode maps to "global" type in the heterogeneous graph
-    assert SUPERNODE_NODE_ID in data["global"].node_ids
-    metapaths = [rel for (_, rel, _) in data.edge_types]
-    assert "supernode_connection" in metapaths
-    assert "supernode_connection_reverse" in metapaths

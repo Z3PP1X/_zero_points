@@ -52,12 +52,12 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     cfg.expression_graph = MagicMock()
     cfg.expression_graph.enrich = True
     cfg.expression_graph.active_features = ""
-    
+
     features_dict = {
         "node": True,
         "topology": True,
-        # one anchor group only -> the other 4 anchor columns are dropped
-        "positional": ["anchor_periodic"],
+        # one anchor group only -> the other 2 anchor columns are dropped
+        "positional": ["anchor_trigonometric"],
         "edge": True
     }
 
@@ -69,8 +69,8 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     ]
 
     feature_names = resolve_feature_names(cfg)
-    # New schema: 2 node + 9 topology + 5 anchor PE = 16 features.
-    # Selecting a single anchor group drops the other 4, leaving 12.
-    assert len(feature_names) == 12
-    assert "anchor_periodic" in feature_names
-    assert "anchor_additive" not in feature_names
+    # Schema: 19 node one-hot + 6 topology + 1 anchor PE (trigonometric only) = 26 features.
+    assert len(feature_names) == 26
+    assert "anchor_trigonometric" in feature_names
+    assert "anchor_exponential" not in feature_names
+    assert "anchor_variable" not in feature_names

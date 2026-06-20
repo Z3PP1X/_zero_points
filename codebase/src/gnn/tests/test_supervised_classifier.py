@@ -30,7 +30,7 @@ def _sample_raw():
 
 def _build_batch():
     converter = ExpressionGraphConverter()
-    data = converter.convert(_sample_raw(), heterogeneous=False, mode="graph")
+    data = converter.convert(_sample_raw(), mode="graph")
     data.global_features = torch.zeros((1, 5), dtype=torch.float)
     data.y = torch.tensor([1], dtype=torch.long)
     loader = DataLoader([data], batch_size=1)
@@ -88,11 +88,9 @@ def test_variant_pool_classifier():
             assert torch.isfinite(out).all(), (variant, pool_type)
 
 
-def test_categorical_features_embedded_not_ordinal():
-    """Categorical node columns (node_type, root_color) are embedded via nn.Embedding, not
-    fed as raw ordinal codes which would impose a spurious linear scale. Each embedding table
-    must cover the canonical vocabulary so every code present in the data maps to a row."""
-    batch = _build_batch()
+def test_node_encoder_is_layernorm_linear():
+    """node_type and root_color are now one-hot columns, so node_encoder is a plain
+    LayerNorm→Linear projection (no nn.Embedding tables)."""
     model = TestGraphNetwork(
         input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=32,
@@ -100,19 +98,17 @@ def test_categorical_features_embedded_not_ordinal():
         edge_dim=len(EDGE_FEATURE_SCHEMA),
         architecture="gatv2_stack",
     )
-    for name in ("node_type", "root_color"):
-        col = NODE_FEATURE_SCHEMA.index(name)
-        emb = model.node_encoder.embeddings[name]
-        assert isinstance(emb, torch.nn.Embedding)
-        assert emb.num_embeddings >= int(batch.x[:, col].max().item()) + 1
+    enc = model.node_encoder
+    assert isinstance(enc, torch.nn.Sequential)
+    assert isinstance(enc[0], torch.nn.LayerNorm)
+    assert isinstance(enc[1], torch.nn.Linear)
+    assert enc[1].in_features == len(NODE_FEATURE_SCHEMA)
 
 
 def test_classifier_forward_with_feature_subset():
-    """The encoder locates categoricals BY NAME, so a reordered active-feature subset
-    that does not start with node_type still embeds the categoricals and forwards."""
+    """A reordered one-hot feature subset still passes through the plain linear encoder."""
     batch = _build_batch()
-    # Reordered subset: node_type is no longer at column 0; both categoricals included.
-    active_features = ["subtree_size", "node_type", "root_color", "subtree_depth"]
+    active_features = ["subtree_size", "node_type_operator", "root_color_f", "subtree_depth"]
     sub_x = batch.x[:, [NODE_FEATURE_SCHEMA.index(f) for f in active_features]]
     model = TestGraphNetwork(
         input_dim=len(active_features),
@@ -123,8 +119,7 @@ def test_classifier_forward_with_feature_subset():
         active_features=active_features,
     )
     model.eval()
-    # Both categoricals are embedded despite the reorder (no plain-linear fallback).
-    assert set(model.node_encoder.embeddings.keys()) == {"node_type", "root_color"}
+    assert isinstance(model.node_encoder, torch.nn.Sequential)
     with torch.no_grad():
         out = model(
             sub_x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr

@@ -36,7 +36,6 @@ class GraphDataLoader:
     ):
         self.name = name
         self.mode = mode
-        self.heterogeneous = heterogeneous
         self.is_synthetic = is_synthetic
         self.edge_direction = validate_edge_direction(edge_direction)
         self.add_kappa = add_kappa
@@ -218,7 +217,7 @@ class GraphDataLoader:
             suffix = f"{sn_marker}.pt"
         cache_file = self.cache_dir / (
             f"{clean_gid}_{self.mode}_"
-            f"{self.heterogeneous}_{self.edge_direction}{suffix}"
+            f"{self.edge_direction}{suffix}"
         )
 
         if cache_file.exists():
@@ -239,7 +238,6 @@ class GraphDataLoader:
             )
             converted = self.converter.convert(
                 main_graph,
-                heterogeneous=self.heterogeneous,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
                 add_virtual_supernode=self.add_virtual_supernode,
@@ -254,7 +252,6 @@ class GraphDataLoader:
 
             converted = self.converter.convert(
                 raw_dict,
-                heterogeneous=self.heterogeneous,
                 mode=self.mode,
                 edge_direction=self.edge_direction,
                 add_virtual_supernode=self.add_virtual_supernode,

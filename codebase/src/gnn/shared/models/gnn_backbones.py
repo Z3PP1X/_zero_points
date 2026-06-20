@@ -22,11 +22,6 @@ from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
 )
-from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
-from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
-
-# Column index of node_type in the FULL node schema; imported by tests.
-NODE_TYPE_COL = NODE_FEATURE_SCHEMA.index("node_type")
 
 # Graph-level readout operators selectable via cfg.model.graph_pooling. "add"/"sum" are
 # the same PyG op (sum readout) — more expressive than mean since it keeps graph size /
@@ -95,10 +90,10 @@ def coalesce_edge_attr(
     device: torch.device,
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    if edge_attr is not None and edge_attr.numel() > 0:
+    if edge_attr is not None and edge_attr.numel() > 0 and edge_attr.size(-1) > 0:
         return edge_attr.to(device=device, dtype=dtype)
     num_edges = edge_index.size(1)
-    return torch.zeros(num_edges, edge_dim, device=device, dtype=dtype)
+    return torch.zeros(num_edges, max(edge_dim, 1), device=device, dtype=dtype)
 
 
 def apply_edge_conv(
@@ -706,22 +701,15 @@ class GraphPolicyBackbone(UniformPoolMixin, nn.Module):
         self.pool_type = pool_type
         self._last_aux_loss = torch.zeros(())
 
-        self.node_feature_names = resolve_node_feature_names(
-            getattr(layout, "active_feature_names", None)
+        self.node_encoder = nn.Sequential(
+            nn.LayerNorm(layout.padded_node_feature_count),
+            nn.Linear(layout.padded_node_feature_count, layout.node_input_dim),
+            make_activation(activation),
         )
-        # name -> column map for the active node-feature ordering (routing index reads).
-        self._node_col = {name: idx for idx, name in enumerate(self.node_feature_names)}
-        self.node_encoder = TwoWayFeatureEncoder(
-            self.node_feature_names,
-            layout.node_input_dim,
-            NODE_CATEGORICAL_REGISTRY,
-            activation=make_activation(activation),
-        )
-        self.edge_encoder = TwoWayFeatureEncoder(
-            list(EDGE_FEATURE_SCHEMA),
-            layout.edge_input_dim,
-            {},
-            activation=make_activation(activation),
+        self.edge_encoder = nn.Sequential(
+            nn.LayerNorm(max(layout.padded_edge_feature_count, 1)),
+            nn.Linear(max(layout.padded_edge_feature_count, 1), layout.edge_input_dim),
+            make_activation(activation),
         )
         # Globals lost their hand-crafted sign-log; a learnable LayerNorm tames scale.
         self.global_norm = nn.LayerNorm(layout.padded_global_feature_count)
@@ -872,14 +860,12 @@ class GraphPolicyBackbone(UniformPoolMixin, nn.Module):
         return self._uniform_forward(x, edge_index, batch_index, global_features, edge_attr)
 
     def _legacy_forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        x_enc, node_types = self.node_encoder(x)
-        is_f_root = (node_types == 6)
-        is_d1_root = (node_types == 9)
-        is_d2_root = (node_types == 10)
-        is_virtual = is_f_root | is_d1_root | is_d2_root
+        x_enc = self.node_encoder(x)
+        # Virtual aggregator types removed; is_virtual is always empty.
+        is_virtual = torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
         is_real = ~is_virtual
 
-        edge_emb, _ = self.edge_encoder(
+        edge_emb = self.edge_encoder(
             coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
         )
 
@@ -910,8 +896,8 @@ class GraphPolicyBackbone(UniformPoolMixin, nn.Module):
         return self._apply_tail(h_pooled, global_features)
 
     def _uniform_forward(self, x, edge_index, batch_index, global_features=None, edge_attr=None):
-        x_enc, _ = self.node_encoder(x)
-        edge_emb, _ = self.edge_encoder(
+        x_enc = self.node_encoder(x)
+        edge_emb = self.edge_encoder(
             coalesce_edge_attr(edge_attr, edge_index, self.layout.padded_edge_feature_count, x.device, x.dtype)
         )
         num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0

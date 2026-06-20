@@ -23,7 +23,7 @@ def test_positional_encoding_subset():
                 "features": {
                     "node": True,
                     "topology": False,
-                    "positional": ["anchor_periodic"],
+                    "positional": ["anchor_trigonometric"],
                     "edge": True,
                 }
             }
@@ -31,16 +31,16 @@ def test_positional_encoding_subset():
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert "anchor_periodic" in active
-    assert "anchor_additive" not in active
-    assert "depth" not in active
+    assert "anchor_trigonometric" in active
+    assert "anchor_exponential" not in active
+    assert "subtree_depth" not in active
 
 
 def test_node_category_subset_list():
     selection = parse_feature_selection_from_mapping(
         {
             "features": {
-                "node": ["node_type", "root_color"],
+                "node": ["node_type_operator", "root_color_f"],
                 "topology": False,
                 "positional": False,
                 "edge": True,
@@ -49,7 +49,7 @@ def test_node_category_subset_list():
     )
     active = resolve_active_node_features(selection)
     # Only the two listed node features survive; topology/positional dropped.
-    assert active == ["node_type", "root_color"]
+    assert active == ["node_type_operator", "root_color_f"]
 
 
 def test_topology_subset_and_positional_true():
@@ -66,10 +66,10 @@ def test_topology_subset_and_positional_true():
     active = resolve_active_node_features(selection)
     assert active is not None
     assert "subtree_size" in active and "subtree_depth" in active
-    assert "hist_additive" not in active  # not selected
-    assert "node_type" not in active  # node disabled
+    assert "hist_trigonometric" not in active  # not selected
+    assert "node_type_operator" not in active  # node disabled
     # positional: true -> all anchor groups
-    assert "anchor_additive" in active and "anchor_transcendental" in active
+    assert "anchor_trigonometric" in active and "anchor_variable" in active
 
 
 def test_positional_false_disables_pe():
@@ -82,35 +82,36 @@ def test_positional_false_disables_pe():
 
 
 def test_edge_list_coerces_to_enabled():
-    # Edge slicing is deferred: a subset list still enables the edge category.
+    # Edge features have been removed (EDGE_FEATURE_SCHEMA is empty).
+    # Disabling the edge category via False should be accepted.
     selection = parse_feature_selection_from_mapping(
-        {"features": {"edge": ["relation_type"]}}
+        {"features": {"edge": False}}
     )
-    assert selection.edge is True
-    assert "edge" in selection.enabled_groups()
+    assert selection.edge is False
+    assert "edge" not in selection.enabled_groups()
 
 
 def test_nested_positional_form_rejected():
     with pytest.raises(ValueError, match="Nested feature config"):
         parse_feature_selection_from_mapping(
-            {"features": {"positional": {"enabled": True, "encodings": ["anchor_periodic"]}}}
+            {"features": {"positional": {"enabled": True, "encodings": ["anchor_trigonometric"]}}}
         )
 
 
 def test_per_category_cli_overrides():
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping({}),
-        node_features=["node_type"],
+        node_features=["node_type_operator"],
         topology_features=["none"],
         edge_features=["none"],
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert active.count("node_type") == 1
-    assert "node_type" in active
+    assert active.count("node_type_operator") == 1
+    assert "node_type_operator" in active
     assert not any(
         feature in active
-        for feature in ("depth", "height", "subtree_size", "out_degree")
+        for feature in ("subtree_depth", "subtree_size", "hist_trigonometric")
     )
     assert selection.edge is False
 
@@ -137,24 +138,24 @@ def test_feature_groups_limit_enabled_classes():
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping({}),
         feature_groups=["node", "positional"],
-        positional_encoding=["anchor_periodic"],
+        positional_encoding=["anchor_trigonometric"],
     )
     active = resolve_active_node_features(selection)
     assert active is not None
-    assert "node_type" in active
-    assert "anchor_periodic" in active
-    assert "anchor_additive" not in active
-    assert "depth" not in active
+    assert "node_type_operator" in active
+    assert "anchor_trigonometric" in active
+    assert "anchor_exponential" not in active
+    assert "subtree_depth" not in active
 
 
 def test_explicit_active_features_override_groups():
     selection = merge_feature_selection(
         parse_feature_selection_from_mapping({}),
         feature_groups=["node"],
-        active_features=["node_type", "root_color"],
+        active_features=["node_type_operator", "root_color_f"],
     )
     active = resolve_active_node_features(selection)
-    assert active == ["node_type", "root_color"]
+    assert active == ["node_type_operator", "root_color_f"]
 
 
 def test_unknown_feature_group_raises():

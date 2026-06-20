@@ -211,48 +211,24 @@ register_act("tanh", nn.Tanh)
 
 
 from torch_geometric.graphgym.register import register_node_encoder
-from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
-from gnn.shared.utils.feature_config import (
-    NODE_CATEGORICAL_REGISTRY,
-    full_node_schema,
-    parse_csv_list,
-)
+from gnn.shared.utils.graph_utils import NODE_FEATURE_SCHEMA
 
 
 @register_node_encoder("ExpressionNodeEncoder")
 class ExpressionNodeEncoder(torch.nn.Module):
-    """GraphGym node encoder for expression graphs.
-
-    Wraps the shared :class:`TwoWayFeatureEncoder`: the categorical columns
-    (``node_type``, ``label_id``) are integer codes — feeding them as continuous
-    values imposes a meaningless ordinal scale (e.g. ``Log=17`` ≈ 17 × ``Plus=3``)
-    and discards operator/function identity, the most discriminative signal. The
-    encoder embeds them and linearly projects the LayerNorm'd continuous columns to
-    ``dim_emb`` (= ``cfg.gnn.dim_inner``).
-
-    Categorical columns are located BY NAME from ``cfg.expression_graph.active_features``
-    (the ordered active-feature subset, or the full schema), so embeddings keep working
-    under any subset/reorder — no plain-linear fallback.
-    """
+    """GraphGym node encoder: LayerNorm → Linear → GELU projection of one-hot node features."""
 
     def __init__(self, dim_emb: int):
         super().__init__()
-        # Use the RESOLVED active-feature names (the same list that slices batch.x in
-        # preprocessing). The grouped toggles (features.node/topology/...) are resolved
-        # into active_feature_names; the active_features CSV is only the explicit
-        # override and is empty when groups are used. Reading the CSV here would fall
-        # back to the full 16-col schema while x is sliced to the selected subset,
-        # making the continuous-column gather index out of bounds.
-        names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
-        if not names:
-            active = getattr(cfg.expression_graph, "active_features", "")
-            names = parse_csv_list(active) or full_node_schema()
-        self.encoder = TwoWayFeatureEncoder(
-            names, dim_emb, NODE_CATEGORICAL_REGISTRY, activation=nn.GELU()
+        n_features = len(NODE_FEATURE_SCHEMA)
+        self.encoder = nn.Sequential(
+            nn.LayerNorm(n_features),
+            nn.Linear(n_features, dim_emb),
+            nn.GELU(),
         )
 
     def forward(self, batch):
-        batch.x, _ = self.encoder(batch.x)
+        batch.x = self.encoder(batch.x)
         return batch
 
 
@@ -328,34 +304,7 @@ class ExpressionClassifierNetwork(torch.nn.Module):
 
     def __init__(self, dim_in, dim_out, **kwargs):
         super().__init__()
-        self._hetero = bool(getattr(cfg.expression_graph, "heterogeneous", False))
         self._last_aux_loss = torch.zeros(())
-
-        if self._hetero:
-            from gnn.shared.models.hetero_backbone import (
-                HETERO_NODE_TYPES,
-                HeteroExpressionClassifier,
-            )
-
-            names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
-            edge_types = [
-                tuple(et) for et in getattr(cfg.expression_graph, "hetero_edge_types", [])
-            ]
-            metadata = (list(HETERO_NODE_TYPES), edge_types)
-            self.net = HeteroExpressionClassifier(
-                metadata,
-                active_features=(names or None),
-                hidden_dim=cfg.gnn.dim_inner,
-                out_dim=dim_out,
-                num_layers=getattr(cfg.gnn, "layers_mp", 2),
-                aggr=getattr(cfg.gnn, "hetero_aggr", "sum"),
-                activation=cfg.gnn.act,
-                dropout=cfg.gnn.dropout,
-                graph_pooling=cfg.model.graph_pooling,
-                variant=getattr(cfg.gnn, "variant", "legacy"),
-                pool_type=getattr(cfg.gnn, "pool_type", "diffpool"),
-            )
-            return
 
         layer_type = validate_layer_type(cfg.gnn.layer_type)
         if layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
@@ -386,20 +335,14 @@ class ExpressionClassifierNetwork(torch.nn.Module):
         self._last_aux_loss = torch.zeros(())
 
     def forward(self, batch):
-        if self._hetero:
-            # HeteroExpressionClassifier consumes the whole HeteroData batch (x_dict /
-            # edge_index_dict); _last_aux_loss is non-zero for the pooling/diffpool variant.
-            logits = self.net(batch)
-            self._last_aux_loss = self.net._last_aux_loss
-        else:
-            logits = self.net(
-                batch.x,
-                batch.edge_index,
-                batch.batch,
-                global_features=None,
-                edge_attr=getattr(batch, "edge_attr", None),
-            )
-            self._last_aux_loss = self.net._last_aux_loss
+        logits = self.net(
+            batch.x,
+            batch.edge_index,
+            batch.batch,
+            global_features=None,
+            edge_attr=getattr(batch, "edge_attr", None),
+        )
+        self._last_aux_loss = self.net._last_aux_loss
         if logits.size(-1) == 1:  # match the stock single-logit BCE path
             logits = logits.view(-1)
         return logits, batch.y
@@ -485,27 +428,6 @@ def cosine_with_restarts_scheduler(optimizer, max_epoch):
 
 register_scheduler("cosine_with_restarts", cosine_with_restarts_scheduler)
 
-
-def prepare_hetero_data_list(data_list):
-    """Pad HeteroData graphs to a uniform edge-type layout and return the metadata.
-
-    A true heterogeneous run keeps ``HeteroData`` (no homogenization). The only blocker is
-    ``InMemoryDataset.collate``, which needs every graph to expose the same stores — so we
-    pad each graph to the dataset-wide union of edge types (empty ``edge_index`` and matching
-    empty ``edge_attr`` for absent ones) via the shared ``hetero_backbone`` helpers.
-    Returns ``(padded_list, edge_types)``; ``edge_types`` is stashed on the cfg so the
-    network can build its ``to_hetero`` metadata.
-    """
-    from gnn.shared.models.hetero_backbone import (
-        collect_edge_attr_dims,
-        collect_edge_types,
-        pad_edge_types,
-    )
-
-    edge_types = collect_edge_types(data_list)
-    edge_attr_dims = collect_edge_attr_dims(data_list)
-    padded = [pad_edge_types(d, edge_types, edge_attr_dims) for d in data_list]
-    return padded, edge_types
 
 
 class ExpressionGraphDataset(InMemoryDataset):

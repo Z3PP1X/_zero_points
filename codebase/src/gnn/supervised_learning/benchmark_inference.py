@@ -55,27 +55,18 @@ for _p in (_gnn_root, _src_root):
 
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.shared.models.classifiers import TestGraphNetwork
-from gnn.shared.models.hetero_backbone import (
-    HeteroExpressionClassifier,
-    build_hetero_metadata,
-    pad_edge_types,
-    collect_edge_attr_dims,
-)
 
 
 # ── Stage registry ────────────────────────────────────────────────────────────
 STAGE_DEFS: dict[int, dict] = {
-    1: dict(name="Tree / edge-blind",          mode="tree",             hetero=False, default_arch="gin_stack"),
-    2: dict(name="Tree-Deriv / edge-blind",    mode="tree_derivatives", hetero=False, default_arch="gin_stack"),
-    3: dict(name="Graph / edge-blind",         mode="graph",            hetero=False, default_arch="gin_stack"),
-    4: dict(name="Graph / edge-aware (GATv2)", mode="graph",            hetero=False, default_arch="gatv2_stack"),
-    5: dict(name="Heterogeneous / GIN",        mode="graph",            hetero=True,  default_arch="hetero"),
-    6: dict(name="Hetero / DiffPool",          mode="graph",            hetero=True,  default_arch="hetero_diffpool"),
+    1: dict(name="Tree / edge-blind",          mode="tree",             default_arch="gin_stack"),
+    2: dict(name="Tree-Deriv / edge-blind",    mode="tree_derivatives", default_arch="gin_stack"),
+    3: dict(name="Graph / edge-blind",         mode="graph",            default_arch="gin_stack"),
+    4: dict(name="Graph / edge-aware (GATv2)", mode="graph",            default_arch="gatv2_stack"),
 }
 
 EDGE_BLIND_ARCHS = {"gcn_stack", "gin_stack", "sage_stack"}
 EDGE_AWARE_ARCHS = {"gatv2_stack", "gine_stack"}
-HETERO_ARCHS    = {"hetero", "hetero_diffpool"}
 
 
 # ── Lightweight benchmark models ──────────────────────────────────────────────
@@ -158,23 +149,6 @@ def _build_homo_model(
     ).to(device)
 
 
-def _build_hetero_model(
-    arch: str,
-    hidden_dim: int,
-    num_layers: int,
-    metadata,
-    device: torch.device,
-) -> nn.Module:
-    variant   = "pooling" if arch == "hetero_diffpool" else "legacy"
-    pool_type = "diffpool" if arch == "hetero_diffpool" else "topk"
-    return HeteroExpressionClassifier(
-        metadata=metadata,
-        hidden_dim=hidden_dim,
-        num_layers=num_layers,
-        variant=variant,
-        pool_type=pool_type,
-    ).to(device)
-
 
 # ── Timing primitives ─────────────────────────────────────────────────────────
 
@@ -227,52 +201,6 @@ def _time_homo(
     return float(np.mean(times_ms)), float(np.median(times_ms)), float(np.std(times_ms))
 
 
-def _time_hetero(
-    model: nn.Module,
-    data,
-    device: torch.device,
-    warmup: int,
-    runs: int,
-) -> tuple[float, float, float]:
-    """Time a single-graph hetero forward pass (model(data)).
-
-    Returns (mean_ms, median_ms, std_ms).
-    """
-    model.eval()
-    data = data.to(device)
-
-    # Add missing batch tensors (needed by global pooling inside the model)
-    for node_type in data.node_types:
-        nd = data[node_type]
-        if not hasattr(nd, "batch") or nd.batch is None:
-            nd.batch = torch.zeros(nd.num_nodes, dtype=torch.long, device=device)
-
-    def _fwd():
-        return model(data)
-
-    with torch.no_grad():
-        for _ in range(warmup):
-            _fwd()
-
-    times_ms: list[float] = []
-    with torch.no_grad():
-        if device.type == "cuda":
-            for _ in range(runs):
-                s = torch.cuda.Event(enable_timing=True)
-                e = torch.cuda.Event(enable_timing=True)
-                s.record()
-                _fwd()
-                e.record()
-                torch.cuda.synchronize()
-                times_ms.append(s.elapsed_time(e))
-        else:
-            for _ in range(runs):
-                t0 = time.perf_counter()
-                _fwd()
-                times_ms.append((time.perf_counter() - t0) * 1000.0)
-
-    return float(np.mean(times_ms)), float(np.median(times_ms)), float(np.std(times_ms))
-
 
 # ── Single configuration benchmark ───────────────────────────────────────────
 
@@ -302,7 +230,6 @@ def benchmark_config(
         loader = GraphDataLoader(
             name=dataset_name,
             mode=stage_def["mode"],
-            heterogeneous=stage_def["hetero"],
             edge_direction=edge_direction,
         )
         graphs = loader.load_all()
@@ -319,21 +246,13 @@ def benchmark_config(
 
     # Build model + run timing
     try:
-        if stage_def["hetero"]:
-            metadata = build_hetero_metadata(graph_list)
-            edge_attr_dims = collect_edge_attr_dims(graph_list)
-            edge_types = metadata[1]  # collect_edge_types already called inside build_hetero_metadata
-            graph_list = [pad_edge_types(g, edge_types, edge_attr_dims) for g in graph_list]
-            model = _build_hetero_model(arch, hidden_dim, num_layers, metadata, device)
-            time_fn = _time_hetero
-        else:
-            input_dim = sample.x.shape[1]
-            ea = getattr(sample, "edge_attr", None)
-            edge_dim = ea.shape[1] if ea is not None and ea.numel() > 0 else 4
-            gf = getattr(sample, "global_features", None)
-            global_dim = gf.shape[-1] if gf is not None else 2
-            model = _build_homo_model(arch, input_dim, hidden_dim, num_layers, edge_dim, global_dim, device)
-            time_fn = _time_homo
+        input_dim = sample.x.shape[1]
+        ea = getattr(sample, "edge_attr", None)
+        edge_dim = ea.shape[1] if ea is not None and ea.numel() > 0 else 4
+        gf = getattr(sample, "global_features", None)
+        global_dim = gf.shape[-1] if gf is not None else 2
+        model = _build_homo_model(arch, input_dim, hidden_dim, num_layers, edge_dim, global_dim, device)
+        time_fn = _time_homo
 
         latencies: list[float] = []
         for g in graph_list:

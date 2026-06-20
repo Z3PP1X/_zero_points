@@ -7,7 +7,7 @@ import torch
 import networkx as nx
 from torch_geometric.data import Data, HeteroData
 from gnn.shared.utils.graph_vocab import (
-    ROOT_COLOR_VOCAB, encode_label, encode_edge_type,
+    ROOT_COLOR_VOCAB, encode_label,
 )
 from gnn.shared.utils.graph_converter import (
     ExpressionGraphConverter,
@@ -65,7 +65,7 @@ def _normalize_kappa_graph(g_raw: nx.DiGraph) -> tuple:
         )
     for u, v, attrs in g_raw.edges(data=True):
         etype = attrs.get("type") or attrs.get("etype") or "child_of"
-        normalized.add_edge(u, v, edge_type=encode_edge_type(etype), etype=etype)
+        normalized.add_edge(u, v, edge_type=0, etype=etype)
 
     roots = [n for n, d in normalized.in_degree() if d == 0]
     original_root = roots[0] if roots else (list(normalized.nodes)[0] if normalized.nodes else None)
@@ -306,7 +306,7 @@ class AugmentedFunctionGraph(nx.DiGraph):
             etype = attrs.get("type") or attrs.get("etype") or "child_of"
             normalized_g_kappa.add_edge(
                 u, v,
-                edge_type=encode_edge_type(etype),
+                edge_type=0,
                 etype=etype
             )
 
@@ -373,7 +373,7 @@ class AugmentedFunctionGraph(nx.DiGraph):
             None
         """
         weight = edge.features.get("weight", 0.0)
-        edge_type_code = encode_edge_type(edge.type)
+        edge_type_code = 0
         direction_val = 0.0 if edge.type == "GlobalToKappa" else 1.0
 
         self.add_edge(
@@ -490,7 +490,7 @@ def LoadGraphFromLocalStructure(folder: Union[Path, str], id: str) -> AugmentedF
             nx_graph.add_edge(
                 edge["source"],
                 edge["target"],
-                edge_type=encode_edge_type(edge["type"]),
+                edge_type=0,
                 etype=edge["type"]
             )
 

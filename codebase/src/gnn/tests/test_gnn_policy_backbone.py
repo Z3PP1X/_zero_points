@@ -7,7 +7,6 @@ from feature_layout import (
     POOL_TYPE_CHOICES,
 )
 from gnn_backbones import (
-    NODE_TYPE_COL,
     build_graph_policy_backbone,
     filter_real_subgraph,
 )
@@ -34,10 +33,9 @@ def test_filter_real_subgraph_drops_virtual_edges():
 def test_supernode_participates_in_message_passing():
     """The structural aggregator roots (old node_type codes 6/9/10 = f_root/d1_root/d2_root)
     were removed: ``VIRTUAL_NODE_TYPES`` is now empty and the supernode (code 5) is an ordinary
-    message-passing node (graph_utils: 'so the model treats it as an ordinary message-passing
-    node rather than a task aggregator'). So no node type is excluded by ``filter_real_subgraph``,
-    and an edge incident to the supernode DOES influence the readout — the inverse of the
-    removed virtual-root exclusion. (``filter_real_subgraph`` itself is unit-tested above.)"""
+    message-passing node. So an edge incident to the supernode DOES influence the readout via
+    node-feature message passing — the supernode's features propagate to its neighbours.
+    (Edge features are now dropped; perturbation is done on node features instead.)"""
     layout = FeatureLayout(node_input_dim=4, global_input_dim=6, edge_input_dim=4)
     hidden_dim = 16
     heads = 2
@@ -45,11 +43,15 @@ def test_supernode_participates_in_message_passing():
 
     torch.manual_seed(0)
     x = torch.randn(4, layout.padded_node_feature_count)
-    # Valid current codes: operator(1), root(2), supernode(5), operator(1). Node 2 is the
-    # supernode; edge index 2 (2 -> 0) is incident to it.
-    x[:, NODE_TYPE_COL] = torch.tensor([1.0, 2.0, 5.0, 1.0])
+    # Node 2 is the supernode (one-hot: node_type_supernode col=3); edge 2->0 connects it.
+    # Set one-hot node_type columns (indices 0-3): operator=1, root=2, supernode=3
+    x[:, 0:4] = 0.0
+    x[0, 1] = 1.0  # operator
+    x[1, 2] = 1.0  # root
+    x[2, 3] = 1.0  # supernode
+    x[3, 1] = 1.0  # operator
     edge_index = torch.tensor([[0, 1, 2, 3, 0], [1, 2, 0, 0, 3]], dtype=torch.long)
-    edge_attr = torch.randn(edge_index.size(1), layout.padded_edge_feature_count)
+    edge_attr = torch.zeros(edge_index.size(1), layout.padded_edge_feature_count)
     batch_index = torch.zeros(4, dtype=torch.long)
     global_features = torch.randn(1, 8)
 
@@ -65,12 +67,16 @@ def test_supernode_participates_in_message_passing():
     with torch.no_grad():
         out_base = backbone(x, edge_index, batch_index, global_features, edge_attr=edge_attr)
 
-        perturbed = edge_attr.clone()
-        perturbed[2] = perturbed[2] + 100.0
-        out_perturbed = backbone(x, edge_index, batch_index, global_features, edge_attr=perturbed)
+        # Perturb the supernode's node features in a way that changes LayerNorm output.
+        # LayerNorm is shift- and scale-invariant, so we use a ramp (non-constant diff)
+        # across the non-one-hot feature dimensions to break the relative distribution.
+        x_perturbed = x.clone()
+        ramp = torch.linspace(0.0, 1000.0, x.size(1))
+        x_perturbed[2] = x_perturbed[2] + ramp
+        out_perturbed = backbone(x_perturbed, edge_index, batch_index, global_features, edge_attr=edge_attr)
 
     assert out_base.shape == (1, hidden_dim)
-    # The supernode is NOT excluded: its incident edge's features reach the readout.
+    # The supernode is NOT excluded: its node features propagate via message passing to the readout.
     assert not torch.allclose(out_base, out_perturbed, atol=1e-5)
 
 
