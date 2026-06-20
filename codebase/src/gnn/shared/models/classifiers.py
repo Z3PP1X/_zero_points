@@ -17,39 +17,7 @@ from gnn.shared.models.gnn_backbones import (
     resolve_node_feature_names,
 )
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
-from gnn.shared.utils.feature_config import (
-    EDGE_CATEGORICAL_REGISTRY,
-    NODE_CATEGORICAL_REGISTRY,
-)
-from gnn.shared.utils.graph_utils import EDGE_FEATURE_SCHEMA
-
-# Edge feature dim at which the relation-type column (index 2) is present and the
-# edge encoder can embed it. Derived from the schema so it tracks edge-column changes.
-ENRICHED_EDGE_DIM = len(EDGE_FEATURE_SCHEMA)
-
-
-class SupervisedGraphClassifier(nn.Module):
-    """
-    A generic supervised GNN graph classifier.
-    Wraps any feature-extracting GNN backbone and appends a classification head.
-    """
-
-    def __init__(self, backbone: nn.Module, hidden_dim: int, global_dim: int, output_dim: int = 2):
-        super().__init__()
-        self.backbone = backbone
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim + global_dim, hidden_dim),
-            make_activation("prelu"),
-            nn.Dropout(0.2),
-            nn.Linear(hidden_dim, output_dim),
-        )
-
-    def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
-        features = self.backbone(x, edge_index, batch, global_features, edge_attr=edge_attr)
-        if global_features is not None:
-            global_features = global_features.view(features.size(0), -1)
-            features = torch.cat([features, global_features], dim=-1)
-        return self.classifier(features)
+from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
 
 
 class TestGraphNetwork(UniformPoolMixin, nn.Module):
@@ -104,11 +72,8 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         self._last_aux_loss = torch.zeros(())
         self.num_layers = num_layers
 
-        # Categorical features (node_type; edge relation_type) are integer codes.
-        # Feeding them as raw floats imposes a spurious ordinal scale (e.g. Log=17 ≈
-        # 17 × Plus=3), discarding the most discriminative signal — operator identity.
-        # TwoWayFeatureEncoder embeds them BY NAME so it works under any active-feature
-        # subset/reorder and projects the LayerNorm'd continuous columns linearly.
+        # node_type is an integer code; TwoWayFeatureEncoder embeds it BY NAME so it
+        # works under any active-feature subset/reorder.
         self.node_feature_names = resolve_node_feature_names(active_features)
         self._node_col = {name: idx for idx, name in enumerate(self.node_feature_names)}
         self.node_encoder = TwoWayFeatureEncoder(
@@ -120,19 +85,7 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         conv_in_dim = hidden_dim
         self.conv_in_dim = conv_in_dim
 
-        # Edge encoder maps to the same edge_dim so the conv layers are constructed
-        # identically; it only swaps the raw relation code for a learned embedding
-        # fused with the LayerNorm'd continuous edge columns.
-        self.use_edge_encoder = edge_dim == ENRICHED_EDGE_DIM
-        if self.use_edge_encoder:
-            self.edge_encoder = TwoWayFeatureEncoder(
-                list(EDGE_FEATURE_SCHEMA),
-                edge_dim,
-                EDGE_CATEGORICAL_REGISTRY,
-                activation=make_activation(activation),
-            )
-        else:
-            self.edge_encoder = None
+        self.edge_encoder = None
 
         # Depth is config-driven (cfg.gnn.layers_mp): build exactly num_layers convs with
         # the correct per-layer widths instead of a fixed conv1/conv2/conv3 triple. For GATv2
@@ -239,7 +192,9 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
     def _legacy_forward(self, x, edge_index, batch, edge_attr=None):
         # Derive virtual/real partition from the raw node_type column before any
         # encoding (the encoder consumes that column). Resolve the column BY NAME so
-        # it survives active-feature subset/reorder.
+        # it survives active-feature subset/reorder. Virtual aggregator types (6, 9, 10)
+        # have been removed from the pipeline; is_virtual is always all-False on current
+        # graphs, but the split-pooling path is preserved for backward compatibility.
         node_type_col = self._node_col.get("node_type", 0)
         node_types = x[:, node_type_col].round().long()
         is_virtual = (node_types == 6) | (node_types == 9) | (node_types == 10)
@@ -248,8 +203,6 @@ class TestGraphNetwork(UniformPoolMixin, nn.Module):
         edge_attr = coalesce_edge_attr(edge_attr, edge_index, self.edge_dim, x.device, x.dtype)
 
         x, _ = self.node_encoder(x)
-        if self.edge_encoder is not None:
-            edge_attr, _ = self.edge_encoder(edge_attr)
 
         real_edge_index, real_edge_attr, _ = filter_real_subgraph(edge_index, edge_attr, is_real)
 

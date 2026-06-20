@@ -11,7 +11,7 @@ from gnn.shared.utils.graph_vocab import (
     NUM_HISTOGRAM_BINS, HISTOGRAM_FEATURES,
     NODE_FEATURE_SCHEMA,
     SUPERNODE_NODE_ID, SUPERNODE_NODE_TYPE, ROOT_COLOR_VOCAB,
-    encode_label, encode_edge_type,
+    encode_label,
     anchor_group_for_node,
 )
 
@@ -201,11 +201,9 @@ def inject_virtual_supernode(
     effective graph diameter and boosting long-range message passing.
 
     It is injected *after* the AST topology / positional features and the augmented
-    (NextUse / function-nesting) edges have been computed, so adding it does not perturb
+    function-nesting edges have been computed, so adding it does not perturb
     those structural node features. The supernode carries its own node_type code
-    (``SUPERNODE_NODE_TYPE``), distinct from the f/d1/d2 aggregator virtual types
-    (6/9/10); the model therefore treats it as an ordinary message-passing node instead
-    of excluding it like the task aggregators.
+    (``SUPERNODE_NODE_TYPE``); the model treats it as an ordinary message-passing node.
 
     Mutates ``G_enriched`` (feature graph), ``G_directed`` (source of the node-type /
     label / belongs tensors and the node/edge counts) and appends the supernode id to
@@ -235,29 +233,22 @@ def inject_virtual_supernode(
     G_enriched.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
     G_directed.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
 
-    forward_rel = float(encode_edge_type("supernode_connection"))
-    reverse_rel = float(encode_edge_type("supernode_connection_reverse"))
-
-    def _edge_attrs(relation_type: float, direction: float, etype: str) -> dict[str, Any]:
-        return {
-            "child_index": 0.0,
-            "direction": direction,
-            "relation_type": relation_type,
-            "etype": etype,
-        }
-
     for nid in existing_nodes:
         # Both directions are always added so the supernode shortcut stays bidirectional
         # regardless of the AST edge_direction setting (mirrors virtual/task edges).
         G_enriched.add_edge(
             SUPERNODE_NODE_ID,
             nid,
-            **_edge_attrs(forward_rel, 0.0, "supernode_connection"),
+            child_index=0.0,
+            direction=0.0,
+            etype="supernode_connection",
         )
         G_enriched.add_edge(
             nid,
             SUPERNODE_NODE_ID,
-            **_edge_attrs(reverse_rel, 1.0, "supernode_connection_reverse"),
+            child_index=0.0,
+            direction=1.0,
+            etype="supernode_connection_reverse",
         )
         # Mirror the structural edges into G_directed so num_edges/num_nodes stay accurate.
         G_directed.add_edge(SUPERNODE_NODE_ID, nid)

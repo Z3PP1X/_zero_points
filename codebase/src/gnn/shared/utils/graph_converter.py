@@ -11,7 +11,7 @@ from gnn.shared.utils.graph_vocab import (
     CANONICAL_LABEL_VOCAB, ROOT_COLOR_VOCAB,
     NUM_HISTOGRAM_BINS, HISTOGRAM_FEATURES, ANCHOR_GROUP_FEATURES,
     SUPERNODE_NODE_ID, SUPERNODE_NODE_TYPE,
-    NODE_FEATURE_SCHEMA, EDGE_FEATURE_SCHEMA,
+    NODE_FEATURE_SCHEMA,
     encode_label, encode_edge_type, validate_edge_direction,
 )
 from gnn.shared.utils.feature_extraction import (
@@ -68,7 +68,7 @@ def _mark_function_roots(raw: dict) -> None:
     For the legacy JSON format that carries ``belongs_to_f/d1/d2`` edges, this rewrites
     those edges as plain ``child_of`` edges from global to each root and annotates the
     root nodes with ``root_color`` so the model can distinguish f / f' / f'' via a
-    learnable embedding without needing separate virtual aggregator nodes.
+    learnable embedding.
     """
     global_id = _find_global_node_id(raw)
     if global_id is None:
@@ -137,8 +137,10 @@ def parse_graphml_node_name(name_str: str) -> str:
 def _determine_node_type_from_label(label: str) -> str:
     if label in ["Plus", "Times", "Power"]:
         return "operator"
-    if label in ["x", "E", "Pi", "I"]:
+    if label == "x":
         return "variable"
+    if label in ["E", "Pi", "I"]:
+        return "constant"
     try:
         float(label)
         return "constant"
@@ -295,7 +297,7 @@ def create_virtual_global_node(
     add_component(g_d1, "d1")
     add_component(g_d2, "d2")
 
-    # Connect global directly to each function tree root (no aggregator nodes).
+    # Connect global directly to each function tree root.
     for r in roots_f:
         G_combined.add_edge("global", f"f_{r}", edge_type=encode_edge_type("child_of"))
     for r in roots_d1:
@@ -304,105 +306,6 @@ def create_virtual_global_node(
         G_combined.add_edge("global", f"d2_{r}", edge_type=encode_edge_type("child_of"))
 
     return G_combined
-
-
-def build_augmented_math_graph(
-    G: nx.DiGraph,
-    current_node: str,
-    last_seen_map: dict[str, str],
-    children_dict: dict[str, list[str]],
-    edge_direction: str,
-    active_outer_function: str | None = None,
-    current_arg_index: int = 0,
-) -> None:
-    """Recursively augments the mathematical expression graph G using DFS.
-
-    Adds "NextUse"/"NextUseBackward" edges for variable tracking and position-aware
-    functional nesting edges for nested operations based on the active outer function
-    and edge direction configuration.
-
-    Arguments:
-        G: The NetworkX directed graph to augment with new edges.
-        current_node: The current node ID being visited.
-        last_seen_map: A dictionary mapping variable names to their last visited Node ID.
-        children_dict: A dictionary mapping parent node IDs to list of child node IDs.
-        edge_direction: The direction of the edges ("top_down", "bottom_up", or "bidirectional").
-        active_outer_function: The Node ID of the closest ancestor function node.
-        current_arg_index: The argument index of the current node relative to its active outer function parent.
-
-    Returns:
-        None
-
-    Exceptions:
-        None
-    """
-    node_attrs = G.nodes[current_node]
-
-    def add_augmented_edge(u: str, v: str, etype: str) -> None:
-        etype_id = encode_edge_type(etype)
-        G.add_edge(
-            u,
-            v,
-            child_index=0.0,
-            direction=0.0,
-            relation_type=float(etype_id),
-            etype=etype,
-        )
-
-    # 1. Variable NextUse Tracking (Algorithm 1)
-    is_variable = (node_attrs.get("type") == "variable")
-    if is_variable:
-        variable_name = node_attrs.get("label")
-        if isinstance(variable_name, str):
-            if variable_name in last_seen_map:
-                previous_variable_node = last_seen_map[variable_name]
-                if edge_direction in ("top_down", "bidirectional"):
-                    add_augmented_edge(previous_variable_node, current_node, "NextUse")
-                if edge_direction in ("bottom_up", "bidirectional"):
-                    add_augmented_edge(current_node, previous_variable_node, "NextUseBackward")
-            last_seen_map[variable_name] = current_node
-
-    # 2. TrackFunctionNestingWithSides (Algorithm 2)
-    ALLOWED_FUNCTIONS = ["log", "exp", "sin", "cos", "Plus", "Times", "CustomFunc"]
-    node_label = node_attrs.get("label")
-    is_function_node = False
-    if isinstance(node_label, str):
-        is_function_node = (node_label.lower() in {f.lower() for f in ALLOWED_FUNCTIONS})
-
-    if is_function_node:
-        if active_outer_function is not None:
-            edge_type_str = f"OuterToInner_Arg{current_arg_index}"
-            backward_edge_type_str = f"InnerToOuter_Arg{current_arg_index}"
-
-            if edge_direction in ("top_down", "bidirectional"):
-                add_augmented_edge(active_outer_function, current_node, edge_type_str)
-            if edge_direction in ("bottom_up", "bidirectional"):
-                add_augmented_edge(current_node, active_outer_function, backward_edge_type_str)
-        active_outer_function = current_node
-
-    # 3. Recursive DFS traversal down the children (Left to Right)
-    children = children_dict.get(current_node, [])
-    for idx, child in enumerate(children):
-        if is_function_node:
-            build_augmented_math_graph(
-                G,
-                child,
-                last_seen_map,
-                children_dict,
-                edge_direction,
-                active_outer_function=active_outer_function,
-                current_arg_index=idx,
-            )
-        else:
-            build_augmented_math_graph(
-                G,
-                child,
-                last_seen_map,
-                children_dict,
-                edge_direction,
-                active_outer_function=active_outer_function,
-                current_arg_index=current_arg_index,
-            )
 
 
 class ExpressionGraphConverter:
@@ -432,19 +335,12 @@ class ExpressionGraphConverter:
         edge_direction: str,
     ) -> None:
         effective = edge_direction
-        # Resolve the operand-aware relation type (left/right operand for non-commutative
-        # binary operators) so the homogeneous relation_type column matches the
-        # heterogeneous metapath keys. For non-child_of edges get_relation_type is a no-op.
-        parent_label = G_enriched.nodes[parent].get("label", "") if parent in G_enriched else ""
-        rel_forward = get_relation_type(parent_label, etype, float(child_idx))
-        rel_reverse = get_relation_type(parent_label, etype + "_reverse", float(child_idx))
         if effective in ("top_down", "bidirectional"):
             G_enriched.add_edge(
                 parent,
                 child,
                 child_index=float(child_idx),
                 direction=0.0,
-                relation_type=float(self._encode_edge_type(rel_forward)),
                 etype=etype,
             )
         if effective in ("bottom_up", "bidirectional"):
@@ -453,7 +349,6 @@ class ExpressionGraphConverter:
                 parent,
                 child_index=float(child_idx),
                 direction=1.0 if effective == "bidirectional" else 0.0,
-                relation_type=float(self._encode_edge_type(rel_reverse)),
                 etype=etype + "_reverse",
             )
 
@@ -522,7 +417,7 @@ class ExpressionGraphConverter:
 
             child_counters = {}
             for u, v, attrs in source.edges(data=True):
-                if "relation_type" in attrs or "child_index" in attrs or "direction" in attrs:
+                if "child_index" in attrs or "direction" in attrs:
                     G_enriched.add_edge(u, v, **attrs)
                     continue
 
@@ -536,14 +431,6 @@ class ExpressionGraphConverter:
                 self._add_ast_edges(
                     G_enriched, parent, child, child_idx, etype, edge_direction
                 )
-
-            # Include global→root child_of edges so the DFS can traverse from global
-            # into each function subtree and correctly track NextUse variable reuse.
-            children_dict = {}
-            for u, v, attrs in G_directed.edges(data=True):
-                etype = attrs.get("etype") or attrs.get("type") or "child_of"
-                if etype == "child_of":
-                    children_dict.setdefault(u, []).append(v)
 
             raw = None
         else:
@@ -587,7 +474,7 @@ class ExpressionGraphConverter:
                             node["root_color"] = ROOT_COLOR_VOCAB[color]
 
                 combined_edges = edges_f + edges_d1 + edges_d2
-                # Direct global → root child_of edges replace the old aggregator chain.
+                # Direct global → root child_of edges.
                 for color, roots in [("f", roots_f), ("d1", roots_d1), ("d2", roots_d2)]:
                     for root in roots:
                         combined_edges.append({"source": "global", "target": root, "type": "child_of"})
@@ -643,37 +530,6 @@ class ExpressionGraphConverter:
                     edge_direction,
                 )
 
-            # Include global→root edges so the DFS from global reaches all AST nodes.
-            children_dict = {}
-            for edge in raw.get("edges", []):
-                if edge.get("type") == "child_of":
-                    children_dict.setdefault(edge["source"], []).append(edge["target"])
-
-        # Common G_enriched processing (augmented features path).
-        # The augmented NextUse / function-nesting edges turn the expression *tree*
-        # into a *graph*, so they are only added in graph mode. The tree and
-        # tree_derivatives modes keep the pure (multi-)tree structure.
-        if mode == "graph":
-            last_seen_map = {}
-            if "global" in G_enriched:
-                build_augmented_math_graph(
-                    G_enriched,
-                    "global",
-                    last_seen_map,
-                    children_dict,
-                    edge_direction,
-                )
-            else:
-                roots = [n for n, d in G_ast.in_degree() if d == 0]
-                for r in roots:
-                    build_augmented_math_graph(
-                        G_enriched,
-                        r,
-                        last_seen_map,
-                        children_dict,
-                        edge_direction,
-                    )
-
         # Optional fully-connected supernode: injected after topology/PE features and the
         # augmented edges so it does not perturb the AST structural features. Independent
         # of mode — it connects to every node regardless of graph/tree/tree_derivatives.
@@ -697,19 +553,15 @@ class ExpressionGraphConverter:
                 if key not in G_enriched.nodes[nid]:
                     G_enriched.nodes[nid][key] = None
 
-        # Ensure all edges have exactly the same set of attribute keys so
-        # from_networkx(group_edge_attrs=EDGE_FEATURE_SCHEMA) doesn't raise KeyError on
-        # edges that are missing a schema column.
-        all_edge_keys = set(EDGE_FEATURE_SCHEMA)
+        # Ensure all edges have the same attribute keys so PyG from_networkx does not
+        # raise on heterogeneous edge dicts (e.g. bare nesting edges vs child_of edges).
+        all_edge_keys: set[str] = set()
         for u, v in G_enriched.edges:
             all_edge_keys.update(G_enriched.edges[u, v].keys())
         for u, v in G_enriched.edges:
             for key in all_edge_keys:
                 if key not in G_enriched.edges[u, v]:
-                    if key in ("child_index", "direction", "relation_type", "edge_type"):
-                        G_enriched.edges[u, v][key] = 0.0
-                    else:
-                        G_enriched.edges[u, v][key] = None
+                    G_enriched.edges[u, v][key] = None
 
         if heterogeneous:
             from gnn.shared.utils.heterogeneous_converter import to_hetero

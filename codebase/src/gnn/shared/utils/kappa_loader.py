@@ -384,7 +384,6 @@ class AugmentedFunctionGraph(nx.DiGraph):
             kappa_weight=weight,
             child_index=0.0,
             direction=direction_val,
-            relation_type=float(edge_type_code),
             edge_betweenness_centrality=0.0,
         )
 
@@ -564,7 +563,7 @@ def filter_active_kappa(
 ) -> Union[Data, HeteroData]:
     """Filters the PyG Data object to only keep nodes and edges of the active kappa subgraph.
 
-    All base graph nodes, global nodes, and aggregator nodes are kept. Inactive kappa subgraph nodes
+    All base graph nodes and global nodes are kept. Inactive kappa subgraph nodes
     and their associated edges are removed. If active_kappa is None, 0, or NaN, all kappa subgraphs
     are deactivated and removed.
 
@@ -599,7 +598,7 @@ def filter_active_kappa(
     for i in range(num_nodes):
         kappa_val = node_kappas[i]
         if kappa_val is None:
-            # Base node / global node / aggregator node
+            # Base node / global node
             keep_node_indices.append(i)
         elif is_active_kappa_valid:
             try:

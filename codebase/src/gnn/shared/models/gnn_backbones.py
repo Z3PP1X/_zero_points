@@ -22,10 +22,7 @@ from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
 )
-from gnn.shared.utils.feature_config import (
-    EDGE_CATEGORICAL_REGISTRY,
-    NODE_CATEGORICAL_REGISTRY,
-)
+from gnn.shared.utils.feature_config import NODE_CATEGORICAL_REGISTRY
 from gnn.shared.models.feature_encoders import TwoWayFeatureEncoder
 
 # Column index of node_type in the FULL node schema; imported by tests.
@@ -57,23 +54,6 @@ def resolve_node_feature_names(active_feature_names) -> list[str]:
     if active_feature_names:
         return list(active_feature_names)
     return list(NODE_FEATURE_SCHEMA)
-
-
-def split_global_mean_pool(x: torch.Tensor, batch_index: torch.Tensor, is_virtual: torch.Tensor) -> torch.Tensor:
-    num_graphs = int(batch_index.max().item() + 1) if batch_index.numel() > 0 else 0
-    is_real = ~is_virtual
-
-    if is_real.any():
-        x_real_pooled = global_mean_pool(x[is_real], batch_index[is_real], size=num_graphs)
-    else:
-        x_real_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
-
-    if is_virtual.any():
-        x_virt_pooled = global_mean_pool(x[is_virtual], batch_index[is_virtual], size=num_graphs)
-    else:
-        x_virt_pooled = torch.zeros(num_graphs, x.size(-1), device=x.device, dtype=x.dtype)
-
-    return torch.cat([x_real_pooled, x_virt_pooled], dim=-1)
 
 
 def pool_split_embeddings(
@@ -740,7 +720,7 @@ class GraphPolicyBackbone(UniformPoolMixin, nn.Module):
         self.edge_encoder = TwoWayFeatureEncoder(
             list(EDGE_FEATURE_SCHEMA),
             layout.edge_input_dim,
-            EDGE_CATEGORICAL_REGISTRY,
+            {},
             activation=make_activation(activation),
         )
         # Globals lost their hand-crafted sign-log; a learnable LayerNorm tames scale.
