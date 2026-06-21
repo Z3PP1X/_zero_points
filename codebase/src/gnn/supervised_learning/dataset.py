@@ -1,10 +1,14 @@
-import re
-
 import pandas as pd
 from pathlib import Path
 import json
 import shutil
 
+
+_DERIVATIVE_HEADERS: dict[str, str] = {
+    "f''(x0)": "d2x", "f''(x_0)": "d2x",
+    "f'(x0)": "d1x",  "f'(x_0)": "d1x",
+    "f(x0)": "fx",    "f(x_0)": "fx",
+}
 
 _LEGACY_HEADER_ALIASES: dict[str, str] = {
     "problem_id": "problem_id",
@@ -65,12 +69,8 @@ def canonical_dataset_column(col: str) -> str | None:
     s = s.replace("′", "'").replace("″", "'").replace("ʼ", "'")
     s = s.lower()
 
-    if re.fullmatch(r"f''\(x_?0\)", s):
-        return "d2x"
-    if re.fullmatch(r"f'\(x_?0\)", s):
-        return "d1x"
-    if re.fullmatch(r"f\(x_?0\)", s):
-        return "fx"
+    if s in _DERIVATIVE_HEADERS:
+        return _DERIVATIVE_HEADERS[s]
 
     clean_col = s.replace("'", "")
     return _LEGACY_HEADER_ALIASES.get(clean_col)
