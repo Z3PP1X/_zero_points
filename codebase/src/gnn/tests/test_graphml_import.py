@@ -90,8 +90,8 @@ def test_create_virtual_global_node():
 
     # Check node attributes
     assert G_comb.nodes["global"]["type"] == "global"
-    # f_1 (Plus) is the root of the f tree — marked as "root" with root_color=1
-    assert G_comb.nodes["f_1"]["type"] == "root"
+    # f_1 (Plus) is the root of the f tree — operator type, identified via root_color=1
+    assert G_comb.nodes["f_1"]["type"] == "operator"
     assert G_comb.nodes["f_1"]["root_color"] == 1.0   # ROOT_COLOR_VOCAB["f"] = 1
     assert G_comb.nodes["f_2"]["type"] == "variable"
     assert G_comb.nodes["f_3"]["type"] == "constant"

@@ -87,10 +87,10 @@ SUPERNODE_NODE_ID: str = "virtual_supernode"
 
 # 32-column one-hot node feature schema.
 NODE_FEATURE_SCHEMA: list[str] = [
-    # node_type one-hot (4 values: global=0, operator=1, root=2, supernode=5)
+    # node_type one-hot (4 values: global=0, operator=1, function=2, supernode=5)
     "node_type_global",
     "node_type_operator",
-    "node_type_root",
+    "node_type_function",
     "node_type_supernode",
     # root_color one-hot (5 values: none=0, f=1, d1=2, d2=3, kappa=4)
     "root_color_none",

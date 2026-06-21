@@ -71,9 +71,7 @@ def _normalize_kappa_graph(g_raw: nx.DiGraph) -> tuple:
     original_root = roots[0] if roots else (list(normalized.nodes)[0] if normalized.nodes else None)
 
     if original_root is not None:
-        normalized.nodes[original_root]["node_type"] = ExpressionGraphConverter.NODE_TYPES["root"]
         normalized.nodes[original_root]["root_color"] = float(ROOT_COLOR_VOCAB["kappa"])
-        normalized.nodes[original_root]["type"] = "root"
 
     return original_root, normalized
 
@@ -138,29 +136,7 @@ def _tag_and_connect_kappa(
 
 
 class KappaEdge:
-    """Represents a connection between the global node and a kappa root node.
-
-    Attributes:
-        source (str): The ID of the source node.
-        target (str): The ID of the target node.
-        type (str): The type of the edge ("GlobalToKappa" or "KappaToGlobal").
-        features (dict[str, float]): A dictionary containing edge features (e.g., "weight").
-    """
-
     def __init__(self, source: str, target: str, type: str):
-        """Initializes a new instance of KappaEdge.
-
-        Arguments:
-            source: The ID of the source node.
-            target: The ID of the target node.
-            type: The type of the edge.
-
-        Returns:
-            None
-
-        Raises:
-            None
-        """
         self.source = source
         self.target = target
         self.type = type
@@ -168,68 +144,24 @@ class KappaEdge:
 
 
 class AugmentedFunctionGraph(nx.DiGraph):
-    """NetworkX DiGraph wrapper that supports operations required by the LoadAugmentedFunctionGraph algorithm.
-
-    Attributes:
-        subgraph_counter (int): Counter to generate unique node IDs when merging subgraphs.
-    """
-
     def __init__(self, incoming_graph_data=None, **attr):
-        """Initializes the AugmentedFunctionGraph with optional incoming graph data.
-
-        Arguments:
-            incoming_graph_data: Graph data to initialize the NetworkX DiGraph.
-            attr: Additional graph attributes.
-
-        Returns:
-            None
-
-        Raises:
-            None
-        """
         super().__init__(incoming_graph_data, **attr)
         self.subgraph_counter = 0
 
     def HasGlobalNode(self) -> bool:
-        """Checks if a node of type 'global' exists in the graph.
-
-        Returns:
-            bool: True if a global node is present, False otherwise.
-
-        Raises:
-            None
-        """
         for node, attrs in self.nodes(data=True):
             if attrs.get("type") == "global" or node == "global":
                 return True
         return False
 
     def GetGlobalNode(self) -> str:
-        """Retrieves the ID of the global node.
-
-        Returns:
-            str: The ID of the global node.
-
-        Raises:
-            KeyError: If no global node exists in the graph.
-        """
+        """Raises KeyError if no global node exists."""
         for node, attrs in self.nodes(data=True):
             if attrs.get("type") == "global" or node == "global":
                 return str(node)
         raise KeyError("Global node not found in graph.")
 
     def CreateVirtualGlobalNode(self, nodeType: str = "GlobalContext") -> str:
-        """Creates a virtual global node in the graph and returns its ID.
-
-        Arguments:
-            nodeType: The type attribute to assign to the new node.
-
-        Returns:
-            str: The ID of the created global node (always 'global').
-
-        Raises:
-            None
-        """
         global_id = "global"
         self.add_node(
             global_id,
@@ -243,22 +175,9 @@ class AugmentedFunctionGraph(nx.DiGraph):
         return global_id
 
     def MergeDisjointSubgraph(self, kappa_subgraph: Union[nx.DiGraph, str, dict]) -> str:
-        """Merges a disjoint kappa subgraph into the main graph, avoiding ID collisions.
-
-        Arguments:
-            kappa_subgraph: The kappa subgraph to merge. Can be an nx.DiGraph, a GraphML string, or a dict.
-
-        Returns:
-            str: The shifted node ID of the root node of the merged kappa subgraph.
-
-        Raises:
-            TypeError: If the kappa_subgraph has an unsupported type.
-            ValueError: If the kappa_subgraph is empty or invalid.
-        """
         self.subgraph_counter += 1
         prefix = f"kappa_{self.subgraph_counter}"
 
-        # 1. Parse/normalize the input subgraph into an nx.DiGraph
         if isinstance(kappa_subgraph, str):
             content = kappa_subgraph.replace("attr.type='String'", "attr.type='string'")
             content = content.replace('attr.type="String"', 'attr.type="string"')
@@ -274,23 +193,12 @@ class AugmentedFunctionGraph(nx.DiGraph):
         else:
             raise TypeError(f"Unsupported subgraph type: {type(kappa_subgraph)}")
 
-        # Normalize nodes in g_kappa so they have all standard attributes
         normalized_g_kappa = nx.DiGraph()
         for nid, attrs in g_kappa.nodes(data=True):
             name_val = attrs.get("Name") or attrs.get("nodeKey1") or attrs.get("label") or str(nid)
             label = parse_graphml_node_name(name_val) if isinstance(name_val, str) else str(name_val)
 
             type_str = attrs.get("type") or _determine_node_type_from_label(label)
-            val = 0.0
-            has_val = 0.0
-            if type_str == "constant":
-                val_attr = attrs.get("value")
-                if isinstance(val_attr, (int, float)):
-                    val = float(val_attr)
-                else:
-                    val = _parse_constant_value(label)
-                has_val = 1.0
-
             ntype_code = ExpressionGraphConverter.NODE_TYPES.get(type_str, 1)
 
             normalized_g_kappa.add_node(
@@ -310,7 +218,6 @@ class AugmentedFunctionGraph(nx.DiGraph):
                 etype=etype
             )
 
-        # 2. Identify the root node in the normalized subgraph
         roots = [n for n, d in normalized_g_kappa.in_degree() if d == 0]
         if roots:
             original_root = roots[0]
@@ -320,16 +227,13 @@ class AugmentedFunctionGraph(nx.DiGraph):
         if original_root is None:
             raise ValueError("Cannot merge an empty kappa subgraph.")
 
-        # 3. Add nodes and edges to self, shifting the node IDs
         shifted_root_id = f"{prefix}_{original_root}"
 
         for nid, attrs in normalized_g_kappa.nodes(data=True):
             shifted_id = f"{prefix}_{nid}"
             node_attrs = dict(attrs)
             if nid == original_root:
-                node_attrs["node_type"] = ExpressionGraphConverter.NODE_TYPES["root"]
                 node_attrs["root_color"] = float(ROOT_COLOR_VOCAB["kappa"])
-                node_attrs["type"] = "root"
             self.add_node(shifted_id, **node_attrs)
 
         for u, v, attrs in normalized_g_kappa.edges(data=True):
@@ -361,17 +265,6 @@ class AugmentedFunctionGraph(nx.DiGraph):
         return f"{prefix}_{original_root}"
 
     def AddEdge(self, edge: KappaEdge) -> None:
-        """Adds a KappaEdge connection between the global node and a kappa root node.
-
-        Arguments:
-            edge: The KappaEdge to add to the graph.
-
-        Returns:
-            None
-
-        Raises:
-            None
-        """
         weight = edge.features.get("weight", 0.0)
         edge_type_code = 0
         direction_val = 0.0 if edge.type == "GlobalToKappa" else 1.0
@@ -389,14 +282,7 @@ class AugmentedFunctionGraph(nx.DiGraph):
 
 
 def LoadGraphFromLocalStructure(folder: Union[Path, str], id: str) -> AugmentedFunctionGraph:
-    """Loads a mathematical basis graph by ID from local graphs folder and returns it as an AugmentedFunctionGraph.
-
-    Arguments:
-        folder: The folder (directory or file) containing the graph data.
-        id: The unique ID of the graph to load.
-
-    Returns:
-        AugmentedFunctionGraph containing the loaded mathematical graph.
+    """Load a mathematical basis graph by ID from a local graphs folder.
 
     Raises:
         FileNotFoundError: If the folder does not exist.
@@ -503,20 +389,10 @@ def LoadAugmentedFunctionGraph(
     kappasFolder: Union[str, Path],
     kappa_value: Union[float, None] = None,
 ) -> AugmentedFunctionGraph:
-    """Enhances a main function graph by merging kappa h-function subgraphs.
+    """Merge kappa h-function subgraphs into a main expression graph.
 
     When *kappa_value* is given, only the matching kappa subgraph is merged
-    (O(1) hash-table lookup).  When it is None all subgraphs are merged for
-    backward compatibility.
-
-    Arguments:
-        graphId: The unique ID of the main function graph to load.
-        graphsFolder: Path to the folder containing mathematical basis graphs.
-        kappasFolder: Path to the folder containing kappa h-functions.
-        kappa_value: If provided, merge only this kappa; otherwise merge all.
-
-    Returns:
-        An AugmentedFunctionGraph that is compatible with PyTorch-Geometric/NetworkX.
+    (O(1) hash-table lookup). When None, no kappa is merged.
 
     Raises:
         FileNotFoundError: If the folders do not exist.

@@ -96,12 +96,10 @@ def _compute_subtree_histograms(G: nx.DiGraph) -> dict:
         for nid in G.nodes
     }
 
-    # Assign the self-contribution of each node
     for nid, attrs in G.nodes(data=True):
         b = _histogram_bin_for_node(attrs.get("label", ""), attrs.get("type", "operator"))
         hists[nid][b] = 1.0
 
-    # Process nodes bottom-up (reverse topological order = leaves first)
     try:
         topo_order = list(nx.topological_sort(G))
     except nx.NetworkXUnfeasible:
@@ -115,13 +113,11 @@ def _compute_subtree_histograms(G: nx.DiGraph) -> dict:
 
 
 class TopologicalFeatureExtractor:
-    """Extrahiert topologische Features aus einem NetworkX Graphen."""
 
     @staticmethod
     def extract_and_annotate(G: nx.DiGraph) -> dict:
         roots = [n for n, d in G.in_degree() if d == 0]
 
-        # Depths (Depth)
         levels = {}
         if roots:
             for root in roots:
@@ -133,10 +129,8 @@ class TopologicalFeatureExtractor:
             if node not in levels:
                 levels[node] = 0
 
-        # Global tree depth
         tree_depth = max(levels.values()) if levels else 0
 
-        # Global tree width
         level_counts = {}
         for lvl in levels.values():
             level_counts[lvl] = level_counts.get(lvl, 0) + 1
@@ -148,7 +142,6 @@ class TopologicalFeatureExtractor:
             "depths": levels,
         }
 
-        # Heights (Height)
         heights = {}
         visiting = set()
         def get_height(node):
@@ -169,15 +162,10 @@ class TopologicalFeatureExtractor:
         for node in G.nodes:
             get_height(node)
 
-        # Subtree Sizes (SubtreeSize)
         subtree_sizes = {}
         for node in G.nodes:
             subtree_sizes[node] = len(nx.descendants(G, node)) + 1
 
-        # Anchor-based positional encoding (replaces the former LPE / RWPE). Encodes each
-        # node by 1/(1+d) proximity to the nearest anchor of each semantic operator group,
-        # measured within the node's own function subgraph. See
-        # _compute_anchor_positional_encoding for the full definition.
         anchor_pe = _compute_anchor_positional_encoding(G)
 
         results.update({
@@ -216,13 +204,12 @@ def inject_virtual_supernode(
     supernode_attrs: dict[str, Any] = {
         # node_type one-hot: supernode (code 5 → index 3)
         "node_type_global": 0.0, "node_type_operator": 0.0,
-        "node_type_root": 0.0, "node_type_supernode": 1.0,
+        "node_type_function": 0.0, "node_type_supernode": 1.0,
         # root_color one-hot: none (0)
         "root_color_none": 1.0, "root_color_f": 0.0,
         "root_color_d1": 0.0, "root_color_d2": 0.0, "root_color_kappa": 0.0,
-        # label one-hot: GLOBAL (index 2)
+        # label one-hot: all zero (supernode carries no AST label)
         **{name: 0.0 for name in LABEL_ONEHOT_NAMES},
-        "label_GLOBAL": 1.0,
         # topology
         "subtree_size": 0.0, "subtree_depth": 0.0,
         # histograms
@@ -287,10 +274,8 @@ def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tenso
     if num_nodes <= 1:
         return 0.0
 
-    # Ensure x is float
     x = x.float()
 
-    # Handle multidimensional edge weights (e.g. edge attributes)
     if edge_weight is not None:
         if edge_weight.dim() > 1:
             if edge_weight.size(-1) == 1:
@@ -298,7 +283,6 @@ def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tenso
             else:
                 edge_weight = None
 
-    # Calculate degree
     if edge_weight is None:
         from torch_geometric.utils import degree
         deg = degree(edge_index[0], num_nodes=num_nodes, dtype=x.dtype)
@@ -310,10 +294,8 @@ def compute_normalized_dirichlet_energy(x: torch.Tensor, edge_index: torch.Tenso
     deg_inv_sqrt[torch.isinf(deg_inv_sqrt)] = 0.0
     deg_inv_sqrt[torch.isnan(deg_inv_sqrt)] = 0.0
 
-    # x_tilde = D^{-1/2} * x
     x_tilde = x * deg_inv_sqrt.unsqueeze(-1)
 
-    # tr(x^T * D^{-1/2} * A * D^{-1/2} * x) = sum_{u, v} A_{uv} * x_tilde_u^T * x_tilde_v
     src, dst = edge_index[0], edge_index[1]
     dot_products = (x_tilde[src] * x_tilde[dst]).sum(dim=-1)
 

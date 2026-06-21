@@ -11,9 +11,10 @@ from feature_layout import NATIVE_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
 
-# One-hot column indices in the 28-col schema
-_NT_ROOT = NODE_FEATURE_SCHEMA.index("node_type_root")        # 2
-_RC_F = NODE_FEATURE_SCHEMA.index("root_color_f")              # 5
+# One-hot column indices in the 32-col schema
+_NT_OP   = NODE_FEATURE_SCHEMA.index("node_type_operator")    # 1
+_NT_FUNC = NODE_FEATURE_SCHEMA.index("node_type_function")    # 2
+_RC_F    = NODE_FEATURE_SCHEMA.index("root_color_f")          # 5
 
 
 def test_node_counts_and_task_features_on_aggregator():
@@ -42,10 +43,10 @@ def test_node_counts_and_task_features_on_aggregator():
     assert "f_root" not in data.node_ids
     assert "virtual_current_x" not in data.node_ids
 
-    # f1 (Plus) is now the root node (node_type_root=1.0, root_color_f=1.0)
+    # f1 (Plus) is the root node — operator type, identified by root_color_f
     idx_f1 = data.node_ids.index("f1")
-    assert data.x[idx_f1, _NT_ROOT].item() == 1.0   # node_type_root
-    assert data.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
+    assert data.x[idx_f1, _NT_OP].item() == 1.0    # node_type_operator (Plus)
+    assert data.x[idx_f1, _RC_F].item() == 1.0      # root_color_f
 
 
 def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
@@ -77,7 +78,7 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     assert data_graph.num_nodes == 2   # global + f1
     assert data_graph.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
     idx_f1 = data_graph.node_ids.index("f1")
-    assert data_graph.x[idx_f1, _NT_ROOT].item() == 1.0   # node_type_root
+    assert data_graph.x[idx_f1, _NT_FUNC].item() == 1.0   # node_type_function (x)
     assert data_graph.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
 
     preprocessor_tree = Preprocessor(graphs_dir=str(tmp_path), mode="tree")
@@ -104,7 +105,7 @@ def test_supervised_learning_preprocessor_static_initialization():
     assert "f_root" not in base_graph_graph.node_ids
     assert base_graph_graph.num_nodes == 2
     idx_f1 = base_graph_graph.node_ids.index("f1")
-    assert base_graph_graph.x[idx_f1, _NT_ROOT].item() == 1.0   # node_type_root
+    assert base_graph_graph.x[idx_f1, _NT_FUNC].item() == 1.0   # node_type_function (x)
     assert base_graph_graph.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
 
     df_no_fx = pd.DataFrame([{

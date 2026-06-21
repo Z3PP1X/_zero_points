@@ -31,7 +31,7 @@ expression_graph:
   edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/dataset_joined
-  active_features: "node_type_global,node_type_operator,node_type_root,node_type_supernode,label_UNK,label_CONSTANT,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
+  active_features: "node_type_global,node_type_operator,node_type_function,node_type_supernode,label_UNK,label_CONSTANT,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
 
 train:
   mode: custom

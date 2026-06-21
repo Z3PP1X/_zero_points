@@ -95,6 +95,7 @@ def test_enriched_graph_features(tmp_path):
     child2_idx = 2   # 2 (constant)
 
     nt_operator = NODE_FEATURE_SCHEMA.index("node_type_operator")
+    nt_function = NODE_FEATURE_SCHEMA.index("node_type_function")
     nt_global   = NODE_FEATURE_SCHEMA.index("node_type_global")
     rc_none     = NODE_FEATURE_SCHEMA.index("root_color_none")
     st_size     = NODE_FEATURE_SCHEMA.index("subtree_size")
@@ -107,7 +108,7 @@ def test_enriched_graph_features(tmp_path):
     child1_features = data.x[child1_idx].tolist()
     child2_features = data.x[child2_idx].tolist()
 
-    # node_type: Plus / x / 2 are all code-1 (operator) since there is no global node
+    # Plus → operator (code 1), x/2 → function (code 2)
     assert root_features[nt_operator] == 1.0
     assert root_features[nt_global]   == 0.0
     assert root_features[rc_none]     == 1.0   # no root_color marking without global
@@ -119,7 +120,7 @@ def test_enriched_graph_features(tmp_path):
     # Plus (operator, not in HISTOGRAM_GROUP_BY_LABEL) → hist_constants; plus literal 2
     assert root_features[hist_const] == 2.0
 
-    assert child2_features[nt_operator] == 1.0
+    assert child2_features[nt_function] == 1.0   # 2 (constant) → function type
     assert child2_features[rc_none]     == 1.0
     assert child2_features[st_size]  == 1.0   # leaf
     assert child2_features[st_depth] == 0.0

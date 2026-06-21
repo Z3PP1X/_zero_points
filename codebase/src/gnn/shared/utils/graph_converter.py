@@ -84,11 +84,10 @@ def _mark_function_roots(raw: dict) -> None:
             if nid not in targets:
                 root_to_color[nid] = "f"
 
-    # Annotate root nodes in raw.
+    # Annotate root nodes with root_color only; node_type stays as natural type.
     node_by_id = {n["id"]: n for n in raw.get("nodes", [])}
     for root_id, color in root_to_color.items():
         if root_id in node_by_id:
-            node_by_id[root_id]["type"] = "root"
             node_by_id[root_id]["root_color"] = ROOT_COLOR_VOCAB[color]
 
     # Replace belongs_to_* edges with child_of edges (global → root).
@@ -120,7 +119,7 @@ def parse_graphml_node_name(name_str: str) -> str:
 
 
 def _determine_node_type_from_label(label: str) -> str:
-    if label in ["Plus", "Times", "Power"]:
+    if label in ["Plus", "Times", "Power", "Minus", "Divide"]:
         return "operator"
     if label == "x":
         return "variable"
@@ -241,10 +240,10 @@ def create_virtual_global_node(
             else:
                 label = parse_graphml_node_name(name_val)
             is_root = nid in in_degree_zero
-            type_str = "root" if is_root else _determine_node_type_from_label(label)
+            type_str = _determine_node_type_from_label(label)
             G_norm.add_node(
                 nid,
-                node_type=ExpressionGraphConverter.NODE_TYPES.get(type_str, 1),
+                node_type=ExpressionGraphConverter.NODE_TYPES.get(type_str, 2),
                 root_color=float(ROOT_COLOR_VOCAB[color] if is_root else ROOT_COLOR_VOCAB["none"]),
                 label_id=encode_label(label),
                 label=label,
@@ -294,16 +293,15 @@ def create_virtual_global_node(
 
 
 class ExpressionGraphConverter:
-    # node_type codes: 0=global, 1=operator (incl. function/variable/constant), 2=root, 5=supernode.
-    # Legacy types (function/variable/constant) all map to 1 for backward compatibility
-    # with datasets that still carry those type strings.
+    # node_type codes: 0=global, 1=operator, 2=function/variable/constant, 5=supernode.
+    # Root identity is encoded solely via root_color (not node_type).
     NODE_TYPES = {
         "global": 0,
         "operator": 1,
-        "function": 1,
-        "variable": 1,
-        "constant": 1,
-        "root": 2,
+        "function": 2,
+        "variable": 2,
+        "constant": 2,
+        "root": 1,  # legacy fallback; root override no longer written
         "supernode": SUPERNODE_NODE_TYPE,
     }
 
@@ -374,7 +372,7 @@ class ExpressionGraphConverter:
             nt_oh = node_type_onehot(nt_code)
             enriched_attrs["node_type_global"] = nt_oh[0]
             enriched_attrs["node_type_operator"] = nt_oh[1]
-            enriched_attrs["node_type_root"] = nt_oh[2]
+            enriched_attrs["node_type_function"] = nt_oh[2]
             enriched_attrs["node_type_supernode"] = nt_oh[3]
 
             # One-hot columns for root_color
@@ -442,10 +440,8 @@ class ExpressionGraphConverter:
         else:
             raw = self._load(source)
 
-            # Make a copy of raw to avoid modifying the original dict in-place if passed as object
             raw = dict(raw)
 
-            # Check if the raw data is in the new GraphML string container format
             if "graphml_f" in raw:
                 nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
 
@@ -470,13 +466,12 @@ class ExpressionGraphConverter:
                 roots_d1 = find_roots(nodes_d1, edges_d1)
                 roots_d2 = find_roots(nodes_d2, edges_d2)
 
-                # Mark actual AST roots with type="root" and root_color.
+                # Mark AST roots with root_color; node_type stays as natural type.
                 _root_specs = [("f", roots_f, nodes_f), ("d1", roots_d1, nodes_d1), ("d2", roots_d2, nodes_d2)]
                 for color, roots, nodes_list in _root_specs:
                     root_set = set(roots)
                     for node in nodes_list:
                         if node["id"] in root_set:
-                            node["type"] = "root"
                             node["root_color"] = ROOT_COLOR_VOCAB[color]
 
                 combined_edges = edges_f + edges_d1 + edges_d2
@@ -492,7 +487,6 @@ class ExpressionGraphConverter:
                 raw["edges"] = list(raw.get("edges", []))
                 _mark_function_roots(raw)
 
-            # Topology and histogram are computed on the pure AST (excludes global + kappa).
             global_id_raw = _find_global_node_id(raw) or "global"
             raw_ast = {
                 "nodes": [n for n in raw["nodes"]
@@ -503,17 +497,14 @@ class ExpressionGraphConverter:
                           and not str(e["target"]).startswith("kappa_")],
             }
 
-            # 1. Build AST graph for structural features (excludes global + kappa nodes)
             G_ast = self._build_networkx(raw_ast)
             topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
             hist = _compute_subtree_histograms(G_ast)
             ast_node_ids = list(G_ast.nodes)
             ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
 
-            # 2. Build full directed graph
             G_directed = self._build_networkx(raw)
 
-            # 3. Enrich node attributes
             G_enriched = nx.DiGraph()
             node_ids = list(G_directed.nodes)
             self._enrich_nodes(node_ids, G_directed, ast_id_to_idx, topo, hist, G_enriched)
@@ -542,7 +533,6 @@ class ExpressionGraphConverter:
         if add_virtual_supernode:
             inject_virtual_supernode(G_enriched, G_directed, node_ids)
 
-        # Gather node_kappas mapping matching node_ids
         node_kappas = [G_enriched.nodes[nid].get("kappa_value") for nid in node_ids]
 
         # Remove kappa_value from node attributes to prevent PyG from_networkx mismatch error
@@ -604,9 +594,6 @@ class ExpressionGraphConverter:
         with open(Path(source), encoding="utf-8") as f:
             return json.load(f)
 
-    def _encode_label(self, label: str) -> int:
-        return encode_label(label)
-
     def _build_networkx(self, raw: dict) -> nx.DiGraph:
         G = nx.DiGraph()
         for node in raw["nodes"]:
@@ -616,7 +603,7 @@ class ExpressionGraphConverter:
                 node["id"],
                 node_type=node_type_code,
                 root_color=float(node.get("root_color", ROOT_COLOR_VOCAB["none"])),
-                label_id=self._encode_label(node["label"]),
+                label_id=encode_label(node["label"]),
                 type=orig_type,
                 label=node["label"],
             )

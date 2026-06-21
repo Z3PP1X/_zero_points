@@ -18,7 +18,7 @@ POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ANCHOR_GROUP_FEATURES
 NODE_FEATURES: tuple[str, ...] = (
     "node_type_global",
     "node_type_operator",
-    "node_type_root",
+    "node_type_function",
     "node_type_supernode",
     "root_color_none",
     "root_color_f",
