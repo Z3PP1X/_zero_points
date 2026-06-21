@@ -27,7 +27,6 @@ NODE_FEATURES: tuple[str, ...] = (
     "root_color_kappa",
     "label_UNK",
     "label_CONSTANT",
-    "label_GLOBAL",
     "label_x",
     "label_E",
     "label_Log",

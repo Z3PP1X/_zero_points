@@ -1,5 +1,5 @@
 # =====================================================================================
-# STUFE 2 — AST + Root-Identität (24 Features: node_type + root_color + label)
+# STUFE 2 — AST + Root-Identität (23 Features: node_type + root_color + label)
 # =====================================================================================
 # Erweiterung um root_color: die Wurzelknoten von f, f' und f'' erhalten eine
 # eindeutige Identitätskodierung. Damit kann das Modell ableiten, welcher Teilbaum
@@ -7,7 +7,7 @@
 #
 # FIX:
 #   model.type=expression_classifier, gnn.layer_type=gatv2conv,
-#   active_features = node_type_* (4) + root_color_* (5) + label_* (15) = 24 Features
+#   active_features = node_type_* (4) + root_color_* (5) + label_* (14) = 23 Features
 #
 # EINSTELLBAR (siehe grid.yaml):
 #   gnn.dim_inner, gnn.layers_mp, gnn.dropout
@@ -31,7 +31,7 @@ expression_graph:
   edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/dataset_joined
-  active_features: "node_type_global,node_type_operator,node_type_root,node_type_supernode,root_color_none,root_color_f,root_color_d1,root_color_d2,root_color_kappa,label_UNK,label_CONSTANT,label_GLOBAL,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
+  active_features: "node_type_global,node_type_operator,node_type_root,node_type_supernode,root_color_none,root_color_f,root_color_d1,root_color_d2,root_color_kappa,label_UNK,label_CONSTANT,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
 
 train:
   mode: custom

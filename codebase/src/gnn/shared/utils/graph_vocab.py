@@ -5,7 +5,6 @@ from typing import Any
 CANONICAL_LABELS: tuple[str, ...] = (
     "<UNK>",
     "<CONSTANT>",
-    "GLOBAL",
     "x",
     "E",
     "Log",
@@ -26,7 +25,6 @@ NUM_CANONICAL_LABELS: int = len(CANONICAL_LABELS)
 LABEL_ONEHOT_NAMES: tuple[str, ...] = (
     "label_UNK",
     "label_CONSTANT",
-    "label_GLOBAL",
     "label_x",
     "label_E",
     "label_Log",
@@ -87,7 +85,7 @@ ROOT_COLOR_ONEHOT_DIM: int = NUM_ROOT_COLORS  # 5
 SUPERNODE_NODE_TYPE: int = 5
 SUPERNODE_NODE_ID: str = "virtual_supernode"
 
-# 33-column one-hot node feature schema.
+# 32-column one-hot node feature schema.
 NODE_FEATURE_SCHEMA: list[str] = [
     # node_type one-hot (4 values: global=0, operator=1, root=2, supernode=5)
     "node_type_global",
@@ -100,10 +98,9 @@ NODE_FEATURE_SCHEMA: list[str] = [
     "root_color_d1",
     "root_color_d2",
     "root_color_kappa",
-    # label one-hot (15 entries matching CANONICAL_LABELS)
+    # label one-hot (14 entries matching CANONICAL_LABELS; GLOBAL omitted — redundant with node_type_global)
     "label_UNK",
     "label_CONSTANT",
-    "label_GLOBAL",
     "label_x",
     "label_E",
     "label_Log",

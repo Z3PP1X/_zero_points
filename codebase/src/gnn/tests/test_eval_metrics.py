@@ -69,8 +69,8 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     ]
 
     feature_names = resolve_feature_names(cfg)
-    # Schema: 24 node one-hot + 6 topology + 1 anchor PE (trigonometric only) = 31 features.
-    assert len(feature_names) == 31
+    # Schema: 23 node one-hot + 6 topology + 1 anchor PE (trigonometric only) = 30 features.
+    assert len(feature_names) == 30
     assert "anchor_trigonometric" in feature_names
     assert "anchor_exponential" not in feature_names
     assert "anchor_variable" not in feature_names
