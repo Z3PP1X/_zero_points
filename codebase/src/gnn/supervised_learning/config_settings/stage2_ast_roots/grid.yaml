@@ -1,0 +1,14 @@
+# grid.yaml — STUFE 2 (AST + Root-Identität, 19 Features)
+# 2 x 2 x 2 = 8 Konfigurationen
+
+gnn.dim_inner:
+  - 64
+  - 128
+
+gnn.layers_mp:
+  - 2
+  - 4
+
+gnn.dropout:
+  - 0.0
+  - 0.2

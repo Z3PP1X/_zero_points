@@ -151,18 +151,14 @@ def _train_configs(
 # at that stage. Selected via --stage (accepts the number or the folder name). See
 # config_settings/README.md for the full overview.
 STAGE_REGISTRY = {
-    "1": ("stage1_tree_basic",
-          "Tree, Basisfeatures (stock GNN, edge-blind): layer_type, dim_inner, dropout, layers_mp"),
-    "2": ("stage2_tree_derivatives",
-          "Tree-Derivatives + edge_direction (top_down|bottom_up|bidirectional)"),
-    "3": ("stage3_graph_features",
-          "Graphen + Virtual Supernode + Kappa + erweiterte/Anchor-Features"),
-    "4": ("stage4_edge_networks",
-          "Edge-Networks (gatv2conv | gineconv), expression_classifier"),
-    "5": ("stage5_heterogeneous",
-          "Heterogene Netzwerke (flach); Hetero-Pooling = TODO"),
-    "6": ("stage6_hetero_diffpool",
-          "Hetero + Diffpool (Gerüst); Code-Erweiterung ausstehend"),
+    "1": ("stage1_pure_ast",
+          "Reiner AST: node_type + label (14 Features)"),
+    "2": ("stage2_ast_roots",
+          "AST + Root-Identitaet: + root_color (19 Features)"),
+    "3": ("stage3_full_graph",
+          "Vollstaendiger Graph: alle 28 Features (+ Topologie, Histogramm, Anchor-PE)"),
+    "4": ("stage4_experiment",
+          "Freie Experimente: alle Features, alle Hyperparameter sweepbar"),
 }
 _STAGE_FOLDERS = {folder for folder, _ in STAGE_REGISTRY.values()}
 
@@ -191,7 +187,7 @@ def _print_stages() -> None:
     print("Available architecture evolution stages (use --stage <number|folder>):\n")
     for key, (folder, desc) in STAGE_REGISTRY.items():
         print(f"  {key}  {folder:<26} {desc}")
-    print("\nExample: python run_all.py --stage 3 --dry-run")
+    print("\nExample: python run_all.py --stage 1 --dry-run")
 
 
 def _cleanup_run_configs(configs_dir: Path) -> None:

@@ -1,58 +1,45 @@
 # `config_settings/` — Architektur-Evolutionsstufen
 
-Jede Unterstufe ist ein **eigenständiges, zugeschnittenes** Config-Paar
-(`base_config.yaml` + `grid.yaml`), das nur die für diese Stufe relevanten und
-**tatsächlich wirksamen** Parameter exponiert. Das macht die Entwicklung der
-Netzwerkarchitektur nachvollziehbar und die Experimente reproduzierbar.
+Jede Stufe ist ein eigenständiges Config-Paar (`base_config.yaml` + `grid.yaml`), das
+genau die für diese Stufe relevanten Parameter exponiert. Die Stufen 1–3 sind **feste
+Experimente** mit wachsendem Feature-Umfang; Stufe 4 ist die **freie Experimentierzone**.
 
 Auswahl über `run_all.py`:
 
 ```bash
 python run_all.py --list-stages              # Stufen anzeigen
-python run_all.py --stage 3 --dry-run        # nur Configs generieren (kein Training)
-python run_all.py --stage 3 --experiment-name stufe3_lauf1
-python run_all.py --stage stage3_graph_features   # Ordnername geht auch
+python run_all.py --stage 1 --dry-run        # nur Configs generieren (kein Training)
+python run_all.py --stage 1 --experiment-name stufe1_lauf1
+python run_all.py --stage stage1_pure_ast    # Ordnername geht auch
 ```
 
-Ohne `--stage` nutzt `run_all.py` weiterhin die Default-`config_supervised.yaml` +
-`grid.yaml` (rückwärtskompatibel). `--config`/`--grid` überschreiben eine Stufe explizit.
+Alle Stufen nutzen **ExpressionGNN** (`model.type: expression_classifier`, `gnn.layer_type: gatv2conv`).
+Features werden über `active_features` gesteuert — eine kommaseparierte Liste von
+Spaltennamen aus `NODE_FEATURE_SCHEMA` (28 Spalten gesamt). Leeres `active_features`
+aktiviert alle 28 Features.
 
-## Überblick
+## Stufen-Übersicht
 
-| Stufe | Ordner | Neu in dieser Stufe | Backbone | Sweepbare Parameter (grid.yaml) |
+| Stufe | Ordner | Features | Anzahl | Grid |
 |---|---|---|---|---|
-| 1 | `stage1_tree_basic`        | Tree, Basisfeatures | `gnn` (edge-blind) | `layer_type{gcnconv,ginconv}`, `dim_inner`, `dropout`, `layers_mp` |
-| 2 | `stage2_tree_derivatives`  | Tree-Derivatives, **edge_direction** | `gnn` (edge-blind) | + `edge_direction{top_down,bottom_up,bidirectional}` |
-| 3 | `stage3_graph_features`    | **Graphen**, **Supernode** an/aus, **Kappa** an/aus, **erweiterte/Anchor-Features** | `gnn` (edge-blind) | `dim_inner`, `layers_mp`, `add_virtual_supernode`, `add_kappa`, `features.positional` |
-| 4 | `stage4_edge_networks`     | **Edge-Networks** (nur `gatv2conv`/`gineconv`), Edge-Features | `expression_classifier` | `layer_type{gatv2conv,gineconv}`, `dim_inner` |
-| 5 | `stage5_heterogeneous`     | **Heterogene Netzwerke** (nur hetero) | `expression_classifier` (hetero) | `dim_inner`, `layers_mp` |
-| 6 | `stage6_hetero_diffpool`   | **Diffpool für hetero** (geplant) | `expression_classifier` (hetero) | wie Stufe 5; Pooling-Achse vorbereitet |
+| 1 | `stage1_pure_ast` | node_type + label | 14 | 8 Configs |
+| 2 | `stage2_ast_roots` | + root_color | 19 | 8 Configs |
+| 3 | `stage3_full_graph` | alle (+ Topologie, Histogramm, Anchor-PE) | 28 | 24 Configs |
+| 4 | `stage4_experiment` | frei konfigurierbar | — | frei |
 
-## Wichtige Hinweise zu wirksamen Parametern
+## Feature-Schema (NODE_FEATURE_SCHEMA, 28 Spalten)
 
-Pro Stufe werden bewusst nur Parameter gesweept, die im jeweiligen Code-Pfad **etwas
-bewirken** — sonst entstünden identische Doppelläufe:
+```
+node_type_global, node_type_operator, node_type_root, node_type_supernode   (4)
+root_color_none, root_color_f, root_color_d1, root_color_d2, root_color_kappa  (5)
+label_UNK, label_CONSTANT, label_GLOBAL, label_x, label_E,
+label_Log, label_Pi, label_Sin, label_Cos, label_Tan                        (10)
+subtree_size, subtree_depth                                                  (2)
+hist_trigonometric, hist_exponential, hist_variables, hist_constants         (4)
+anchor_trigonometric, anchor_exponential, anchor_variable                    (3)
+```
 
-- **Stufen 1–3** nutzen PyG's Stock-GNN (`model.type: gnn`) mit edge-blinden Layern.
-  `gnn.dim_inner`, `gnn.dropout` und `gnn.layers_mp` werden hier voll honoriert.
-- **Stufe 4** nutzt `expression_classifier` → `TestGraphNetwork`. Dieses hardcodet
-  aktuell **3 MP-Layer** und verdrahtet `dropout` nicht; `layers_mp`/`dropout` sind
-  daher **inert** und werden nicht gesweept (in der base_config gepinnt, kommentiert).
-- **Stufen 5–6**: Der `HeteroExpressionClassifier` nutzt ausschließlich `SAGEConv` und
-  macht heute flaches Message-Passing + Readout. Wirksam sind hier nur `gnn.dim_inner` und
-  `gnn.layers_mp` (= `num_layers`). **Inert** und daher gepinnt (nicht gesweept):
-  `gnn.layer_type`/`att_heads` (SAGEConv hat keine Conv-/Kopf-Wahl) und `gnn.dropout`
-  (der Head hardcodet Dropout). Hierarchical Pooling (`topk`/`diffpool`) für heterogene
-  Netze ist **noch nicht im Code verdrahtet** (`variant`/`pool_type` werden ignoriert);
-  diese Stufen sind daher **Gerüste** mit auskommentierter Pooling-Achse, die aktiv wird,
-  sobald der Hetero-Pooling-Code existiert.
-- Heterogene Stufen erfordern das **volle Node-Schema** (`features.positional: true`): eine
-  Feature-Teilmenge ist mit `heterogeneous: true` aktuell nicht unterstützt (das
-  Dataset-seitige Slicing greift auf `data.x` zu, das es auf `HeteroData` nicht gibt).
+## Datensatz
 
-## Constraint: Supernode ↔ Anchor-Features
-
-`add_virtual_supernode: true` ist **inkompatibel** mit aktivem `features.positional`
-(Anchor-PE) — ein voll vernetzter Supernode zerstört die Kürzeste-Pfad-Distanzen, auf
-denen die Anchor-Kodierung beruht. In Stufe 3 werden solche Kombinationen vom Generator
-(`configs_gen.py:_is_valid_config`) automatisch übersprungen.
+Alle Stufen verwenden `datasets/run_20260604_154509/dataset_joined.csv`
+(8 934 Zeilen nach Bereinigung, ~50/50 Klassenverteilung Newton vs. gMGF).

@@ -14,7 +14,7 @@ seed: 42001
 # Demontrates Dependency Injection (DI) by passing properties that are read in loader_graphgym.py
 dataset:
   format: custom_expression_graphs   # Registered loader name inside loader_graphgym.py
-  name: run_20260603_123013/parallel_benchmark_results
+  name: run_20260604_154509/dataset_joined
   task: graph
   task_type: classification
   transductive: False
@@ -32,7 +32,7 @@ expression_graph:
   add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
   add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
   synthetic: True
-  synthetic_dataset: run_20260604_154509/parallel_benchmark_results
+  synthetic_dataset: run_20260604_154509/dataset_joined
 
   # Node/edge feature classes. Each category takes the same uniform form:
   #   true  -> load all members (default)   false -> load none   [a, b] -> only these

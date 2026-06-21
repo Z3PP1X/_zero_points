@@ -1,0 +1,71 @@
+# =====================================================================================
+# STUFE 4 — Experiment (frei konfigurierbar)
+# =====================================================================================
+# Freie Experimentierzone: alle Features aktiv, alle relevanten Hyperparameter
+# offen für den Grid-Sweep. Hier können beliebige Kombinationen aus den vorherigen
+# Stufen oder neue Ideen erprobt werden.
+#
+# Empfohlene Startpunkte für grid.yaml:
+#   - gnn.layer_type:    gatv2conv | gineconv
+#   - gnn.dim_inner:     64 | 128 | 256
+#   - gnn.layers_mp:     2 | 3 | 4
+#   - gnn.dropout:       0.0 | 0.1 | 0.2
+#   - model.graph_pooling: mean | add | max
+#   - active_features:   beliebige Teilmenge aus NODE_FEATURE_SCHEMA
+# =====================================================================================
+
+out_dir: results
+seed: 42001
+
+dataset:
+  format: custom_expression_graphs
+  name: run_20260604_154509/dataset_joined
+  task: graph
+  task_type: classification
+  transductive: False
+  node_encoder: True
+  node_encoder_name: ExpressionNodeEncoder
+  node_encoder_bn: True
+
+expression_graph:
+  mode: graph
+  edge_direction: top_down
+  synthetic: True
+  synthetic_dataset: run_20260604_154509/dataset_joined
+  active_features: ""
+
+train:
+  mode: custom
+  batch_size: 256
+  num_workers: 0
+  eval_period: 10
+  ckpt_period: 20
+  epoch_warmup: 5
+  epochs: 60
+  restart_period: 20
+  curated_eval_period: 5
+  curated_eval_on_test_highscore: true
+  early_stopping: true
+  early_stopping_monitor: val_pr_auc
+  early_stopping_patience: 20
+  early_stopping_min_delta: 0.0
+
+model:
+  type: expression_classifier
+  loss_fun: weighted_cross_entropy
+  edge_decoding: dot
+  graph_pooling: mean
+
+gnn:
+  layers_mp: 3
+  dim_inner: 128
+  layer_type: gatv2conv
+  act: prelu
+  dropout: 0.2
+  att_heads: 4
+
+optim:
+  optimizer: adamw
+  base_lr: 0.0001
+  weight_decay: 0.0005
+  scheduler: cosine_with_restarts

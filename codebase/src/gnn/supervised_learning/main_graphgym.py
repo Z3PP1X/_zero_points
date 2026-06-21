@@ -1,8 +1,14 @@
+import sys
 import warnings
+from pathlib import Path
+
+# Ensure codebase/src is on sys.path when invoked as a subprocess (e.g. from run_all.py).
+_src_root = str(Path(__file__).resolve().parent.parent.parent)
+if _src_root not in sys.path:
+    sys.path.insert(0, _src_root)
+
 # Suppress harmless PyG internal GraphGym InMemoryDataset deprecation warning
 warnings.filterwarnings("ignore", message=".*InMemoryDataset.*")
-
-from pathlib import Path
 import torch
 from torch_geometric.graphgym.cmd_args import parse_args
 from torch_geometric.graphgym.config import cfg, set_cfg, load_cfg, set_run_dir, dump_cfg

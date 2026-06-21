@@ -1,0 +1,15 @@
+# grid.yaml — STUFE 4 (Experiment)
+# Startvorschlag: gnn.layer_type x gnn.dim_inner x gnn.layers_mp = 2 x 2 x 2 = 8 Konfigurationen
+# Passe diesen Grid frei an deine Forschungsfrage an.
+
+gnn.layer_type:
+  - gatv2conv
+  - gineconv
+
+gnn.dim_inner:
+  - 64
+  - 128
+
+gnn.layers_mp:
+  - 2
+  - 4

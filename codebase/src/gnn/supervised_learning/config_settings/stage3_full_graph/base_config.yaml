@@ -1,0 +1,70 @@
+# =====================================================================================
+# STUFE 3 — Vollständiger Graph (28 Features: alle NODE_FEATURE_SCHEMA-Spalten)
+# =====================================================================================
+# Alle verfügbaren Features aktiv: node_type (4) + root_color (5) + label (10)
+# + Topologie (2) + Histogramm (4) + Anchor-PE (3) = 28 Features.
+# Leeres active_features = alle Spalten aus NODE_FEATURE_SCHEMA werden genutzt.
+#
+# FIX:
+#   model.type=expression_classifier, gnn.layer_type=gatv2conv,
+#   active_features = "" (alle 28 Features)
+#
+# EINSTELLBAR (siehe grid.yaml):
+#   gnn.dim_inner, gnn.layers_mp, gnn.dropout, model.graph_pooling
+# =====================================================================================
+
+out_dir: results
+seed: 42001
+
+dataset:
+  format: custom_expression_graphs
+  name: run_20260604_154509/dataset_joined
+  task: graph
+  task_type: classification
+  transductive: False
+  node_encoder: True
+  node_encoder_name: ExpressionNodeEncoder
+  node_encoder_bn: True
+
+expression_graph:
+  mode: graph
+  edge_direction: top_down
+  synthetic: True
+  synthetic_dataset: run_20260604_154509/dataset_joined
+  active_features: ""  # leer = alle 28 Features aus NODE_FEATURE_SCHEMA
+
+train:
+  mode: custom
+  batch_size: 256
+  num_workers: 0
+  eval_period: 10
+  ckpt_period: 20
+  epoch_warmup: 5
+  epochs: 60
+  restart_period: 20
+  curated_eval_period: 5
+  curated_eval_on_test_highscore: true
+  early_stopping: true
+  early_stopping_monitor: val_pr_auc
+  early_stopping_patience: 20
+  early_stopping_min_delta: 0.0
+
+model:
+  type: expression_classifier
+  loss_fun: weighted_cross_entropy
+  edge_decoding: dot
+  graph_pooling: mean
+
+gnn:
+  layers_mp: 3
+  dim_inner: 128
+  layer_type: gatv2conv
+  act: prelu
+  dropout: 0.2
+  att_heads: 4
+
+optim:
+  optimizer: adamw
+  base_lr: 0.0001
+  weight_decay: 0.0005
+  scheduler: cosine_with_restarts
