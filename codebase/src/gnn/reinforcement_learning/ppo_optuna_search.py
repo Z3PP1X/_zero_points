@@ -4,10 +4,8 @@ import optuna
 
 from gnn.reinforcement_learning.feature_layout import (
     EDGE_INPUT_DIM_CHOICES,
-    GAT_HEAD_COUNT_CHOICES,
     GLOBAL_INPUT_DIM_CHOICES,
     GNN_ACTIVATION_CHOICES,
-    GNN_ARCHITECTURE_CHOICES,
     GNN_LAYER_COUNT_CHOICES,
     HIDDEN_DIM_CHOICES,
     NODE_INPUT_DIM_CHOICES,
@@ -49,13 +47,9 @@ def sample_trial_configuration(
     )
 
     policy = GnnPolicySpec(
-        architecture=trial.suggest_categorical(
-            "gnn_architecture", GNN_ARCHITECTURE_CHOICES
-        ),
         activation=trial.suggest_categorical("gnn_activation", GNN_ACTIVATION_CHOICES),
         hidden_dim=trial.suggest_categorical("hidden_dim", HIDDEN_DIM_CHOICES),
         num_layers=trial.suggest_categorical("num_gnn_layers", GNN_LAYER_COUNT_CHOICES),
-        heads=trial.suggest_categorical("heads", GAT_HEAD_COUNT_CHOICES),
         layout=FeatureLayout(
             node_input_dim=trial.suggest_categorical(
                 "node_input_dim", NODE_INPUT_DIM_CHOICES

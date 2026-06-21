@@ -375,12 +375,7 @@ def _normalize_run_directories(results_dir: Path):
 
 
 def aggregate_results(results_dir: str | Path) -> Path:
-    """
-    Aggregate GraphGym run outputs into CSVs under {results_dir}/agg/.
-
-    Returns:
-        Path to the agg directory.
-    """
+    """Aggregate GraphGym run outputs into CSVs under {results_dir}/agg/. Returns the agg path."""
     results_dir = Path(results_dir)
     if not results_dir.exists():
         raise FileNotFoundError(f"Results directory not found at {results_dir}")

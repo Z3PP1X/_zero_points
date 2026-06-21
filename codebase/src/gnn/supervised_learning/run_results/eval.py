@@ -126,13 +126,6 @@ class GNNResultEvaluator:
         top_k: int = 10,
     ):
         """
-        Args:
-            naming_var: Folder name for the evaluation (e.g., 'res_with_enrich')
-            base_dir: Base directory where run_results lies (defaults to parent of this script)
-            runs: Run CSV stems to evaluate (defaults to best-epoch splits only)
-            skip_slices: If True, only generate top-level run plots (no nested slices)
-            top_k: Number of configs to include in the leaderboard
-        """
         self.naming_var = naming_var
         self.base_dir = Path(base_dir) if base_dir else Path(__file__).resolve().parent
         self.data_dir = self.base_dir / self.naming_var / "agg"

@@ -64,10 +64,9 @@ model:
 gnn:
   layers_mp: 3                      # message-passing depth
   dim_inner: 128                    # hidden width
-  layer_type: gatv2conv             # gatv2conv | gineconv
+  layer_type: ginconv
   act: prelu
   dropout: 0.2
-  att_heads: 4
 
 # --- Optimizations ---
 optim:

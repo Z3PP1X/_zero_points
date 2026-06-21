@@ -29,11 +29,9 @@ class RewardShapingParameters:
 
 @dataclass(frozen=True)
 class GnnPolicySpec:
-    architecture: str
     activation: str
     hidden_dim: int
     num_layers: int
-    heads: int
     layout: FeatureLayout
 
 

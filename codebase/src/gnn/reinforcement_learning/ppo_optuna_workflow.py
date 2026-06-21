@@ -108,7 +108,6 @@ class PpoOptunaWorkflow:
             f"  Hyperparameter: lr={trial_config.ppo.learning_rate:.2e}, "
             f"gamma={trial_config.ppo.gamma:.3f}, "
             f"ent_coef={trial_config.ppo.ent_coef:.2e}, "
-            f"arch={trial_config.policy.architecture}, "
             f"hidden={trial_config.policy.hidden_dim}"
         )
         self._set_random_seeds(trial_config.ppo.random_seed)
@@ -229,10 +228,8 @@ class PpoOptunaWorkflow:
             hidden_dim=policy.hidden_dim,
             global_dim=policy.layout.padded_global_feature_count,
             global_hidden_dim=policy.layout.global_input_dim,
-            architecture=policy.architecture,
             activation=policy.activation,
             num_layers=policy.num_layers,
-            heads=policy.heads,
             classify=False,
         )
         policy_kwargs = {

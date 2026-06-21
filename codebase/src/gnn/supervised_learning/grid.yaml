@@ -7,8 +7,7 @@
 # configs_gen.py takes the Cartesian product of all value lists.
 
 gnn.layer_type:
-  - gatv2conv
-  # - gineconv
+  - ginconv
 
 gnn.layers_mp:
   - 2

@@ -53,7 +53,6 @@ class GatewayStateLogger:
                 if hasattr(self, "_file") and not self._file.closed:
                     self._file.close()
 
-        # Check if an active MLflow run is present and log the artifact
         try:
             import mlflow
             if mlflow.active_run() is not None:

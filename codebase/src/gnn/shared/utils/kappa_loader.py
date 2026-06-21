@@ -42,12 +42,11 @@ def _parse_kappa_raw(raw) -> nx.DiGraph:
 
 
 def _normalize_kappa_graph(g_raw: nx.DiGraph) -> tuple:
-    """Normalize a raw kappa DiGraph, identify its root, and pre-mark root attributes.
+    """Normalize a raw kappa DiGraph and return ``(root_id, normalized_graph)``.
 
-    Returns:
-        (original_root_id, normalized_nx.DiGraph) or (None, empty DiGraph) if the
-        subgraph is empty.  The root node already has node_type/root_color/type set
-        to the kappa-root values so the per-graph copy loop needs no special case.
+    Returns ``(None, empty DiGraph)`` if the subgraph is empty. The root node
+    already has node_type/root_color/type set to kappa-root values so the
+    per-graph copy loop needs no special case.
     """
     normalized = nx.DiGraph()
     for nid, attrs in g_raw.nodes(data=True):
@@ -245,16 +244,9 @@ class AugmentedFunctionGraph(nx.DiGraph):
         """Fast merge path for pre-normalized kappa subgraphs.
 
         Skips GraphML parsing and node normalization — only does the cheap
-        copy+prefix step.  Call this with results from _load_normalized_kappas()
-        instead of MergeDisjointSubgraph() when the kappa graphs are static.
-
-        Arguments:
-            original_root: The root node ID in *normalized* (no prefix yet).
-            normalized: A pre-normalized nx.DiGraph whose root node already has
-                node_type/root_color/type set to kappa-root values.
-
-        Returns:
-            str: The prefixed root node ID in the merged graph.
+        copy+prefix step. Use results from _load_normalized_kappas() instead of
+        MergeDisjointSubgraph() when kappa graphs are static. Returns the prefixed
+        root node ID in the merged graph.
         """
         self.subgraph_counter += 1
         prefix = f"kappa_{self.subgraph_counter}"
@@ -437,21 +429,10 @@ def LoadAugmentedFunctionGraph(
 def filter_active_kappa(
     data: Union[Data, HeteroData], active_kappa: Union[float, int, None]
 ) -> Union[Data, HeteroData]:
-    """Filters the PyG Data object to only keep nodes and edges of the active kappa subgraph.
+    """Filter a PyG Data object to keep only nodes/edges belonging to the active kappa subgraph.
 
-    All base graph nodes and global nodes are kept. Inactive kappa subgraph nodes
-    and their associated edges are removed. If active_kappa is None, 0, or NaN, all kappa subgraphs
-    are deactivated and removed.
-
-    Arguments:
-        data: The PyG Data or HeteroData object containing node_kappas.
-        active_kappa: The kappa value to keep active.
-
-    Returns:
-        The filtered PyG Data or HeteroData object.
-
-    Raises:
-        None
+    Base graph and global nodes are always kept. If active_kappa is None, 0, or NaN,
+    all kappa subgraph nodes are removed.
     """
     if not isinstance(data, Data) or not hasattr(data, "node_kappas") or data.node_kappas is None:
         return data

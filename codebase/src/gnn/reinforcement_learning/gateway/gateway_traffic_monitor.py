@@ -7,7 +7,7 @@ from typing import Optional
 from collections import deque
 import numpy as np
 
-from state_wait_timeout import StateRoundtripTimeout
+from gnn.reinforcement_learning.gateway.state_wait_timeout import StateRoundtripTimeout
 
 
 def _to_float(value) -> Optional[float]:

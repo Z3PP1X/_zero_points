@@ -31,12 +31,7 @@ OPTUNA_SEARCH_SPACE_SUFFIX = (
 )
 
 HIDDEN_DIM_CHOICES = (64, 128, 256, 512)
-GNN_ARCHITECTURE_CHOICES = (
-    "gatv2_stack",
-    "gine_stack",
-)
 GNN_LAYER_COUNT_CHOICES = (1, 2, 3)
-GAT_HEAD_COUNT_CHOICES = (2, 4, 8)
 GNN_ACTIVATION_CHOICES = (
     "prelu",
     "relu",

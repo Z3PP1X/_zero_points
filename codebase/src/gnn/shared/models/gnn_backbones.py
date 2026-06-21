@@ -4,7 +4,6 @@ from typing import List, Callable
 import torch
 import torch.nn as nn
 from torch_geometric.nn import (
-    GATv2Conv,
     GINConv,
     global_mean_pool,
     global_max_pool,
@@ -19,8 +18,6 @@ GLOBAL_POOL_FUNCTIONS: dict[str, Callable] = {
     "sum": global_add_pool,
     "max": global_max_pool,
 }
-
-ARCHITECTURE_NAMES: List[str] = ["gatv2_stack", "gine_stack"]
 
 
 def resolve_global_pool(pooling_name: str) -> Callable:
@@ -107,11 +104,11 @@ class DirichletProbe(nn.Module):
 
 
 class ExpressionGNN(nn.Module):
-    """Unified GNN backbone for supervised learning (classify=True) and RL (classify=False).
+    """GNN backbone for supervised learning (classify=True) and RL (classify=False).
 
     Architecture:
         node_encoder: LayerNorm → Linear(input_dim, hidden_dim) → activation
-        convs: num_layers × GATv2Conv or GINConv (no edge features)
+        convs: num_layers × GINConv (2-layer MLP inside each conv, no edge features)
         global encoder: LayerNorm(global_dim) → Linear(global_dim, global_hidden_dim) → act
         tail: Linear(hidden_dim + global_hidden_dim, hidden_dim) → LayerNorm → act → Dropout
         head (classify=True only): Linear(hidden_dim, output_dim)
@@ -127,8 +124,6 @@ class ExpressionGNN(nn.Module):
         global_dim: int = 5,
         global_hidden_dim: int = 8,
         output_dim: int = 2,
-        architecture: str = "gatv2_stack",
-        heads: int = 4,
         num_layers: int = 3,
         dropout: float = 0.2,
         activation: str = "prelu",
@@ -136,14 +131,9 @@ class ExpressionGNN(nn.Module):
         classify: bool = True,
     ):
         super().__init__()
-        if architecture not in ARCHITECTURE_NAMES:
-            raise ValueError(
-                f"Unsupported architecture {architecture!r}; expected one of {ARCHITECTURE_NAMES}"
-            )
         if num_layers < 1:
             raise ValueError(f"num_layers must be >= 1, got {num_layers}")
 
-        self.architecture = architecture
         self.hidden_dim = hidden_dim
         self.global_dim = global_dim
         self.pool_fn = resolve_global_pool(graph_pooling)
@@ -155,17 +145,8 @@ class ExpressionGNN(nn.Module):
         )
 
         convs: List[nn.Module] = []
-        in_dim = hidden_dim
-        for layer_idx in range(num_layers):
-            is_last = layer_idx == num_layers - 1
-            if architecture == "gine_stack":
-                convs.append(GINConv(_gin_mlp(in_dim, hidden_dim, activation)))
-                in_dim = hidden_dim
-            else:  # gatv2_stack
-                out_heads = 1 if is_last else heads
-                concat = not is_last
-                convs.append(GATv2Conv(in_dim, hidden_dim, heads=out_heads, concat=concat))
-                in_dim = hidden_dim * out_heads if concat else hidden_dim
+        for _ in range(num_layers):
+            convs.append(GINConv(_gin_mlp(hidden_dim, hidden_dim, activation)))
         self.convs = nn.ModuleList(convs)
         self.dirichlet_probe = DirichletProbe()
         self.layer_activations = nn.ModuleList(

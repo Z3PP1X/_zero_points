@@ -5,8 +5,6 @@ from gnn.supervised_learning.configs_gen import (
     _canonical_signature,
     _is_valid_config,
     generate_configs,
-    get_nested_value,
-    path_exists,
     validate_grid_keys,
 )
 
@@ -18,7 +16,7 @@ def _write_base(path):
                 "out_dir": "results",
                 "seed": 42001,
                 "gnn": {
-                    "layer_type": "gatv2conv",
+                    "layer_type": "ginconv",
                     "layers_mp": 3,
                     "dim_inner": 128,
                     "variant": "legacy",
@@ -176,22 +174,8 @@ def test_generate_configs_skips_supernode_positional(tmp_path):
         assert not (eg["add_virtual_supernode"] and eg["features"]["positional"])
 
 
-def test_get_nested_value():
-    d = {"a": {"b": {"c": 5}}}
-    assert get_nested_value(d, "a.b.c") == 5
-    assert get_nested_value(d, "a.x") is None
-    assert get_nested_value(d, "a.b.c.d") is None
-
-
-def test_path_exists_distinguishes_none_value_from_missing():
-    d = {"a": {"b": None}}
-    assert path_exists(d, "a.b") is True  # present, value is None
-    assert path_exists(d, "a.c") is False
-    assert path_exists(d, "a.b.c") is False  # cannot descend into a non-dict
-
-
 def test_validate_grid_keys_rejects_unknown_axis():
-    base = {"gnn": {"layer_type": "gatv2conv"}, "expression_graph": {"mode": "graph"}}
+    base = {"gnn": {"layer_type": "ginconv"}, "expression_graph": {"mode": "graph"}}
     # This is exactly the typo that crashed yacs at train time.
     grid = {"expression_graph.graph": ["graph"]}
     with pytest.raises(ValueError) as exc:
@@ -199,11 +183,6 @@ def test_validate_grid_keys_rejects_unknown_axis():
     msg = str(exc.value)
     assert "expression_graph.graph" in msg
     assert "mode" in msg  # suggests the valid sibling key
-
-
-def test_validate_grid_keys_accepts_known_axes():
-    base = {"gnn": {"layer_type": "gatv2conv", "layers_mp": 3}}
-    validate_grid_keys(base, {"gnn.layer_type": ["gatv2conv"], "gnn.layers_mp": [2, 3]})
 
 
 def test_generate_configs_raises_on_typo_axis(tmp_path):

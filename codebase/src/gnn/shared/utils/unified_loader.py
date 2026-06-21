@@ -205,10 +205,5 @@ class UnifiedDataLoader:
         )
 
     def load_all(self, kappa_map: dict = None) -> dict[str, Any]:
-        """Forwards preloading all graphs into memory.
-
-        Arguments:
-            kappa_map: Optional {graph_id: kappa_value} mapping forwarded to
-                GraphDataLoader so each graph merges only its active kappa.
-        """
+        """Forwards to GraphDataLoader.load_all, merging only the active kappa per graph."""
         return self.graph_loader.load_all(kappa_map=kappa_map)

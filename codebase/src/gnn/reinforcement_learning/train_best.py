@@ -46,7 +46,6 @@ from gnn.reinforcement_learning.rl_config import (
     resolve_rl_setting,
 )
 
-# ZMQ Port configuration
 RECEIVER_PORT = 5650
 RESULTS_PORT = 5693
 SENDER_PORT = 5651
@@ -163,7 +162,6 @@ def load_best_trial_params(db_path: str, study_name: str | None = None) -> dict:
     storage = f"sqlite:///{db_path}"
     
     if study_name is None:
-        # Auto-discover study name
         summaries = optuna.get_all_study_summaries(storage=storage)
         if not summaries:
             raise ValueError(f"No studies found in database {db_path}")
@@ -220,11 +218,9 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
     )
     
     policy = GnnPolicySpec(
-        architecture=params["gnn_architecture"],
         activation=params.get("gnn_activation", "leaky_relu"),
         hidden_dim=int(params["hidden_dim"]),
         num_layers=int(params["num_gnn_layers"]),
-        heads=int(params["heads"]),
         layout=layout,
     )
     
@@ -404,7 +400,6 @@ def main() -> None:
     print(f"  Edge direction:   {edge_direction}")
     print(f"  Add kappa:        {add_kappa}")
     print(f"  Add supernode:    {add_virtual_supernode}")
-    print(f"  GNN Architecture: {trial_config.policy.architecture}")
     print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
     print(f"  Num Layers:       {trial_config.policy.num_layers}")
@@ -482,10 +477,8 @@ def main() -> None:
         hidden_dim=trial_config.policy.hidden_dim,
         global_dim=trial_config.policy.layout.padded_global_feature_count,
         global_hidden_dim=trial_config.policy.layout.global_input_dim,
-        architecture=trial_config.policy.architecture,
         activation=trial_config.policy.activation,
         num_layers=trial_config.policy.num_layers,
-        heads=trial_config.policy.heads,
         classify=False,
     )
 
@@ -513,7 +506,6 @@ def main() -> None:
         seed=trial_config.ppo.random_seed,
     )
 
-    # Callback and training start
     training_callback = TrainingCallback(
         check_freq=1000,
         save_path=save_dir,
@@ -524,16 +516,12 @@ def main() -> None:
     print(f"\n[Training] Starting full training of {timesteps} steps...")
     print(f"[Training] Checkpoints and best model will be saved to '{save_dir}/'")
 
-    # Start MLflow run
     with mlflow.start_run(run_name=f"Full_Training_Run_{model_name}"):
         try:
-            # Log all parameters to MLflow
             mlflow.log_param("experiment", experiment)
-            mlflow.log_param("gnn_architecture", trial_config.policy.architecture)
             mlflow.log_param("gnn_activation", trial_config.policy.activation)
             mlflow.log_param("hidden_dim", trial_config.policy.hidden_dim)
             mlflow.log_param("num_layers", trial_config.policy.num_layers)
-            mlflow.log_param("heads", trial_config.policy.heads)
             mlflow.log_param("learning_rate", trial_config.ppo.learning_rate)
             mlflow.log_param("gamma", trial_config.ppo.gamma)
             mlflow.log_param("ent_coef", trial_config.ppo.ent_coef)
@@ -545,7 +533,6 @@ def main() -> None:
             mlflow.log_param("add_kappa", add_kappa)
             mlflow.log_param("add_virtual_supernode", add_virtual_supernode)
 
-            # Log reward parameters
             mlflow.log_param("reward_version", "v2_tolerance")
             mlflow.log_param("reward_alpha", trial_config.reward.alpha)
             mlflow.log_param("reward_gamma", trial_config.reward.reward_gamma)
@@ -553,10 +540,8 @@ def main() -> None:
             mlflow.log_param("step_cost_lambda", trial_config.reward.step_cost_lambda)
             mlflow.log_param("time_bad_penalty", trial_config.reward.time_bad_penalty)
 
-            # Start learning
             model.learn(total_timesteps=timesteps, callback=training_callback)
 
-            # Save the final model
             final_path = os.path.join(save_dir, f"{model_name}_final.zip")
             model.save(final_path)
             print(f"\n[Training] Training completed successfully!")

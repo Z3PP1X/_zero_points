@@ -79,7 +79,7 @@ def main():
         "--layer-type",
         type=str,
         default=None,
-        help="Layer type override (e.g., gatv2conv, gcnconv)"
+        help="Layer type override (e.g., ginconv)"
     )
     args = parser.parse_args()
     

@@ -383,12 +383,8 @@ def generate_report(
 ) -> Path:
     """Build ``summary.md`` + ``summary.json`` for one experiment.
 
-    Args:
-        results_dir: Experiment folder (contains ``agg/`` and ``eval_plots/``).
-        output_dir: Where to write the report (default ``<results_dir>/eval_plots``).
-        top_k: Leaderboard rows to include.
-
-    Returns the path to ``summary.md``.
+    ``results_dir`` must contain ``agg/`` and ``eval_plots/``. Output defaults to
+    ``<results_dir>/eval_plots``. Returns the path to ``summary.md``.
     """
     results_dir = Path(results_dir).resolve()
     experiment = results_dir.name

@@ -248,7 +248,7 @@ def main(
     edge_features: list[str] | None = None,
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
-    layer_type: str = "gatv2conv",
+    layer_type: str = "ginconv",
     edge_direction: str = "top_down",
     heterogeneous: bool = False,
     add_kappa: bool = False,

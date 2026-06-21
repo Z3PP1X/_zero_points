@@ -1,6 +1,6 @@
 import torch
-from feature_layout import GNN_ARCHITECTURE_CHOICES, GNN_ACTIVATION_CHOICES
-from gnn.shared.models.gnn_backbones import ExpressionGNN, ARCHITECTURE_NAMES
+from feature_layout import GNN_ACTIVATION_CHOICES
+from gnn.shared.models.gnn_backbones import ExpressionGNN
 
 INPUT_DIM = 28   # NATIVE_NODE_FEATURE_COUNT
 GLOBAL_DIM = 8   # PADDED_GLOBAL_FEATURE_COUNT
@@ -25,9 +25,7 @@ def test_sl_mode_output_shape():
         global_dim=GLOBAL_DIM,
         global_hidden_dim=GLOBAL_HIDDEN,
         output_dim=2,
-        architecture="gatv2_stack",
         num_layers=2,
-        heads=2,
         classify=True,
     )
     model.eval()
@@ -45,7 +43,6 @@ def test_rl_mode_output_shape():
         hidden_dim=hidden_dim,
         global_dim=GLOBAL_DIM,
         global_hidden_dim=GLOBAL_HIDDEN,
-        architecture="gine_stack",
         num_layers=3,
         classify=False,
     )
@@ -56,26 +53,23 @@ def test_rl_mode_output_shape():
     assert torch.isfinite(out).all()
 
 
-def test_both_architectures_all_activations():
+def test_all_activations():
     x, edge_index, batch, gf = _make_batch()
-    for arch in GNN_ARCHITECTURE_CHOICES:
-        for act in GNN_ACTIVATION_CHOICES:
-            model = ExpressionGNN(
-                input_dim=INPUT_DIM,
-                hidden_dim=32,
-                global_dim=GLOBAL_DIM,
-                global_hidden_dim=GLOBAL_HIDDEN,
-                architecture=arch,
-                activation=act,
-                num_layers=2,
-                heads=2,
-                classify=False,
-            )
-            model.eval()
-            with torch.no_grad():
-                out = model(x, edge_index, batch, gf)
-            assert out.shape == (2, 32), f"{arch}/{act}: shape mismatch"
-            assert torch.isfinite(out).all(), f"{arch}/{act}: non-finite output"
+    for act in GNN_ACTIVATION_CHOICES:
+        model = ExpressionGNN(
+            input_dim=INPUT_DIM,
+            hidden_dim=32,
+            global_dim=GLOBAL_DIM,
+            global_hidden_dim=GLOBAL_HIDDEN,
+            activation=act,
+            num_layers=2,
+            classify=False,
+        )
+        model.eval()
+        with torch.no_grad():
+            out = model(x, edge_index, batch, gf)
+        assert out.shape == (2, 32), f"{act}: shape mismatch"
+        assert torch.isfinite(out).all(), f"{act}: non-finite output"
 
 
 def test_no_global_features():
@@ -85,9 +79,7 @@ def test_no_global_features():
         input_dim=INPUT_DIM,
         hidden_dim=32,
         global_dim=0,
-        architecture="gatv2_stack",
         num_layers=2,
-        heads=2,
         classify=True,
     )
     model.eval()
@@ -105,7 +97,6 @@ def test_global_features_change_output():
         hidden_dim=32,
         global_dim=GLOBAL_DIM,
         global_hidden_dim=GLOBAL_HIDDEN,
-        architecture="gine_stack",
         num_layers=2,
         classify=False,
     )
@@ -135,7 +126,6 @@ def test_supernode_participates_in_message_passing():
         hidden_dim=16,
         global_dim=GLOBAL_DIM,
         global_hidden_dim=GLOBAL_HIDDEN,
-        architecture="gine_stack",
         num_layers=2,
         classify=False,
     )
@@ -151,9 +141,3 @@ def test_supernode_participates_in_message_passing():
     assert not torch.allclose(out_base, out_perturbed, atol=1e-5), "supernode perturbation had no effect"
 
 
-def test_invalid_architecture_raises():
-    try:
-        ExpressionGNN(input_dim=4, architecture="gcn_stack")
-        assert False, "should have raised"
-    except ValueError:
-        pass

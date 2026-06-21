@@ -577,7 +577,6 @@ class ExpressionGraphConverter:
         data.node_type = node_type_tensor
         data.root_color = root_color_tensor
 
-        # Add global graph features
         data.tree_depth = topo["tree_depth"]
         data.tree_width = topo["tree_width"]
         data.nodes = G_directed.number_of_nodes()

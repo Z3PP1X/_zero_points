@@ -11,7 +11,7 @@ Stage overview
   1  Pure AST          — node identity only  (14 features: node_type + label)
   2  AST + Roots       — adds function identity (19 features: + root_color)
   3  Full graph        — all structural features (28 features: + topology + PE)
-  4  Experiment        — configurable; default: all 28 features, GATv2
+  4  Experiment        — configurable; default: all 28 features, GIN
 
 Usage
 -----
@@ -81,29 +81,23 @@ STAGE_DEFS: dict[int, dict] = {
         name="Pure AST",
         description="Node type + label only (14 features)",
         active_features=_FEATURES_STAGE1,
-        default_arch="gatv2_stack",
     ),
     2: dict(
         name="AST + Root identity",
         description="Adds root_color: distinguishes f / f' / f'' (19 features)",
         active_features=_FEATURES_STAGE2,
-        default_arch="gatv2_stack",
     ),
     3: dict(
         name="Full graph",
         description="All 28 features: topology, histogram, anchor PE",
         active_features=_FEATURES_ALL,
-        default_arch="gatv2_stack",
     ),
     4: dict(
         name="Experiment",
-        description="Free configuration — edit active_features / arch as needed",
+        description="Free configuration — edit active_features as needed",
         active_features=_FEATURES_ALL,
-        default_arch="gatv2_stack",
     ),
 }
-
-ARCHITECTURE_NAMES = ("gatv2_stack", "gine_stack")
 
 
 # ── Timing primitives ─────────────────────────────────────────────────────────
@@ -161,7 +155,6 @@ def benchmark_config(
     *,
     dataset_name: str,
     stage_id: int,
-    arch: str | None = None,
     hidden_dim: int = 128,
     num_layers: int = 3,
     device: torch.device,
@@ -170,10 +163,9 @@ def benchmark_config(
     edge_direction: str = "top_down",
 ) -> dict | None:
     stage_def = STAGE_DEFS[stage_id]
-    arch = arch or stage_def["default_arch"]
     active_features = stage_def["active_features"]
     input_dim = len(active_features)
-    label = f"Stage {stage_id} | {arch:<18} | L={num_layers} | H={hidden_dim} | F={input_dim}"
+    label = f"Stage {stage_id} | GINConv | L={num_layers} | H={hidden_dim} | F={input_dim}"
     print(f"  {label}")
 
     try:
@@ -197,7 +189,6 @@ def benchmark_config(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
             global_dim=global_dim,
-            architecture=arch,
             num_layers=num_layers,
             classify=True,
         ).to(device)
@@ -221,7 +212,6 @@ def benchmark_config(
     return {
         "stage":           stage_id,
         "stage_name":      stage_def["name"],
-        "architecture":    arch,
         "num_features":    input_dim,
         "num_layers":      num_layers,
         "hidden_dim":      hidden_dim,
@@ -260,13 +250,11 @@ def run_sweep(
     records: list[dict] = []
     for stage_id in stage_ids:
         stage_def = STAGE_DEFS[stage_id]
-        arch = stage_def["default_arch"]
         print(f"\n--- Stage {stage_id}: {stage_def['name']} | {stage_def['description']} ---")
         for hidden_dim, num_layers in itertools.product(hidden_dims, num_layers_list):
             result = benchmark_config(
                 dataset_name=dataset_name,
                 stage_id=stage_id,
-                arch=arch,
                 hidden_dim=hidden_dim,
                 num_layers=num_layers,
                 device=device,
@@ -286,7 +274,7 @@ def run_sweep(
     print("SWEEP RESULTS")
     print(f"{'='*90}")
     print(df.to_string(
-        columns=["stage", "stage_name", "architecture", "num_features",
+        columns=["stage", "stage_name", "num_features",
                  "num_layers", "hidden_dim", "params", "mean_ms", "median_ms", "throughput_gps"],
         index=False,
         float_format=lambda x: f"{x:.4f}",
@@ -395,7 +383,7 @@ def _log_mlflow(dataset_name, device, warmup, runs, df, csv_path, plot_path):
         with mlflow.start_run(run_name=f"sweep_{device.type}"):
             mlflow.log_params({"device": device.type, "warmup": warmup, "runs": runs, "num_configurations": len(df)})
             for _, row in df.iterrows():
-                key = f"S{int(row['stage'])}_{row['architecture']}_L{int(row['num_layers'])}_H{int(row['hidden_dim'])}"
+                key = f"S{int(row['stage'])}_L{int(row['num_layers'])}_H{int(row['hidden_dim'])}"
                 mlflow.log_metric(f"{key}_mean_ms", row["mean_ms"])
                 mlflow.log_metric(f"{key}_throughput", row["throughput_gps"])
             mlflow.log_artifact(str(csv_path))

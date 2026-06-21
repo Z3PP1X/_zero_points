@@ -266,12 +266,10 @@ class GraphDataLoader:
         return converted.clone()
 
     def load_all(self, kappa_map: Union[dict, None] = None) -> dict[str, Union[Data, HeteroData]]:
-        """Preloads and converts all discovered graphs into memory.
+        """Preload and convert all discovered graphs into memory.
 
-        Arguments:
-            kappa_map: Optional {graph_id: kappa_value} mapping. When provided,
-                each graph is merged with only its matching kappa subgraph instead
-                of all subgraphs, producing smaller graphs and correct filtering.
+        When kappa_map is provided, each graph merges only its matching kappa
+        subgraph instead of all subgraphs — produces smaller graphs and correct filtering.
         """
         result = {}
         for gid in self._raw_sources.keys():

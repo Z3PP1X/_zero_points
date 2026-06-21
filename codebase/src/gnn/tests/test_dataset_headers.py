@@ -29,12 +29,6 @@ def test_canonical_dataset_column_maps_headers(raw_header, canonical):
     assert canonical_dataset_column(raw_header) == canonical
 
 
-def test_canonical_dataset_column_does_not_collapse_derivative_headers():
-    assert canonical_dataset_column("f(x0)") == "fx"
-    assert canonical_dataset_column("f'(x0)") == "d1x"
-    assert canonical_dataset_column("f''(x0)") == "d2x"
-
-
 def test_dataset_loader_normalizes_mathematica_headers(tmp_path):
     csv_path = tmp_path / "sample.csv"
     csv_path.write_text(

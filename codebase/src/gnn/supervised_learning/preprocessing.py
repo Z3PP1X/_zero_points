@@ -14,10 +14,7 @@ from gnn.shared.utils.graph_utils import (
 )
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.shared.utils.unified_loader import UnifiedDataLoader
-from gnn.supervised_learning.supervised_config import (
-    architecture_from_layer_type,
-    validate_layer_type,
-)
+from gnn.supervised_learning.supervised_config import validate_layer_type
 
 
 class FeatureEngineering:
@@ -77,7 +74,7 @@ class GraphPipeline:
         unified_loader: UnifiedDataLoader | None = None,
         synthetic: bool = False,
         synthetic_dataset_name: str | None = None,
-        layer_type: str = "gatv2conv",
+        layer_type: str = "ginconv",
         heterogeneous: bool = False,
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
@@ -228,10 +225,6 @@ class GraphPipeline:
             print("-" * 40)
 
             return self.train_loader, self.test_loader, self.class_weights
-
-    @property
-    def architecture(self) -> str:
-        return architecture_from_layer_type(self.layer_type)
 
     @property
     def input_dim(self) -> int:

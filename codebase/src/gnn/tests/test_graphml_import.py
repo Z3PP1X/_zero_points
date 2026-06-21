@@ -2,10 +2,6 @@ import pytest
 import networkx as nx
 import torch
 from graph_utils import (
-    parse_graphml_node_name,
-    _determine_node_type_from_label,
-    _parse_constant_value,
-    find_roots,
     create_virtual_global_node,
     ExpressionGraphConverter,
 )

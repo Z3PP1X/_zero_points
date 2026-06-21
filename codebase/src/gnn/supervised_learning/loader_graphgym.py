@@ -7,9 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.graphgym.register import register_act
-import torch_geometric as pyg
 from torch_geometric.graphgym.register import register_layer, register_loss
-from torch_geometric.nn.conv import GINEConv
 import math
 from torch.optim.lr_scheduler import LambdaLR
 from torch.optim import AdamW
@@ -18,8 +16,6 @@ from torch_geometric.graphgym.register import register_scheduler, register_optim
 from gnn.supervised_learning.preprocessing import GraphPipeline  # noqa: F401
 from gnn.supervised_learning.run_results.eval_metrics import compute_confidence_metrics
 from gnn.supervised_learning.supervised_config import (
-    LAYERS_WITHOUT_EDGE_FEATURES,
-    architecture_from_layer_type,
     resolve_edge_dim,
     validate_layer_type,
 )
@@ -232,54 +228,6 @@ class ExpressionNodeEncoder(torch.nn.Module):
         return batch
 
 
-def _resolve_edge_attr(batch, edge_dim: int):
-    edge_attr = getattr(batch, "edge_attr", None)
-    if edge_attr is None:
-        raise ValueError(
-            "edge_attr is required on every graph batch, but edge_attr is missing"
-        )
-    return edge_attr
-
-
-@register_layer("gatv2conv")
-class GATv2Conv(torch.nn.Module):
-    def __init__(self, layer_config, **kwargs):
-        super().__init__()
-        edge_dim = getattr(layer_config, "edge_dim", 4)
-        self.model = pyg.nn.GATv2Conv(
-            layer_config.dim_in,
-            layer_config.dim_out,
-            bias=layer_config.has_bias,
-            edge_dim=edge_dim,
-        )
-
-    def forward(self, batch):
-        edge_attr = _resolve_edge_attr(
-            batch,
-            getattr(self.model, "edge_dim", 4),
-        )
-        batch.x = self.model(batch.x, batch.edge_index, edge_attr=edge_attr)
-        return batch
-
-
-@register_layer("gineconv")
-class GINEConvLayer(torch.nn.Module):
-    def __init__(self, layer_config, **kwargs):
-        super().__init__()
-        edge_dim = getattr(layer_config, "edge_dim", 4)
-        nn_layer = torch.nn.Sequential(
-            torch.nn.Linear(layer_config.dim_in, layer_config.dim_out),
-            torch.nn.ReLU(),
-            torch.nn.Linear(layer_config.dim_out, layer_config.dim_out),
-        )
-        self.edge_dim = edge_dim
-        self.model = GINEConv(nn=nn_layer, edge_dim=edge_dim)
-
-    def forward(self, batch):
-        edge_attr = _resolve_edge_attr(batch, self.edge_dim)
-        batch.x = self.model(batch.x, batch.edge_index, edge_attr)
-        return batch
-
 
 # --------------------------------------------------------------------------- #
 # Custom network: routes the supervised pipeline through ExpressionGNN.
@@ -303,20 +251,13 @@ class ExpressionClassifierNetwork(torch.nn.Module):
         super().__init__()
         self._last_aux_loss = torch.zeros(())
 
-        layer_type = validate_layer_type(cfg.gnn.layer_type)
-        if layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
-            raise ValueError(
-                f"expression_classifier supports only edge-aware layer types "
-                f"(not {sorted(LAYERS_WITHOUT_EDGE_FEATURES)}); got {layer_type!r}"
-            )
+        validate_layer_type(cfg.gnn.layer_type)
         names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
         self.net = ExpressionGNN(
             input_dim=(len(names) or dim_in),
             hidden_dim=cfg.gnn.dim_inner,
             global_dim=0,  # GraphGym batches carry no graph-level global features
             output_dim=dim_out,
-            heads=getattr(cfg.gnn, "att_heads", 4),
-            architecture=architecture_from_layer_type(layer_type),
             activation=cfg.gnn.act,
             num_layers=cfg.gnn.layers_mp,
             dropout=cfg.gnn.dropout,
@@ -519,15 +460,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
 
     mode = getattr(cfg.expression_graph, "mode", "graph")
     layer_type = validate_layer_type(cfg.gnn.layer_type)
-    # Fail fast (before the dataset load) if expression_classifier was paired with a
-    # non-edge-aware layer type; otherwise ExpressionClassifierNetwork.__init__ would
-    # only raise after the full data load/cache. Mirrors the check in that constructor.
-    is_expression_classifier = cfg.model.type == "expression_classifier"
-    if is_expression_classifier and layer_type in LAYERS_WITHOUT_EDGE_FEATURES:
-        raise ValueError(
-            f"model.type 'expression_classifier' supports only edge-aware layer types "
-            f"(not {sorted(LAYERS_WITHOUT_EDGE_FEATURES)}); got {layer_type!r}"
-        )
     cfg.dataset.edge_dim = resolve_edge_dim()
     from gnn.supervised_learning.supervised_config import resolve_expression_graph_features
 

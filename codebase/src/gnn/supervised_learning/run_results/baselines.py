@@ -42,12 +42,9 @@ def _f1(precision: float, recall: float) -> float:
 def split_baselines(counts: dict, pos_label: int = DEFAULT_POS_LABEL) -> dict:
     """Closed-form baseline metrics for one split given its class counts.
 
-    Args:
-        counts: ``{"0": n0, "1": n1, "total": n}`` (``total`` optional).
-        pos_label: which class is treated as positive (default 1 = Newton).
-
+    ``counts`` is ``{"0": n0, "1": n1, "total": n}`` (``total`` optional).
     Returns a dict with ``prevalence``, ``majority`` and ``random`` blocks plus
-    the ``no_skill_pr_auc`` reference, or an empty dict when the split is empty.
+    ``no_skill_pr_auc``, or an empty dict when the split is empty.
     """
     n0 = int(counts.get("0", 0))
     n1 = int(counts.get("1", 0))
