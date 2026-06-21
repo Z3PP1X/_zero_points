@@ -34,7 +34,6 @@ class UnifiedDataLoader:
         """
         Retrieves a cached singleton/multiton instance matching the parameter configuration.
         """
-        # Parse run_key if slash is present in dataset_name
         if "/" in dataset_name and run_key is None:
             r_key, d_name = dataset_name.split("/", 1)
         else:
@@ -97,11 +96,8 @@ class UnifiedDataLoader:
         self.add_kappa = add_kappa
         self.add_virtual_supernode = add_virtual_supernode
 
-        # Unified lookup name for GraphDataLoader
-        # For compatibility with GraphDataLoader's parsing, if run_key differs from dataset_name, pass "run_key/dataset_name"
         graph_loader_name = f"{self.run_key}/{self.dataset_name}" if self.run_key != self.dataset_name else self.dataset_name
 
-        # Instantiate underlying loaders
         self.dataset_loader = DatasetLoader(
             dataset_name=self.dataset_name,
             run_key=self.run_key,
@@ -111,7 +107,7 @@ class UnifiedDataLoader:
         kappa_map: dict[str, float] = {}
         if self.add_kappa:
             try:
-                kappa_map = self._extract_kappa_map(self.dataset_loader.data)
+                kappa_map = self.build_kappa_map()
             except Exception as e:
                 logger.warning(f"Could not build kappa_map from tabular data: {e}")
 
@@ -142,15 +138,13 @@ class UnifiedDataLoader:
         if "x0" not in df.columns:
             df["x0"] = None
 
-        # Check if column has any missing values
         if df[target_col].isnull().any():
             for idx, row in df.iterrows():
                 pid = row.get("problem_id", row.get("problemID"))
                 if pid is None:
                     continue
                 pid_str = str(pid)
-                
-                # If current row value is null/NaN, fetch from graph data
+
                 if pd.isnull(row[target_col]):
                     try:
                         if self.graph_loader.has_graph(pid_str):
@@ -162,8 +156,7 @@ class UnifiedDataLoader:
                                         raw_dict = json.load(f)
                                 else:
                                     raw_dict = raw_val
-                                
-                                # Try 'x0' first, then 'startwert'
+
                                 x0_val = raw_dict.get("x0", raw_dict.get("startwert"))
                                 if x0_val is not None:
                                     df.at[idx, target_col] = float(x0_val)
@@ -190,20 +183,6 @@ class UnifiedDataLoader:
     def has_graph(self, graph_id: Any) -> bool:
         """Forwards checking if the graph exists."""
         return self.graph_loader.has_graph(graph_id)
-
-    @staticmethod
-    def _extract_kappa_map(df: "pd.DataFrame") -> dict[str, float]:
-        """Return {graph_id: kappa_value} from a DataFrame that has a 'kappa' column."""
-        id_col = next((c for c in ("problem_id", "Problem_ID") if c in df.columns), None)
-        if "kappa" not in df.columns or id_col is None:
-            return {}
-        return (
-            df.dropna(subset=["kappa"])
-            .groupby(id_col)["kappa"]
-            .first()
-            .apply(float)
-            .to_dict()
-        )
 
     def build_kappa_map(self) -> dict[str, float]:
         """Build a {graph_id: kappa_value} mapping from the tabular dataset.

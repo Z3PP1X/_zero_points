@@ -291,10 +291,7 @@ class MathematicaVecEnv(VecEnv):
         Sets ``_is_finalizing`` so that ``_refill_pending_slots`` becomes a
         no-op.  This prevents the flush loop from pulling fresh training
         states out of the shared queue — states that the *next* Optuna trial
-        needs.
-
-        Args:
-            max_flush_steps: Safety cap to avoid infinite flushes.
+        needs. ``max_flush_steps`` caps the loop to prevent infinite flushes.
         """
         self._is_finalizing = True
         try:

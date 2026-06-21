@@ -128,10 +128,6 @@ class NetworkGateway:
     def send_decision(
         self, original_state: dict, solver: int, local_max_tolerance: float
     ):
-        """
-        Fügt die vom GNN getroffenen Entscheidungen in den originalen State ein
-        und sendet das aktualisierte Dictionary zurück an Mathematica.
-        """
         response_state = original_state.copy()
         response_state["solver"] = int(solver)
         response_state["localMaxTolerance"] = float(local_max_tolerance)

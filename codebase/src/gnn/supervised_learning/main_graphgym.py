@@ -456,15 +456,12 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     warnings.filterwarnings('ignore', '.*use `CSVLogger` as the default.*')
     
     callbacks = []
-    
-    # 1. GraphGym's built-in LoggerCallback subclass (writes stats.json with dirichlet_energy)
+
     if logger:
         callbacks.append(DirichletLoggerCallback())
-    
-    # 2. Our ValMetricLogger bridge (makes val metrics visible to Lightning)
+
     callbacks.append(ValMetricLogger())
-    
-    # 3. ModelCheckpoint — monitors val_pr_auc on synthetic holdout (no curated influence)
+
     ckpt_cbk = None
     if cfg.train.enable_ckpt:
         ckpt_cbk = pl.callbacks.ModelCheckpoint(
@@ -477,9 +474,8 @@ def train_with_best_ckpt(model, datamodule, logger=True):
             verbose=True,
         )
         callbacks.append(ckpt_cbk)
-    
-    # 4. EarlyStopping (opt-in) — stops when the monitored validation metric stops
-    #    improving. Validation runs every epoch in this path, so patience is in epochs.
+
+    # EarlyStopping patience is in epochs; validation runs every epoch in this path.
     if getattr(cfg.train, "early_stopping", False):
         callbacks.append(_build_early_stopping_callback())
 

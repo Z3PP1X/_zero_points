@@ -40,28 +40,25 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--timeout-fallback",
         type=float,
         default=None,
-        help="Initiale Timeout-Wartezeit in Sekunden ohne Roundtrip-Historie.",
+        help="Initial timeout in seconds when no roundtrip history is available.",
     )
     parser.add_argument(
         "--timeout-cushion",
         type=float,
         default=None,
-        help="Puffer in Sekunden auf den gleitenden Roundtrip-Durchschnitt.",
+        help="Buffer in seconds added to the rolling roundtrip average.",
     )
     parser.add_argument(
         "--timeout-window",
         type=int,
         default=None,
-        help="Anzahl erfolgreicher Roundtrips für den gleitenden Durchschnitt.",
+        help="Window size for the rolling roundtrip average.",
     )
     parser.add_argument(
         "--n-envs",
         type=int,
         default=None,
-        help=(
-            "Anzahl paralleler Mathematica-Slots für SB3-Training "
-            "(gemeinsames Senden/Sammeln pro VecEnv-Schritt)."
-        ),
+        help="Number of parallel Mathematica slots for SB3 training (shared send/collect per VecEnv step).",
     )
     parser.add_argument(
         "--continue-study",
@@ -143,10 +140,10 @@ def main() -> None:
         state_logger=state_logger,
     )
     print(
-        f"Optuna: {n_trials} Trials × {timesteps} Schritte | "
+        f"Optuna: {n_trials} trials × {timesteps} steps | "
         f"Experiment: {experiment} | Mode: {mode} | Edge direction: {edge_direction} | "
         f"Add kappa: {add_kappa} | Add supernode: {add_virtual_supernode} | "
-        f"Parallel-Envs: {n_envs} | Continue Study: {continue_study} | Config: {config_path.name}"
+        f"Parallel envs: {n_envs} | Continue study: {continue_study} | Config: {config_path.name}"
     )
     print(f"Feature groups: {feature_selection.enabled_groups()}")
     print(f"Positional encodings: {list(feature_selection.positional_encodings)}")
@@ -165,8 +162,8 @@ def main() -> None:
 
     preprocessor = Preprocessor(loader=loader, mode=mode, active_features=active_features)
     print(
-        f"Graph-Templates: {len(preprocessor.known_problem_ids)} Problem-IDs indexiert, "
-        f"lazy LRU-Cache aktiv (mode: {mode})"
+        f"Graph templates: {len(preprocessor.known_problem_ids)} problem IDs indexed, "
+        f"lazy LRU-cache active (mode: {mode})"
     )
     gateway.init()
     traffic_monitor.start()
@@ -189,7 +186,7 @@ def main() -> None:
         for key, value in best_trial.params.items():
             print(f"    {key}: {value}")
     except KeyboardInterrupt:
-        print("\nAbbruch durch Benutzer.")
+        print("\nInterrupted by user.")
         try:
             study = workflow.study
             if study is not None:
@@ -199,12 +196,12 @@ def main() -> None:
                     if trial.state.name == "COMPLETE"
                 )
                 print(
-                    f"Letzter Stand: {completed} abgeschlossene Trials | "
-                    f"Study Best: {study.best_value:.3f} (Trial {study.best_trial.number})"
+                    f"Last state: {completed} completed trials | "
+                    f"Study best: {study.best_value:.3f} (trial {study.best_trial.number})"
                 )
         except (AttributeError, ValueError):
             pass
-        print("Gateway wird beendet...")
+        print("Shutting down gateway...")
     finally:
         traffic_monitor.stop()
         gateway.stop()

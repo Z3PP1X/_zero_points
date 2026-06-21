@@ -341,8 +341,8 @@ def plot_sweep(df: pd.DataFrame, plot_path: Path) -> None:
             h = bar.get_height()
             ax1.annotate(f"{h:.3f}", xy=(bar.get_x() + bar.get_width() / 2, h),
                          xytext=(0, 3), textcoords="offset points", ha="center", fontsize=8)
-        ax1.set_title("Ø Latenz je Stage (Mittel über Layer & Dim)", fontsize=10, pad=8)
-        ax1.set_xlabel("Stage"); ax1.set_ylabel("Latenz (ms)")
+        ax1.set_title("Avg Latency per Stage (mean over layers & dims)", fontsize=10, pad=8)
+        ax1.set_xlabel("Stage"); ax1.set_ylabel("Latency (ms)")
         ax1.grid(axis="y", linestyle=":", alpha=0.6)
 
         ax2 = fig.add_subplot(gs[0, 1])
@@ -350,8 +350,8 @@ def plot_sweep(df: pd.DataFrame, plot_path: Path) -> None:
             layer_means = group.groupby("num_layers")["mean_ms"].mean()
             ax2.plot(layer_means.index, layer_means.values, marker="o",
                      label=f"S{stage_id}", color=_STAGE_COLORS.get(stage_id, "#aaa"))
-        ax2.set_title("Latenz vs. Anzahl Layer (je Stage)", fontsize=10, pad=8)
-        ax2.set_xlabel("num_layers"); ax2.set_ylabel("Latenz (ms)")
+        ax2.set_title("Latency vs. Number of Layers (per Stage)", fontsize=10, pad=8)
+        ax2.set_xlabel("num_layers"); ax2.set_ylabel("Latency (ms)")
         ax2.legend(fontsize=8); ax2.grid(linestyle=":", alpha=0.6)
 
         ax3 = fig.add_subplot(gs[1, 0])
@@ -359,8 +359,8 @@ def plot_sweep(df: pd.DataFrame, plot_path: Path) -> None:
             dim_means = group.groupby("hidden_dim")["mean_ms"].mean()
             ax3.plot(dim_means.index, dim_means.values, marker="s",
                      label=f"S{stage_id}", color=_STAGE_COLORS.get(stage_id, "#aaa"))
-        ax3.set_title("Latenz vs. Hidden Dimension (je Stage)", fontsize=10, pad=8)
-        ax3.set_xlabel("hidden_dim"); ax3.set_ylabel("Latenz (ms)")
+        ax3.set_title("Latency vs. Hidden Dimension (per Stage)", fontsize=10, pad=8)
+        ax3.set_xlabel("hidden_dim"); ax3.set_ylabel("Latency (ms)")
         ax3.legend(fontsize=8); ax3.grid(linestyle=":", alpha=0.6)
 
         ax4 = fig.add_subplot(gs[1, 1])
@@ -369,8 +369,8 @@ def plot_sweep(df: pd.DataFrame, plot_path: Path) -> None:
         ax4.scatter(df["params"] / 1e3, df["mean_ms"],
                     c=[_STAGE_COLORS.get(s, "#aaa") for s in df["stage"]],
                     s=sizes, alpha=0.75, edgecolors="gray", linewidths=0.5)
-        ax4.set_title("Parameter vs. Latenz\n(Blasengröße = hidden_dim)", fontsize=10, pad=8)
-        ax4.set_xlabel("Parameter (k)"); ax4.set_ylabel("Latenz (ms)")
+        ax4.set_title("Parameters vs. Latency\n(bubble size = hidden_dim)", fontsize=10, pad=8)
+        ax4.set_xlabel("Parameters (k)"); ax4.set_ylabel("Latency (ms)")
         ax4.grid(linestyle=":", alpha=0.6)
         ax4.legend(handles=[
             Line2D([0], [0], marker="o", color="w",

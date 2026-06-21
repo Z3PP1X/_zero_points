@@ -116,10 +116,8 @@ class MathematicaStateIngress:
         from ``network_queue`` during ``poll_next_for_episode`` or
         ``take_next_for_episode`` but belonged to a different UUID are stored
         locally in ``_deferred_by_uuid``.  Without draining, they would be
-        silently lost when the ingress goes out of scope.
-
-        Returns:
-            The number of messages returned to the queue.
+        silently lost when the ingress goes out of scope. Returns the number
+        of messages returned to the queue.
         """
         returned = 0
         for uuid in list(self._waiting_init_order):

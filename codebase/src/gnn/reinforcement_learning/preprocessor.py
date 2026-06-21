@@ -37,15 +37,6 @@ class Preprocessor:
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
     ):
-        """
-        Initialisiert den Preprocessor.
-        :param loader: Eine GraphDataLoader Instanz (Dependency Injection).
-        :param graphs_dir: Pfad zum Verzeichnis, in dem die Graph-JSONs liegen (Legacy Fallback).
-        :param graph_cache_max: Max. Anzahl unterschiedlicher Graph-IDs, für die ein
-            unveränderliches PyG-Template (Topologie + statische Knotenmerkmale) im RAM
-            gehalten wird (LRU). Pro Schritt wird nur noch ``global_features`` und
-            Metadaten gesetzt; ``convert`` läuft pro ID nur beim ersten Mal.
-        """
         self.mode = mode
         self.active_features = active_features
         self._graph_cache_max = graph_cache_max
@@ -67,7 +58,7 @@ class Preprocessor:
             self.graphs_dir = Path(graphs_dir)
             self.converter = self.loader.converter
         else:
-            raise ValueError("Entweder 'loader' oder 'graphs_dir' muss an den Preprocessor uebergeben werden.")
+            raise ValueError("Either 'loader' or 'graphs_dir' must be provided to Preprocessor.")
 
         self._known_problem_ids = frozenset(self.loader.list_graph_ids())
 
@@ -103,17 +94,9 @@ class Preprocessor:
         return data
 
     def process(self, message: Dict[str, Any], dataloader: Any = None):
-        """
-        Verarbeitet eine vom network_gateway empfangene Nachricht:
-        - Extrahiert relevante Status-Keys
-        - Lädt den passenden Graphen anhand der 'id' (beim ersten Mal) bzw. nutzt
-          ein gecachtes PyG-Template mit fester Struktur
-        - Setzt pro Schritt die dynamischen ``global_features`` aus der Nachricht
-        - Sendet die aufbereiteten Daten optional an den Dataloader
-        """
         graph_id = message.get("id")
         if graph_id is None:
-            raise ValueError("Nachricht enthält keine 'id', Graph kann nicht geladen werden.")
+            raise ValueError("Message has no 'id'; cannot load graph.")
 
         extracted_features = {
             key: finite_float(message.get(key))
@@ -132,12 +115,8 @@ class Preprocessor:
         data.state_id = message.get("stateId")
         data.network_job_id = message.get("networkJobId")
 
-        # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:
             from gnn.shared.utils.graph_utils import slice_active_features
             data.x = slice_active_features(data.x, self.active_features)
-
-        if dataloader is not None:
-            pass
 
         return data, extracted_features

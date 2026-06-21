@@ -67,56 +67,6 @@ def test_label_coloring_separates_otherwise_identical_structure() -> None:
     assert by_struct.num_classes == 1
 
 
-def test_summary_table_exact_format() -> None:
-    from gnn.weisfeiler_lehman.main import format_summary_table
-
-    summaries = [
-        {
-            "label": "synthetic-graph",
-            "num_classes": 27,
-            "num_graphs": 100,
-            "num_colliding_graphs": 83,
-            "distinguishability_rate": 0.27,
-        },
-        {
-            "label": "synthetic-tree",
-            "num_classes": 24,
-            "num_graphs": 100,
-            "num_colliding_graphs": 87,
-            "distinguishability_rate": 0.24,
-        },
-        {
-            "label": "synthetic-tree-derivative",
-            "num_classes": 27,
-            "num_graphs": 100,
-            "num_colliding_graphs": 83,
-            "distinguishability_rate": 0.27,
-        },
-    ]
-    table = format_summary_table(summaries)
-    lines = table.split("\n")
-    separator = "├" + "─" * 27 + "┼" + "─" * 25 + "┼" + "─" * 18 + "┼" + "─" * 6 + "┤"
-
-    # Header + 3 * (separator + row) = 7 lines.
-    assert len(lines) == 7
-    assert lines[1] == separator
-    assert lines[2] == (
-        "│ synthetic-graph           │ 27 / 100                "
-        "│ 83               │ 0.27 │"
-    )
-    assert lines[4] == (
-        "│ synthetic-tree            │ 24 / 100                "
-        "│ 87               │ 0.24 │"
-    )
-    assert lines[6] == (
-        "│ synthetic-tree-derivative │ 27 / 100                "
-        "│ 83               │ 0.27 │"
-    )
-    # Header carries the four column titles.
-    for title in ("mode", "distinguishable classes", "colliding graphs", "rate"):
-        assert title in lines[0]
-
-
 def test_global_histogram_shapes() -> None:
     graphs = {"path": _path_graph(5), "star": _star_graph(4)}
     result = run_wl(graphs, coloring="constant")

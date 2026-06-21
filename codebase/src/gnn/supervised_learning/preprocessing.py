@@ -92,7 +92,6 @@ class GraphPipeline:
         self.add_kappa = add_kappa
         self.add_virtual_supernode = add_virtual_supernode
 
-        # Use unified_loader or get/create singleton instance
         if unified_loader is not None:
             self.unified_loader = unified_loader
         else:
@@ -157,42 +156,35 @@ class GraphPipeline:
     ):
         self._validate_edge_features()
         if self.synthetic:
-            # --- Synthetic Mode ---
             if self.synthetic_unified_loader is None:
                 raise ValueError("Synthetic mode is active, but synthetic_dataset_name is not provided.")
-            
-            # 1. Curated dataset as validation (test) data
+
             df_curated = self.unified_loader.dataset_loader.data
             kappa_map_curated = self.unified_loader.build_kappa_map() if self.add_kappa else None
             graphs_curated = self.unified_loader.load_all(kappa_map=kappa_map_curated)
             graph_ids_curated = set(graphs_curated.keys())
             test_df = df_curated[df_curated["problem_id"].isin(graph_ids_curated)].copy()
 
-            # 2. Synthetic dataset as training data
             df_synth = self.synthetic_unified_loader.dataset_loader.data
             kappa_map_synth = self.synthetic_unified_loader.build_kappa_map() if self.add_kappa else None
             graphs_synth = self.synthetic_unified_loader.load_all(kappa_map=kappa_map_synth)
             graph_ids_synth = set(graphs_synth.keys())
             train_df = df_synth[df_synth["problem_id"].isin(graph_ids_synth)].copy()
             
-            # Ensure "faster_algorithm" labels are tagged
             fe_curated = FeatureEngineering(self.unified_loader.dataset_loader)
             fe_curated._tag_faster_algorithm()
-            
+
             fe_synth = FeatureEngineering(self.synthetic_unified_loader.dataset_loader)
             fe_synth._tag_faster_algorithm()
-            
-            # Refresh data frames with newly tagged labels
+
             test_df = df_curated[df_curated["problem_id"].isin(graph_ids_curated)].copy()
             train_df = df_synth[df_synth["problem_id"].isin(graph_ids_synth)].copy()
-            
-            # Split synthetic dataset by problem_id
+
             synthetic_train_df, synthetic_test_df, _ = _pid_split(
                 train_df, test_size, self.seed, stratify
             )
             self.class_weights, class_counts = _compute_class_weights(synthetic_train_df)
 
-            # Assign datasets
             pin = torch.cuda.is_available()
             self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, active_features=self.active_features)
             self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, active_features=self.active_features)
@@ -211,7 +203,6 @@ class GraphPipeline:
             
             return self.train_loader, self.test_loader, self.class_weights
         else:
-            # --- Standard Mode ---
             df = self.loader.data
             graph_ids = set(self.graphs.keys())
             df_matched = df[df["problem_id"].isin(graph_ids)].copy()
@@ -230,10 +221,10 @@ class GraphPipeline:
             w0, w1 = self.class_weights.tolist()
             n_pids = len(df_matched["problem_id"].unique())
             print("-" * 40)
-            print(f"IDs gesamt: {n_pids} (Train-IDs: {len(train_df['problem_id'].unique())}, Test-IDs: {len(test_df['problem_id'].unique())})")
-            print(f"Runs gesamt: {len(df_matched)} (Train: {len(self.train_dataset)}, Test: {len(self.test_dataset)})")
-            print(f"Trainings-Verteilung: 0: {class_counts.get(0, 0)}, 1: {class_counts.get(1, 0)}")
-            print(f"Berechnete Gewichte: 0: {w0:.4f}, 1: {w1:.4f}")
+            print(f"Total IDs: {n_pids} (Train: {len(train_df['problem_id'].unique())}, Test: {len(test_df['problem_id'].unique())})")
+            print(f"Total runs: {len(df_matched)} (Train: {len(self.train_dataset)}, Test: {len(self.test_dataset)})")
+            print(f"Train class distribution: 0: {class_counts.get(0, 0)}, 1: {class_counts.get(1, 0)}")
+            print(f"Class weights: 0: {w0:.4f}, 1: {w1:.4f}")
             print("-" * 40)
 
             return self.train_loader, self.test_loader, self.class_weights
@@ -327,7 +318,6 @@ class ProblemRunDataset(Dataset):
         )
         data.pid = pid
 
-        # Slice active features if selection is active
         if self.active_features is not None and data.x is not None:
             data.x = slice_active_features(data.x, self.active_features)
 

@@ -110,7 +110,6 @@ def evaluate(model, loader):
     pred_cat = torch.cat(all_pred_score)
     metrics = compute_binary_metrics(true_cat, pred_cat)
 
-    # Compute average dirichlet energy
     from gnn.shared.utils.graph_utils import compute_normalized_dirichlet_energy
     energies = []
     for x, edge_index, edge_attr in mp_embeddings:
@@ -590,10 +589,10 @@ def print_dataset_distribution(dataset_name: str, df: pd.DataFrame):
     perc_newton = (newton_count / total) * 100 if total > 0 else 0.0
     perc_gmgf = (gmgf_count / total) * 100 if total > 0 else 0.0
 
-    print(f"--- Verteilung für Dataset: {dataset_name} ---")
-    print(f"Gesamtanzahl Samples: {total}")
-    print(f"Klasse 1 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
-    print(f"Klasse 0 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
+    print(f"--- Class distribution for dataset: {dataset_name} ---")
+    print(f"Total samples: {total}")
+    print(f"Class 1 (Newton): {newton_count:>5} ({perc_newton:>5.2f}%)")
+    print(f"Class 0 (gMGF):   {gmgf_count:>5} ({perc_gmgf:>5.2f}%)")
     print("-" * (30 + len(dataset_name)))
 
 

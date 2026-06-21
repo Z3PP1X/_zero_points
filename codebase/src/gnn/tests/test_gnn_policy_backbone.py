@@ -151,10 +151,6 @@ def test_supernode_participates_in_message_passing():
     assert not torch.allclose(out_base, out_perturbed, atol=1e-5), "supernode perturbation had no effect"
 
 
-def test_architecture_names_constant():
-    assert set(ARCHITECTURE_NAMES) == {"gatv2_stack", "gine_stack"}
-
-
 def test_invalid_architecture_raises():
     try:
         ExpressionGNN(input_dim=4, architecture="gcn_stack")

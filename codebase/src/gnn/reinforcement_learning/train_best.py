@@ -98,7 +98,6 @@ class TrainingCallback(BaseCallback):
             best_ep_reward = float(np.max(rewards))
             worst_ep_reward = float(np.min(rewards))
 
-            # Log metrics to MLflow
             mlflow.log_metric("mean_episode_reward", mean_reward, step=self.num_timesteps)
             mlflow.log_metric("best_episode_reward", best_ep_reward, step=self.num_timesteps)
             mlflow.log_metric("worst_episode_reward", worst_ep_reward, step=self.num_timesteps)
@@ -132,7 +131,6 @@ class TrainingCallback(BaseCallback):
                 f"Latency: {latency_text}"
             )
 
-            # Check and save the best model
             if mean_reward > self.best_mean_reward:
                 self.best_mean_reward = mean_reward
                 best_model_path = os.path.join(self.save_path, f"{self.model_name}_best.zip")
@@ -145,7 +143,6 @@ class TrainingCallback(BaseCallback):
         else:
             print(f"[Step {self.num_timesteps:>6}] No completed episodes in buffer yet...")
 
-        # Save regular checkpoints (e.g. every 10k steps)
         if self.num_timesteps % (self.check_freq * 10) == 0:
             checkpoint_path = os.path.join(self.save_path, f"{self.model_name}_step_{self.num_timesteps}.zip")
             self.model.save(checkpoint_path)
@@ -388,7 +385,6 @@ def main() -> None:
         len(active_features) if active_features is not None else NATIVE_NODE_FEATURE_COUNT
     )
 
-    # 1. Load and parse hyperparameter configuration
     try:
         best_params = load_best_trial_params(args.db, args.study_name)
         trial_config = build_trial_configuration(
@@ -423,10 +419,8 @@ def main() -> None:
         print("[Dry Run] Hyperparameters parsed successfully. Exiting without training.")
         sys.exit(0)
 
-    # Set up random seeds
     set_random_seeds(trial_config.ppo.random_seed)
 
-    # 2. Initialize Gateway, Monitor, and Preprocessor
     mlflow.set_experiment(f"GNN_RL_Full_Training_{experiment}")
 
     traffic_monitor = GatewayTrafficMonitor(
@@ -462,7 +456,6 @@ def main() -> None:
     print("[Pipeline] Sending fresh environment control signal...")
     gateway.send_control(CONTROL_FRESH_TRIAL_ENV)
 
-    # Define build components
     reward_calculator = RewardCalculator(
         basis_reward=trial_config.reward.basis_reward,
         gamma=trial_config.reward.reward_gamma,
@@ -475,7 +468,6 @@ def main() -> None:
         solver_wrong_slow_coef=trial_config.reward.solver_wrong_slow_coef,
     )
 
-    # 3. Create VecEnv
     env = build_mathematica_training_env(
         gateway=gateway,
         preprocessor=preprocessor,
@@ -485,7 +477,6 @@ def main() -> None:
         max_edges=1000,
     )
 
-    # 4. Create Custom GNN Policy Backbone
     gnn_model = ExpressionGNN(
         input_dim=trial_config.policy.layout.padded_node_feature_count,
         hidden_dim=trial_config.policy.hidden_dim,
@@ -498,7 +489,6 @@ def main() -> None:
         classify=False,
     )
 
-    # Attempt torch compile if requested
     if not no_torch_compile:
         from gnn.shared.models.gnn_backbones import maybe_torch_compile
         gnn_model = maybe_torch_compile(gnn_model, enabled=True)
@@ -511,7 +501,6 @@ def main() -> None:
         },
     }
 
-    # 5. Build PPO model
     model = PPO(
         "MultiInputPolicy",
         env,

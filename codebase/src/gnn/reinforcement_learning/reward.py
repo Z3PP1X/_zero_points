@@ -74,7 +74,7 @@ class RewardCalculator:
     ) -> float:
         if delta_time > 0 and time_benchmark > 0:
             raw = math.log(time_benchmark / delta_time)
-            return max(min(raw, 2.0), -2.0)  # Festes Intervall [-2, 2]
+            return max(min(raw, 2.0), -2.0)
         return -self.time_bad_penalty
 
     def _time_benchmark_for_step(
