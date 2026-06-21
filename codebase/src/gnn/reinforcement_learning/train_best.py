@@ -228,8 +228,6 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
         hidden_dim=int(params["hidden_dim"]),
         num_layers=int(params["num_gnn_layers"]),
         heads=int(params["heads"]),
-        variant=params.get("gnn_variant", "legacy"),
-        pool_type=params.get("gnn_pool_type", "topk"),
         layout=layout,
     )
     

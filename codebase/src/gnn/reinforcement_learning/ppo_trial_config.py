@@ -35,8 +35,6 @@ class GnnPolicySpec:
     num_layers: int
     heads: int
     layout: FeatureLayout
-    variant: str = "legacy"
-    pool_type: str = "topk"
 
 
 @dataclass(frozen=True)

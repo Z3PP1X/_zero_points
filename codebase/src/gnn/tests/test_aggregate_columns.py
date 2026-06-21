@@ -23,11 +23,8 @@ def test_run_config_columns_from_snapshot_all_known(tmp_path):
             "layer_type": "gatv2conv",
             "layers_mp": 3,
             "dim_inner": 256,
-            "variant": "pooling",
-            "pool_type": "diffpool",
-            "aux_loss_weight": 1.0,
+            "dropout": 0.2,
         },
-        "expression_graph": {"mode": "graph", "edge_direction": "top_down"},
         "optim": {"base_lr": 0.0001},
         "model": {"graph_pooling": "mean"},
     }
@@ -35,17 +32,14 @@ def test_run_config_columns_from_snapshot_all_known(tmp_path):
 
     cols = _run_config_columns(str(run_dir), run_dir.name, axes=None)
     assert cols["layer_type"] == "gatv2conv"
-    assert cols["variant"] == "pooling"
-    assert cols["pool_type"] == "diffpool"
-    assert cols["mode"] == "graph"
-    assert cols["edge_direction"] == "top_down"
+    assert cols["dim_inner"] == 256
+    assert cols["graph_pooling"] == "mean"
     assert cols["run_name"] == "run_20260613_120000_000"
 
 
 def test_run_config_columns_restricted_to_swept_axes(tmp_path):
     cfg = {
-        "gnn": {"layer_type": "gatv2conv", "layers_mp": 2, "variant": "legacy"},
-        "expression_graph": {"mode": "graph"},
+        "gnn": {"layer_type": "gatv2conv", "layers_mp": 2},
     }
     run_dir = _make_run(tmp_path, "run_t_000", cfg)
     axes = {"layers_mp": "gnn.layers_mp"}  # only this axis was swept

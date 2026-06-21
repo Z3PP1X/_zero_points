@@ -10,8 +10,6 @@ current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 # Derived from the shared node schema so it stays in sync with feature changes automatically.
 NATIVE_NODE_FEATURE_COUNT = len(NODE_FEATURE_SCHEMA)
-# Raw edge-feature count from the shared schema — the backbone coalesces edge_attr to this
-# width before passing it into the TwoWayFeatureEncoder.
 NATIVE_EDGE_FEATURE_COUNT = len(EDGE_FEATURE_SCHEMA)
 # 8 global state scalars (solver removed — it is the network's action, not a feature).
 NATIVE_GLOBAL_FEATURE_COUNT = 8
@@ -19,24 +17,9 @@ PADDED_NODE_FEATURE_COUNT = NATIVE_NODE_FEATURE_COUNT
 PADDED_EDGE_FEATURE_COUNT = NATIVE_EDGE_FEATURE_COUNT
 PADDED_GLOBAL_FEATURE_COUNT = NATIVE_GLOBAL_FEATURE_COUNT
 
-# These are ENCODER OUTPUT dimensions (not raw schema widths).
-# The TwoWayFeatureEncoder maps NATIVE_*_FEATURE_COUNT raw columns → *_INPUT_DIM output,
-# which is what the GATv2/GINE conv layers receive as their *_dim argument.
 NODE_INPUT_DIM_CHOICES = (4, 5)
 EDGE_INPUT_DIM_CHOICES = (4, 8)
 GLOBAL_INPUT_DIM_CHOICES = (6, 8)
-
-# Structural variant of the GNN backbone (orthogonal to the layer-type architecture)
-# and the hierarchical pooling operator used by the non-legacy variants.
-GNN_VARIANT_CHOICES = (
-    "legacy",
-    "pooling",
-    "pooling_skip",
-)
-POOL_TYPE_CHOICES = (
-    "topk",
-    "diffpool",
-)
 
 # Suffix for Optuna study/DB names. Bump (or change choices) when categorical search
 # spaces change so load_if_exists does not reuse incompatible distributions.
@@ -44,7 +27,6 @@ OPTUNA_SEARCH_SPACE_SUFFIX = (
     f"n{''.join(str(choice) for choice in NODE_INPUT_DIM_CHOICES)}"
     f"e{''.join(str(choice) for choice in EDGE_INPUT_DIM_CHOICES)}"
     f"g{''.join(str(choice) for choice in GLOBAL_INPUT_DIM_CHOICES)}"
-    f"v{len(GNN_VARIANT_CHOICES)}p{len(POOL_TYPE_CHOICES)}"
     f"_{current_timestamp}"
 )
 

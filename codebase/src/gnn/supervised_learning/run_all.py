@@ -216,7 +216,7 @@ def main():
         "--stage",
         type=str,
         default=None,
-        help="Architecture evolution stage (number 1-6 or folder name); selects "
+        help="Architecture evolution stage (number 1-4 or folder name); selects "
              "config_settings/<stage>/{base_config.yaml,grid.yaml}. See --list-stages.",
     )
     parser.add_argument(

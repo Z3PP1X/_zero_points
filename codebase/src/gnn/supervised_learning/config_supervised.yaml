@@ -27,29 +27,11 @@ dataset:
 
 expression_graph:
   mode: graph
-  edge_direction: top_down  # top_down | bottom_up | bidirectional
-  heterogeneous: false  # use HeteroData (node types: global/operator/root) instead of homogeneous Data (CLI: --heterogeneous)
-  add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
-  add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
+  edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/dataset_joined
-
-  # Node/edge feature classes. Each category takes the same uniform form:
-  #   true  -> load all members (default)   false -> load none   [a, b] -> only these
-  # Classes: node | topology | positional | edge
-  # CLI overrides: --feature-groups, --node-features, --topology-features,
-  #                --positional-encoding, --edge-features
-  features:
-    node: true        # or e.g. [node_type, label_id, value, has_value, virtual_current_x_val, ...]
-    topology: true    # or e.g. [depth, height, subtree_size, out_degree, betweenness_centrality]
-    # Anchor positional encoding: 1/(1+hops) to nearest operator anchor per semantic group.
-    # Members: anchor_additive, anchor_scaling, anchor_periodic, anchor_exponential,
-    # anchor_transcendental. true = all, false = none. INCOMPATIBLE with add_virtual_supernode.
-    positional: true
-    edge: true        # child_index, direction, relation_type, edge_betweenness_centrality
-                      # (edge: a subset is accepted but currently enables all edge columns)
-
-  # Optional explicit override (disables grouped toggles above when non-empty)
+  # Comma-separated list of NODE_FEATURE_SCHEMA column names to activate.
+  # Empty = all 28 features. Use stage base_configs for fixed per-stage subsets.
   active_features: ""
 
 # --- Training Loop Section ---
@@ -73,31 +55,19 @@ train:
 
 # --- Model Structure ---
 model:
-  # expression_classifier routes through the shared TestGraphNetwork backbone, exposing the
-  # gnn.variant (legacy/pooling/pooling_skip) and gnn.pool_type (topk/diffpool) axes below.
-  # Set back to `gnn` to use PyG's stock GNN (layers_pre_mp/layers_post_mp/stage_type take
-  # effect then).
-  type: expression_classifier
+  type: expression_classifier       # backed by ExpressionGNN (classify=True)
   loss_fun: weighted_cross_entropy
   edge_decoding: dot
-  graph_pooling: add               # graph-level readout (mean|add|max), wired into the custom
-                                   # backbone; add/sum keeps node-count signal (more expressive)
+  graph_pooling: mean               # graph-level readout: mean | add | max
 
-# --- GNN Backbone Architecture (gatv2conv | gineconv | gcnconv | ginconv) ---
+# --- GNN Backbone (ExpressionGNN via expression_classifier) ---
 gnn:
-  layers_pre_mp: 1                  # stock-GNN only (custom backbone uses its own node encoder)
-  layers_mp: 3                      # MP depth — wired into the custom backbone (TestGraphNetwork)
-  layers_post_mp: 2                 # stock-GNN only (custom backbone uses a fixed 2-layer head)
+  layers_mp: 3                      # message-passing depth
   dim_inner: 128                    # hidden width
-  layer_type: gatv2conv             # gatv2conv/gineconv use edge features; gcnconv/ginconv do not
-  stage_type: skipsum               # stock-GNN only (residual mode); custom backbone has no residual wiring
-  act: gelu                         # activation — wired into the custom backbone (was hardcoded prelu)
-  dropout: 0.2                      # dropout — wired into the custom backbone head
-  att_heads: 4                      # GATv2 attention heads
-  # --- expression_classifier pooling/skip ablation axes (see grid.yaml) ---
-  variant: legacy                   # legacy | standard | pooling | pooling_skip
-  pool_type: topk                   # topk | diffpool (only used by pooling* variants)
-  aux_loss_weight: 1.0              # weight of the DiffPool link+entropy auxiliary loss
+  layer_type: gatv2conv             # gatv2conv | gineconv
+  act: prelu
+  dropout: 0.2
+  att_heads: 4
 
 # --- Optimizations ---
 optim:

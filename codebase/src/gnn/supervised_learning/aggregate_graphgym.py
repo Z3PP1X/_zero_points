@@ -263,13 +263,8 @@ CONFIG_COLUMN_PATHS = {
     "dim_inner": "gnn.dim_inner",
     "dropout": "gnn.dropout",
     "act": "gnn.act",
-    "variant": "gnn.variant",
-    "pool_type": "gnn.pool_type",
-    "aux_loss_weight": "gnn.aux_loss_weight",
     "graph_pooling": "model.graph_pooling",
     "base_lr": "optim.base_lr",
-    "mode": "expression_graph.mode",
-    "edge_direction": "expression_graph.edge_direction",
 }
 
 # Columns that identify a run but are not hyperparameters; excluded from sort/grouping.

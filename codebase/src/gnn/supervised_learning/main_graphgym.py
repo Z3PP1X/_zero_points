@@ -56,14 +56,10 @@ def dump_summary_cfg(cfg, out_dir: Path) -> None:
             "layers_pre_mp": cfg.gnn.layers_pre_mp,
             "layers_post_mp": cfg.gnn.layers_post_mp,
             "dropout": cfg.gnn.dropout,
-            "pool_type": cfg.gnn.pool_type,
         },
         "graph": {
-            "heterogeneous": eg.heterogeneous,
             "mode": eg.mode,
             "edge_direction": eg.edge_direction,
-            "add_kappa": eg.add_kappa,
-            "add_virtual_supernode": eg.add_virtual_supernode,
         },
         "features": {
             "active_feature_names": active,

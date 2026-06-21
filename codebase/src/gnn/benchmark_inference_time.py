@@ -185,7 +185,7 @@ def _load_kappa_map(csv_path: Path) -> dict[str, float]:
 def _build_kappa_maps() -> tuple[dict[str, float], dict[str, float]]:
     """Return (real_kappa_map, synth_kappa_map) loaded from benchmark CSVs."""
     real_csv = _REPO / "datasets" / "run_20260603_123013" / "parallel_benchmark_results.csv"
-    synth_csv = _REPO / "datasets" / "run_20260604_154509" / "parallel_benchmark_results.csv"
+    synth_csv = _REPO / "datasets" / "run_20260604_154509" / "dataset_joined.csv"
     return _load_kappa_map(real_csv), _load_kappa_map(synth_csv)
 
 
