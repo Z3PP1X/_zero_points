@@ -1,5 +1,5 @@
 # =====================================================================================
-# STUFE 1 — Reiner AST (14 Features: node_type + label)
+# STUFE 1 — Reiner AST (19 Features: node_type + label)
 # =====================================================================================
 # Ausgangspunkt: nur der Funktionsbaum f als reine Baumstruktur. Keine Ableitungen,
 # keine topologischen Features, keine Anchor-PE, kein Root-Coloring.
@@ -7,7 +7,7 @@
 #
 # FIX:
 #   model.type=expression_classifier, gnn.layer_type=gatv2conv,
-#   active_features = node_type_* (4) + label_* (10) = 14 Features
+#   active_features = node_type_* (4) + label_* (15) = 19 Features
 #
 # EINSTELLBAR (siehe grid.yaml):
 #   gnn.dim_inner, gnn.layers_mp, gnn.dropout
@@ -31,7 +31,7 @@ expression_graph:
   edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/dataset_joined
-  active_features: "node_type_global,node_type_operator,node_type_root,node_type_supernode,label_UNK,label_CONSTANT,label_GLOBAL,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan"
+  active_features: "node_type_global,node_type_operator,node_type_root,node_type_supernode,label_UNK,label_CONSTANT,label_GLOBAL,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
 
 train:
   mode: custom

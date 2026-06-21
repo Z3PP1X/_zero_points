@@ -1,13 +1,13 @@
 # =====================================================================================
-# STUFE 3 — Vollständiger Graph (28 Features: alle NODE_FEATURE_SCHEMA-Spalten)
+# STUFE 3 — Vollständiger Graph (33 Features: alle NODE_FEATURE_SCHEMA-Spalten)
 # =====================================================================================
-# Alle verfügbaren Features aktiv: node_type (4) + root_color (5) + label (10)
-# + Topologie (2) + Histogramm (4) + Anchor-PE (3) = 28 Features.
+# Alle verfügbaren Features aktiv: node_type (4) + root_color (5) + label (15)
+# + Topologie (2) + Histogramm (4) + Anchor-PE (3) = 33 Features.
 # Leeres active_features = alle Spalten aus NODE_FEATURE_SCHEMA werden genutzt.
 #
 # FIX:
 #   model.type=expression_classifier, gnn.layer_type=gatv2conv,
-#   active_features = "" (alle 28 Features)
+#   active_features = "" (alle 33 Features)
 #
 # EINSTELLBAR (siehe grid.yaml):
 #   gnn.dim_inner, gnn.layers_mp, gnn.dropout, model.graph_pooling
@@ -31,7 +31,7 @@ expression_graph:
   edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/dataset_joined
-  active_features: ""  # leer = alle 28 Features aus NODE_FEATURE_SCHEMA
+  active_features: ""  # leer = alle 33 Features aus NODE_FEATURE_SCHEMA
 
 train:
   mode: custom
@@ -57,7 +57,7 @@ model:
 
 gnn:
   layers_mp: 3
-  dim_inner: 128
+  dim_inner: 133
   layer_type: gatv2conv
   act: prelu
   dropout: 0.2

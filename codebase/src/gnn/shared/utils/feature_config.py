@@ -35,6 +35,11 @@ NODE_FEATURES: tuple[str, ...] = (
     "label_Sin",
     "label_Cos",
     "label_Tan",
+    "label_Plus",
+    "label_Minus",
+    "label_Times",
+    "label_Divide",
+    "label_Power",
 )
 
 TOPOLOGY_FEATURES: tuple[str, ...] = (
@@ -111,8 +116,6 @@ def validate_positional_encodings(encodings: Iterable[str]) -> list[str]:
             f"expected subset of {list(POSITIONAL_ENCODING_CHOICES)}"
         )
     return encodings_list
-
-
 
 CATEGORY_MEMBERS: dict[str, tuple[str, ...]] = {
     "node": NODE_FEATURES,
@@ -230,11 +233,7 @@ def default_feature_selection() -> FeatureSelection:
 
 
 class PositionalSupernodeConflictError(ValueError):
-    """Raised when anchor positional encoding is combined with a virtual supernode.
-        Anchor positional encoding is defined as the shortest distance from a 
-        node to a specific anchor group. A virtual node would set this distance to 2 for all of them, 
-        rendering the feature obsolete.
-    """
+    pass
 
 
 def validate_positional_supernode_compatibility(

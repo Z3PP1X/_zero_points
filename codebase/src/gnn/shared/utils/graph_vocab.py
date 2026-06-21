@@ -13,6 +13,11 @@ CANONICAL_LABELS: tuple[str, ...] = (
     "Sin",
     "Cos",
     "Tan",
+    "Plus",
+    "Minus",
+    "Times",
+    "Divide",
+    "Power",
 )
 CANONICAL_LABEL_VOCAB: dict[str, int] = {label: idx for idx, label in enumerate(CANONICAL_LABELS)}
 NUM_CANONICAL_LABELS: int = len(CANONICAL_LABELS)
@@ -29,6 +34,11 @@ LABEL_ONEHOT_NAMES: tuple[str, ...] = (
     "label_Sin",
     "label_Cos",
     "label_Tan",
+    "label_Plus",
+    "label_Minus",
+    "label_Times",
+    "label_Divide",
+    "label_Power",
 )
 
 # Anchor-based positional encoding. Reduced to 3 semantic groups.
@@ -77,7 +87,7 @@ ROOT_COLOR_ONEHOT_DIM: int = NUM_ROOT_COLORS  # 5
 SUPERNODE_NODE_TYPE: int = 5
 SUPERNODE_NODE_ID: str = "virtual_supernode"
 
-# 28-column one-hot node feature schema.
+# 33-column one-hot node feature schema.
 NODE_FEATURE_SCHEMA: list[str] = [
     # node_type one-hot (4 values: global=0, operator=1, root=2, supernode=5)
     "node_type_global",
@@ -90,7 +100,7 @@ NODE_FEATURE_SCHEMA: list[str] = [
     "root_color_d1",
     "root_color_d2",
     "root_color_kappa",
-    # label one-hot (10 entries matching CANONICAL_LABELS)
+    # label one-hot (15 entries matching CANONICAL_LABELS)
     "label_UNK",
     "label_CONSTANT",
     "label_GLOBAL",
@@ -101,6 +111,11 @@ NODE_FEATURE_SCHEMA: list[str] = [
     "label_Sin",
     "label_Cos",
     "label_Tan",
+    "label_Plus",
+    "label_Minus",
+    "label_Times",
+    "label_Divide",
+    "label_Power",
     # topology (continuous)
     "subtree_size",
     "subtree_depth",
