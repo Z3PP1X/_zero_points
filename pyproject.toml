@@ -10,6 +10,7 @@ target-version = 'py312'
 testpaths = ["codebase/src/gnn/tests"]
 pythonpath = [
     "codebase/src",
+    "codebase/src/gnn",
     "codebase/src/gnn/shared/utils",
     "codebase/src/gnn/shared/models",
     "codebase/src/gnn/reinforcement_learning",

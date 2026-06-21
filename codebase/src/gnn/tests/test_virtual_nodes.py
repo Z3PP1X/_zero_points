@@ -7,7 +7,7 @@ from pathlib import Path
 import networkx as nx
 
 from graph_utils import ExpressionGraphConverter, NODE_FEATURE_SCHEMA
-from feature_layout import NATIVE_NODE_FEATURE_COUNT
+from feature_layout import NATIVE_GLOBAL_FEATURE_COUNT, NATIVE_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
 
@@ -76,7 +76,7 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
 
     assert "f_root" not in data_graph.node_ids
     assert data_graph.num_nodes == 2   # global + f1
-    assert data_graph.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
+    assert data_graph.x.shape[1] == NATIVE_NODE_FEATURE_COUNT + NATIVE_GLOBAL_FEATURE_COUNT
     idx_f1 = data_graph.node_ids.index("f1")
     assert data_graph.x[idx_f1, _NT_FUNC].item() == 1.0   # node_type_function (x)
     assert data_graph.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
@@ -159,4 +159,4 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     }
 
     data, extracted = preprocessor.process(message)
-    assert data.x.shape[1] == 3
+    assert data.x.shape[1] == 3 + NATIVE_GLOBAL_FEATURE_COUNT
