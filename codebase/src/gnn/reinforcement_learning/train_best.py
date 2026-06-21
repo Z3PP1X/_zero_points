@@ -486,12 +486,14 @@ def main() -> None:
         from gnn.shared.models.gnn_backbones import maybe_torch_compile
         gnn_model = maybe_torch_compile(gnn_model, enabled=True)
 
+    _h = trial_config.policy.hidden_dim
     policy_kwargs = {
         "features_extractor_class": CustomGNNFeaturesExtractor,
         "features_extractor_kwargs": {
             "gnn_model": gnn_model,
-            "features_dim": trial_config.policy.hidden_dim,
+            "features_dim": _h,
         },
+        "net_arch": dict(pi=[_h, _h], vf=[_h, _h]),
     }
 
     model = PPO(

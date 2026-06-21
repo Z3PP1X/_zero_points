@@ -238,6 +238,8 @@ class PpoOptunaWorkflow:
                 "gnn_model": gnn_model,
                 "features_dim": policy.hidden_dim,
             },
+            "net_arch": dict(pi=[policy.hidden_dim, policy.hidden_dim],
+                             vf=[policy.hidden_dim, policy.hidden_dim]),
         }
         return PPO(
             "MultiInputPolicy",
