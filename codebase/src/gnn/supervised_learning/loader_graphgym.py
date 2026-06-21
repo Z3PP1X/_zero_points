@@ -243,8 +243,7 @@ class ExpressionClassifierNetwork(torch.nn.Module):
 
     A custom network receives the RAW ``batch.x`` (the ``ExpressionNodeEncoder``
     is never auto-applied by GraphGym for custom network types). ExpressionGNN
-    does its own LayerNorm→Linear node encoding. GraphGym batches carry no
-    graph-level global features, so global_dim=0.
+    does its own LayerNorm→Linear node encoding.
     """
 
     def __init__(self, dim_in, dim_out, **kwargs):
@@ -256,7 +255,6 @@ class ExpressionClassifierNetwork(torch.nn.Module):
         self.net = ExpressionGNN(
             input_dim=(len(names) or dim_in),
             hidden_dim=cfg.gnn.dim_inner,
-            global_dim=0,  # GraphGym batches carry no graph-level global features
             output_dim=dim_out,
             activation=cfg.gnn.act,
             num_layers=cfg.gnn.layers_mp,
@@ -270,7 +268,6 @@ class ExpressionClassifierNetwork(torch.nn.Module):
             batch.x,
             batch.edge_index,
             batch.batch,
-            global_features=None,
         )
         if logits.size(-1) == 1:  # match the stock single-logit BCE path
             logits = logits.view(-1)

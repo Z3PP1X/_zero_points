@@ -226,8 +226,6 @@ class PpoOptunaWorkflow:
         gnn_model = ExpressionGNN(
             input_dim=policy.layout.padded_node_feature_count,
             hidden_dim=policy.hidden_dim,
-            global_dim=policy.layout.padded_global_feature_count,
-            global_hidden_dim=policy.layout.global_input_dim,
             activation=policy.activation,
             num_layers=policy.num_layers,
             classify=False,

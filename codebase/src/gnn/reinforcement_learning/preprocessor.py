@@ -8,6 +8,7 @@ from torch_geometric.data import Data
 
 from gnn.shared.utils.graph_loader import GraphDataLoader
 from gnn.reinforcement_learning.feature_layout import (
+    NATIVE_GLOBAL_FEATURE_COUNT,
     NATIVE_NODE_FEATURE_COUNT,
 )
 from gnn.reinforcement_learning.observation_sanitize import finite_float, sanitize_torch_features
@@ -64,9 +65,8 @@ class Preprocessor:
 
     @property
     def padded_node_feature_count(self) -> int:
-        if self.active_features is not None:
-            return len(self.active_features)
-        return NATIVE_NODE_FEATURE_COUNT
+        structural = len(self.active_features) if self.active_features is not None else NATIVE_NODE_FEATURE_COUNT
+        return structural + NATIVE_GLOBAL_FEATURE_COUNT
 
     @property
     def known_problem_ids(self) -> FrozenSet[str]:
@@ -105,12 +105,6 @@ class Preprocessor:
 
         data = self._graph_template_for_problem_id(graph_id)
 
-        feat_list = [extracted_features[key] for key in STATE_GLOBAL_FEATURE_KEYS]
-        # Raw (un-normalized) global features; the GlobalEncoder's learnable
-        # LayerNorm + Linear handle scaling. No hand-crafted sign-log transform.
-        raw_tensor = torch.tensor(feat_list, dtype=torch.float).unsqueeze(0)
-        data.global_features = sanitize_torch_features(raw_tensor)
-
         data.uuid = message.get("uuid")
         data.state_id = message.get("stateId")
         data.network_job_id = message.get("networkJobId")
@@ -118,5 +112,14 @@ class Preprocessor:
         if self.active_features is not None and data.x is not None:
             from gnn.shared.utils.graph_utils import slice_active_features
             data.x = slice_active_features(data.x, self.active_features)
+
+        # Broadcast solver-state scalars to all nodes so they participate in
+        # message passing — same approach as SL, which encodes all information
+        # in node features rather than merging post-pooling.
+        feat_list = [extracted_features[key] for key in STATE_GLOBAL_FEATURE_KEYS]
+        state_vals = sanitize_torch_features(
+            torch.tensor(feat_list, dtype=torch.float).unsqueeze(0).expand(data.x.shape[0], -1)
+        )
+        data.x = torch.cat([data.x, state_vals], dim=1)
 
         return data, extracted_features

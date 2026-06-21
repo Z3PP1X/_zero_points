@@ -31,7 +31,6 @@ def _build_batch():
         ],
     }
     data = ExpressionGraphConverter().convert(raw, mode="graph")
-    data.global_features = torch.zeros((1, 5), dtype=torch.float)
     data.y = torch.tensor([1], dtype=torch.long)
     return next(iter(DataLoader([data], batch_size=1)))
 
@@ -50,7 +49,7 @@ def _run_with_probe(model):
     handle = _find_probe(model).register_forward_hook(hook)
     model.eval()
     with torch.no_grad():
-        model(batch.x, batch.edge_index, batch.batch, batch.global_features)
+        model(batch.x, batch.edge_index, batch.batch)
     handle.remove()
 
     assert captured, "probe forward hook never fired"
@@ -72,7 +71,6 @@ def test_probe_discoverable_in_backbone():
     model = ExpressionGNN(
         input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=16,
-        global_dim=5,
         classify=True,
     )
     assert isinstance(_find_probe(model), DirichletProbe)
@@ -83,7 +81,6 @@ def test_energy_measured():
     model = ExpressionGNN(
         input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=16,
-        global_dim=5,
         classify=True,
     )
     energy = _run_with_probe(model)

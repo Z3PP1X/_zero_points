@@ -4,7 +4,6 @@ import optuna
 
 from gnn.reinforcement_learning.feature_layout import (
     EDGE_INPUT_DIM_CHOICES,
-    GLOBAL_INPUT_DIM_CHOICES,
     GNN_ACTIVATION_CHOICES,
     GNN_LAYER_COUNT_CHOICES,
     HIDDEN_DIM_CHOICES,
@@ -53,9 +52,6 @@ def sample_trial_configuration(
         layout=FeatureLayout(
             node_input_dim=trial.suggest_categorical(
                 "node_input_dim", NODE_INPUT_DIM_CHOICES
-            ),
-            global_input_dim=trial.suggest_categorical(
-                "global_input_dim", GLOBAL_INPUT_DIM_CHOICES
             ),
             edge_input_dim=trial.suggest_categorical(
                 "edge_input_dim", EDGE_INPUT_DIM_CHOICES

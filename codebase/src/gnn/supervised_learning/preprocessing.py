@@ -233,10 +233,6 @@ class GraphPipeline:
         return len(NODE_FEATURE_SCHEMA)
 
     @property
-    def global_dim(self) -> int:
-        return 5
-
-    @property
     def edge_dim(self) -> int:
         return len(EDGE_FEATURE_SCHEMA)
 
@@ -298,17 +294,6 @@ class ProblemRunDataset(Dataset):
         data = self.base_graphs[pid].clone()
 
         data.y = torch.tensor([row["faster_algorithm"]], dtype=torch.long)
-        
-        # Parse inputs safely to support fraction strings (e.g. from Mathematica)
-        cx_val = parse_float(row.get("x0", 0.0))
-        yt_val = parse_float(row.get("y_target", 0.0))
-        fx_val = parse_float(row.get("fx", 0.0))
-        d1x_val = parse_float(row.get("d1x", 0.0))
-        d2x_val = parse_float(row.get("d2x", 0.0))
-
-        data.global_features = torch.tensor(
-            [cx_val, yt_val, fx_val, d1x_val, d2x_val], dtype=torch.float
-        )
         data.pid = pid
 
         if self.active_features is not None and data.x is not None:

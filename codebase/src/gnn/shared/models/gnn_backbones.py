@@ -109,20 +109,18 @@ class ExpressionGNN(nn.Module):
     Architecture:
         node_encoder: LayerNorm → Linear(input_dim, hidden_dim) → activation
         convs: num_layers × GINConv (2-layer MLP inside each conv, no edge features)
-        global encoder: LayerNorm(global_dim) → Linear(global_dim, global_hidden_dim) → act
-        tail: Linear(hidden_dim + global_hidden_dim, hidden_dim) → LayerNorm → act → Dropout
+        tail: Linear(hidden_dim, hidden_dim) → LayerNorm → act → Dropout
         head (classify=True only): Linear(hidden_dim, output_dim)
 
-    When global_dim=0 no global encoder is built; the tail input width is hidden_dim.
-    When global_features=None the global contribution is zero-padded.
+    All information must be encoded in node features before the forward pass.
+    In RL, solver-state scalars are concatenated to each node's feature vector
+    by the preprocessor so they participate in message passing.
     """
 
     def __init__(
         self,
         input_dim: int,
         hidden_dim: int = 128,
-        global_dim: int = 5,
-        global_hidden_dim: int = 8,
         output_dim: int = 2,
         num_layers: int = 3,
         dropout: float = 0.2,
@@ -135,7 +133,6 @@ class ExpressionGNN(nn.Module):
             raise ValueError(f"num_layers must be >= 1, got {num_layers}")
 
         self.hidden_dim = hidden_dim
-        self.global_dim = global_dim
         self.pool_fn = resolve_global_pool(graph_pooling)
 
         self.node_encoder = nn.Sequential(
@@ -153,16 +150,8 @@ class ExpressionGNN(nn.Module):
             [make_activation(activation) for _ in range(num_layers)]
         )
 
-        # Optional global feature encoder — only built when global_dim > 0.
-        _g_enc_dim = global_hidden_dim if global_dim > 0 else 0
-        self._g_enc_dim = _g_enc_dim
-        if global_dim > 0:
-            self.global_norm = nn.LayerNorm(global_dim)
-            self.global_encoder = nn.Linear(global_dim, global_hidden_dim)
-            self.global_activation = make_activation(activation)
-
         self.tail = nn.Sequential(
-            nn.Linear(hidden_dim + _g_enc_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             make_activation(activation),
             nn.Dropout(dropout),
@@ -170,23 +159,12 @@ class ExpressionGNN(nn.Module):
 
         self.head = nn.Linear(hidden_dim, output_dim) if classify else None
 
-    def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
+    def forward(self, x, edge_index, batch, edge_attr=None):
         x = self.node_encoder(x)
         for i, conv in enumerate(self.convs):
             x = self.layer_activations[i](conv(x, edge_index))
         self.dirichlet_probe(x, edge_index)
-        x_pooled = self.pool_fn(x, batch)
-
-        if self._g_enc_dim > 0:
-            if global_features is not None:
-                gf = global_features.view(x_pooled.size(0), -1)
-                g = self.global_activation(self.global_encoder(self.global_norm(gf)))
-            else:
-                g = x_pooled.new_zeros(x_pooled.size(0), self._g_enc_dim)
-            h = torch.cat([x_pooled, g], dim=-1)
-        else:
-            h = x_pooled
-
+        h = self.pool_fn(x, batch)
         out = self.tail(h)
         if self.head is not None:
             out = self.head(out)

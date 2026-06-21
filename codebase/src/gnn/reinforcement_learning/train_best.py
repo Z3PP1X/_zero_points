@@ -34,6 +34,7 @@ from gnn.reinforcement_learning.feature_layout import (
     FeatureLayout,
     EDGE_INPUT_DIM_CHOICES,
     NATIVE_NODE_FEATURE_COUNT,
+    NATIVE_GLOBAL_FEATURE_COUNT,
 )
 from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
@@ -211,7 +212,6 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
     
     layout = FeatureLayout(
         node_input_dim=int(params["node_input_dim"]),
-        global_input_dim=int(params["global_input_dim"]),
         edge_input_dim=int(params.get("edge_input_dim", EDGE_INPUT_DIM_CHOICES[0])),
         padded_node_feature_count=padded_node_feature_count,
         active_feature_names=active_feature_names,
@@ -379,7 +379,7 @@ def main() -> None:
 
     padded_node_feature_count = (
         len(active_features) if active_features is not None else NATIVE_NODE_FEATURE_COUNT
-    )
+    ) + NATIVE_GLOBAL_FEATURE_COUNT
 
     try:
         best_params = load_best_trial_params(args.db, args.study_name)
@@ -403,7 +403,7 @@ def main() -> None:
     print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
     print(f"  Num Layers:       {trial_config.policy.num_layers}")
-    print(f"  Heads:            {trial_config.policy.heads}")
+    print(f"  Node Features:    {trial_config.policy.layout.padded_node_feature_count}")
     print(f"  Learning Rate:    {trial_config.ppo.learning_rate:.2e}")
     print(f"  Gamma (PPO):      {trial_config.ppo.gamma:.4f}")
     print(f"  Entropy Coef:     {trial_config.ppo.ent_coef:.2e}")
@@ -475,8 +475,6 @@ def main() -> None:
     gnn_model = ExpressionGNN(
         input_dim=trial_config.policy.layout.padded_node_feature_count,
         hidden_dim=trial_config.policy.hidden_dim,
-        global_dim=trial_config.policy.layout.padded_global_feature_count,
-        global_hidden_dim=trial_config.policy.layout.global_input_dim,
         activation=trial_config.policy.activation,
         num_layers=trial_config.policy.num_layers,
         classify=False,

@@ -29,11 +29,9 @@ def _build_env(gateway):
     pyg_data = SimpleNamespace(
         x=MagicMock(),
         edge_index=MagicMock(),
-        global_features=MagicMock(),
     )
     pyg_data.x.numpy.return_value = np.zeros((1, 1), dtype=np.float32)
     pyg_data.edge_index.numpy.return_value = np.zeros((2, 0), dtype=np.int64)
-    pyg_data.global_features.numpy.return_value = np.zeros((1,), dtype=np.float32)
     preprocessor = MagicMock()
     preprocessor.process.return_value = (pyg_data, None)
     reward_calculator = MagicMock()
@@ -52,7 +50,6 @@ def test_drain_buffered_states_completes_episode_without_sending_decision():
     env.current_obs = {
         "x": np.zeros((env.max_nodes, 1), dtype=np.float32),
         "edge_index": np.zeros((2, env.max_edges), dtype=np.int64),
-        "global_features": np.zeros((1,), dtype=np.float32),
         "num_nodes": np.array([1], dtype=np.int64),
         "num_edges": np.array([0], dtype=np.int64),
     }
@@ -92,7 +89,6 @@ def test_finalize_drains_buffered_terminal_state_before_sampling_actions():
     unwrapped.current_obs = {
         "x": np.zeros((unwrapped.max_nodes, 1), dtype=np.float32),
         "edge_index": np.zeros((2, unwrapped.max_edges), dtype=np.int64),
-        "global_features": np.zeros((1,), dtype=np.float32),
         "num_nodes": np.array([1], dtype=np.int64),
         "num_edges": np.array([0], dtype=np.int64),
     }

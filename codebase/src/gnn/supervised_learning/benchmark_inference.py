@@ -109,7 +109,6 @@ def _time_model(
     device: torch.device,
     warmup: int,
     runs: int,
-    global_dim: int,
 ) -> tuple[float, float, float]:
     """Time one forward pass. Returns (mean_ms, median_ms, std_ms)."""
     model.eval()
@@ -119,13 +118,9 @@ def _time_model(
         data.batch = torch.zeros(data.num_nodes, dtype=torch.long, device=device)
 
     x = slice_active_features(data.x, active_features)
-    gf = getattr(data, "global_features", None)
-    if gf is None:
-        gf = torch.zeros((1, global_dim), dtype=torch.float, device=device)
-    gf = gf.to(device)
 
     def _fwd():
-        return model(x, data.edge_index, data.batch, gf)
+        return model(x, data.edge_index, data.batch)
 
     with torch.no_grad():
         for _ in range(warmup):
@@ -180,22 +175,18 @@ def benchmark_config(
         return None
 
     graph_list = list(graphs.values())
-    sample = graph_list[0]
-    gf = getattr(sample, "global_features", None)
-    global_dim = int(gf.shape[-1]) if gf is not None else 5
 
     try:
         model = ExpressionGNN(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
-            global_dim=global_dim,
             num_layers=num_layers,
             classify=True,
         ).to(device)
 
         latencies: list[float] = []
         for g in graph_list:
-            mean_t, _, _ = _time_model(model, g, active_features, device, warmup, runs, global_dim)
+            mean_t, _, _ = _time_model(model, g, active_features, device, warmup, runs)
             latencies.append(mean_t)
 
     except Exception as exc:
