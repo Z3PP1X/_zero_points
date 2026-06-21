@@ -11,7 +11,7 @@ from optuna.pruners import MedianPruner
 from stable_baselines3 import PPO
 
 from gnn.reinforcement_learning.feature_layout import OPTUNA_SEARCH_SPACE_SUFFIX
-from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
+from gnn.shared.models.gnn_backbones import ExpressionGNN
 from gnn.reinforcement_learning.mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
 from gnn.reinforcement_learning.gateway.network_gateway import CONTROL_FRESH_TRIAL_ENV, NetworkGateway
 from gnn.reinforcement_learning.ppo_optuna_callback import (
@@ -224,15 +224,16 @@ class PpoOptunaWorkflow:
     def _build_ppo_model(self, env, trial_config: TrialConfiguration) -> PPO:
         policy = trial_config.policy
         ppo = trial_config.ppo
-        gnn_model = build_graph_policy_backbone(
-            layout=policy.layout,
+        gnn_model = ExpressionGNN(
+            input_dim=policy.layout.padded_node_feature_count,
+            hidden_dim=policy.hidden_dim,
+            global_dim=policy.layout.padded_global_feature_count,
+            global_hidden_dim=policy.layout.global_input_dim,
             architecture=policy.architecture,
             activation=policy.activation,
-            hidden_dim=policy.hidden_dim,
             num_layers=policy.num_layers,
             heads=policy.heads,
-            variant=policy.variant,
-            pool_type=policy.pool_type,
+            classify=False,
         )
         policy_kwargs = {
             "features_extractor_class": CustomGNNFeaturesExtractor,

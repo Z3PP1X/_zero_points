@@ -282,24 +282,21 @@ class GINEConvLayer(torch.nn.Module):
 
 
 # --------------------------------------------------------------------------- #
-# Custom network: routes the supervised pipeline through TestGraphNetwork so the
-# variant (legacy/pooling/pooling_skip) and pool_type (topk/diffpool) axes become
-# sweepable from grid.yaml. Selected via cfg.model.type = "expression_classifier".
+# Custom network: routes the supervised pipeline through ExpressionGNN.
+# Selected via cfg.model.type = "expression_classifier".
 # --------------------------------------------------------------------------- #
 from torch_geometric.graphgym.register import register_network
-from gnn.shared.models.classifiers import TestGraphNetwork
+from gnn.shared.models.gnn_backbones import ExpressionGNN
 
 
 @register_network("expression_classifier")
 class ExpressionClassifierNetwork(torch.nn.Module):
-    """GraphGym adapter around the shared :class:`TestGraphNetwork`.
+    """GraphGym adapter around the shared :class:`ExpressionGNN` (classify=True).
 
-    Unlike PyG's stock ``GNN``, a custom network receives the RAW ``batch.x`` (the
-    ``ExpressionNodeEncoder`` is never auto-applied), which is exactly what
-    ``TestGraphNetwork`` expects -- it does its own ``TwoWayFeatureEncoder`` encoding
-    and reads the ``node_type`` column by name before encoding. The head output is
-    squeezed to a 1-D logit so the existing ``weighted_cross_entropy`` (BCE branch) and
-    ``compute_binary_metrics`` behave identically to the stock single-logit path.
+    A custom network receives the RAW ``batch.x`` (the ``ExpressionNodeEncoder``
+    is never auto-applied by GraphGym for custom network types). ExpressionGNN
+    does its own LayerNorm→Linear node encoding. GraphGym batches carry no
+    graph-level global features, so global_dim=0.
     """
 
     def __init__(self, dim_in, dim_out, **kwargs):
@@ -313,26 +310,19 @@ class ExpressionClassifierNetwork(torch.nn.Module):
                 f"(not {sorted(LAYERS_WITHOUT_EDGE_FEATURES)}); got {layer_type!r}"
             )
         names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
-        self.net = TestGraphNetwork(
+        self.net = ExpressionGNN(
             input_dim=(len(names) or dim_in),
             hidden_dim=cfg.gnn.dim_inner,
             global_dim=0,  # GraphGym batches carry no graph-level global features
-            output_dim=dim_out,  # 1 for binary classification -> BCE path
+            output_dim=dim_out,
             heads=getattr(cfg.gnn, "att_heads", 4),
             architecture=architecture_from_layer_type(layer_type),
-            edge_dim=cfg.dataset.edge_dim,
-            active_features=names or None,
-            # The GraphGym config is the single source of truth: depth, activation,
-            # dropout and the graph-level readout all come from cfg, not hardcoded.
             activation=cfg.gnn.act,
-            variant=cfg.gnn.variant,
-            pool_type=cfg.gnn.pool_type,
             num_layers=cfg.gnn.layers_mp,
             dropout=cfg.gnn.dropout,
             graph_pooling=cfg.model.graph_pooling,
+            classify=True,
         )
-        # Surfaced for the aux-loss monkeypatch on GraphGymModule._shared_step.
-        self._last_aux_loss = torch.zeros(())
 
     def forward(self, batch):
         logits = self.net(
@@ -340,9 +330,7 @@ class ExpressionClassifierNetwork(torch.nn.Module):
             batch.edge_index,
             batch.batch,
             global_features=None,
-            edge_attr=getattr(batch, "edge_attr", None),
         )
-        self._last_aux_loss = self.net._last_aux_loss
         if logits.size(-1) == 1:  # match the stock single-logit BCE path
             logits = logits.view(-1)
         return logits, batch.y

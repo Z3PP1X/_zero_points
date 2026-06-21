@@ -28,7 +28,7 @@ from gnn.reinforcement_learning.gateway.gateway_traffic_monitor import GatewayTr
 from gnn.reinforcement_learning.preprocessor import Preprocessor
 from gnn.reinforcement_learning.reward import RewardCalculator
 from gnn.reinforcement_learning.mathematica_vec_env import build_mathematica_training_env, MathematicaVecEnv
-from gnn.shared.models.gnn_backbones import build_graph_policy_backbone
+from gnn.shared.models.gnn_backbones import ExpressionGNN
 from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
 from gnn.reinforcement_learning.feature_layout import (
     FeatureLayout,
@@ -488,15 +488,16 @@ def main() -> None:
     )
 
     # 4. Create Custom GNN Policy Backbone
-    gnn_model = build_graph_policy_backbone(
-        layout=trial_config.policy.layout,
+    gnn_model = ExpressionGNN(
+        input_dim=trial_config.policy.layout.padded_node_feature_count,
+        hidden_dim=trial_config.policy.hidden_dim,
+        global_dim=trial_config.policy.layout.padded_global_feature_count,
+        global_hidden_dim=trial_config.policy.layout.global_input_dim,
         architecture=trial_config.policy.architecture,
         activation=trial_config.policy.activation,
-        hidden_dim=trial_config.policy.hidden_dim,
         num_layers=trial_config.policy.num_layers,
         heads=trial_config.policy.heads,
-        variant=trial_config.policy.variant,
-        pool_type=trial_config.policy.pool_type,
+        classify=False,
     )
 
     # Attempt torch compile if requested

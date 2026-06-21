@@ -1,27 +1,16 @@
-"""Dirichlet-energy probe is wired into the custom expression_classifier backbone.
-
-Before this, the energy callbacks hooked PyG GNN's ``.mp`` stage, which the custom
-backbone lacks, so energy was always NaN. The backbone now exposes a parameter-free
-``DirichletProbe`` at its message-passing output; these tests confirm a forward hook on
-it captures node embeddings and yields a finite, measured energy for every variant.
-"""
+"""Dirichlet-energy probe is wired into ExpressionGNN for over-smoothing diagnostics."""
 
 import math
 
 import torch
 from torch_geometric.loader import DataLoader
 
-# Package-style imports throughout: classifiers.py imports DirichletProbe via the
-# gnn.shared.models path, so the test must use the same path or isinstance() compares two
-# distinct class objects (the repo's dual bare/package import hazard).
 from gnn.shared.utils.graph_utils import (
     ExpressionGraphConverter,
     NODE_FEATURE_SCHEMA,
-    EDGE_FEATURE_SCHEMA,
     compute_normalized_dirichlet_energy,
 )
-from gnn.shared.models.gnn_backbones import DirichletProbe, _MPCapture
-from gnn.shared.models.classifiers import TestGraphNetwork
+from gnn.shared.models.gnn_backbones import DirichletProbe, ExpressionGNN, _MPCapture
 
 
 def _build_batch():
@@ -41,7 +30,7 @@ def _build_batch():
             {"source": "f3", "target": "f4", "type": "child_of"},
         ],
     }
-    data = ExpressionGraphConverter().convert(raw,  mode="graph")
+    data = ExpressionGraphConverter().convert(raw, mode="graph")
     data.global_features = torch.zeros((1, 5), dtype=torch.float)
     data.y = torch.tensor([1], dtype=torch.long)
     return next(iter(DataLoader([data], batch_size=1)))
@@ -52,7 +41,6 @@ def _find_probe(model):
 
 
 def _run_with_probe(model):
-    """Forward once with a hook on the probe; return the measured Dirichlet energy."""
     batch = _build_batch()
     captured = []
 
@@ -62,7 +50,7 @@ def _run_with_probe(model):
     handle = _find_probe(model).register_forward_hook(hook)
     model.eval()
     with torch.no_grad():
-        model(batch.x, batch.edge_index, batch.batch, batch.global_features, edge_attr=batch.edge_attr)
+        model(batch.x, batch.edge_index, batch.batch, batch.global_features)
     handle.remove()
 
     assert captured, "probe forward hook never fired"
@@ -70,7 +58,7 @@ def _run_with_probe(model):
     return compute_normalized_dirichlet_energy(x, edge_index)
 
 
-def test_probe_returns_batch_like_capture():
+def test_probe_returns_mpcapture():
     x = torch.randn(4, 3)
     ei = torch.tensor([[0, 1], [1, 2]])
     out = DirichletProbe()(x, ei, None)
@@ -81,40 +69,23 @@ def test_probe_returns_batch_like_capture():
 
 
 def test_probe_discoverable_in_backbone():
-    model = TestGraphNetwork(
-        input_dim=len(NODE_FEATURE_SCHEMA),
-        hidden_dim=16,
-        edge_dim=len(EDGE_FEATURE_SCHEMA),
-        variant="legacy",
-    )
-    assert isinstance(_find_probe(model), DirichletProbe)
-    # The probe is parameter-free, so it must not enlarge the checkpoint.
-    assert sum(p.numel() for p in _find_probe(model).parameters()) == 0
-
-
-def test_energy_measured_for_legacy():
-    model = TestGraphNetwork(
+    model = ExpressionGNN(
         input_dim=len(NODE_FEATURE_SCHEMA),
         hidden_dim=16,
         global_dim=5,
-        edge_dim=len(EDGE_FEATURE_SCHEMA),
-        variant="legacy",
+        classify=True,
+    )
+    assert isinstance(_find_probe(model), DirichletProbe)
+    assert sum(p.numel() for p in _find_probe(model).parameters()) == 0
+
+
+def test_energy_measured():
+    model = ExpressionGNN(
+        input_dim=len(NODE_FEATURE_SCHEMA),
+        hidden_dim=16,
+        global_dim=5,
+        classify=True,
     )
     energy = _run_with_probe(model)
     assert not math.isnan(energy)
     assert energy >= 0.0
-
-
-def test_energy_measured_for_uniform_variants():
-    for variant, pool_type in (("pooling", "topk"), ("pooling", "diffpool")):
-        model = TestGraphNetwork(
-            input_dim=len(NODE_FEATURE_SCHEMA),
-            hidden_dim=16,
-            global_dim=5,
-            edge_dim=len(EDGE_FEATURE_SCHEMA),
-            variant=variant,
-            pool_type=pool_type,
-        )
-        energy = _run_with_probe(model)
-        assert not math.isnan(energy), f"{variant}/{pool_type} energy is NaN"
-        assert energy >= 0.0
