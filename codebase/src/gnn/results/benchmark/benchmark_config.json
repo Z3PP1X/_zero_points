@@ -1,0 +1,79 @@
+{
+  "model": {
+    "architecture": "GINConv",
+    "n_layers": 3,
+    "hidden_dim": 128
+  },
+  "n_warmup": 10,
+  "n_steps": 1000,
+  "device": "cpu",
+  "seed": 42,
+  "x_axis": "processed",
+  "include_synthetic": false,
+  "structures": [
+    {
+      "id": 1,
+      "label": "tree (top-down)",
+      "mode": "tree",
+      "edge_direction": "top_down",
+      "add_kappa": false,
+      "add_virtual_supernode": false
+    },
+    {
+      "id": 2,
+      "label": "tree (bidirectional)",
+      "mode": "tree",
+      "edge_direction": "bidirectional",
+      "add_kappa": false,
+      "add_virtual_supernode": false
+    },
+    {
+      "id": 3,
+      "label": "tree + kappa",
+      "mode": "tree",
+      "edge_direction": "top_down",
+      "add_kappa": true,
+      "add_virtual_supernode": false
+    },
+    {
+      "id": 4,
+      "label": "tree-deriv",
+      "mode": "tree_derivatives",
+      "edge_direction": "top_down",
+      "add_kappa": false,
+      "add_virtual_supernode": false
+    },
+    {
+      "id": 5,
+      "label": "tree-deriv + supernode",
+      "mode": "tree_derivatives",
+      "edge_direction": "top_down",
+      "add_kappa": false,
+      "add_virtual_supernode": true
+    },
+    {
+      "id": 6,
+      "label": "tree-deriv + kappa",
+      "mode": "tree_derivatives",
+      "edge_direction": "top_down",
+      "add_kappa": true,
+      "add_virtual_supernode": false
+    },
+    {
+      "id": 7,
+      "label": "graph",
+      "mode": "graph",
+      "edge_direction": "top_down",
+      "add_kappa": false,
+      "add_virtual_supernode": false
+    },
+    {
+      "id": 8,
+      "label": "graph + kappa",
+      "mode": "graph",
+      "edge_direction": "top_down",
+      "add_kappa": true,
+      "add_virtual_supernode": false
+    }
+  ]
+}

@@ -238,14 +238,14 @@ soft_crashes:
 class_distribution:
   description: Based on absTime comparison (lower is faster)
   gmgf_faster:
-    count: 4477
-    percent: 50.11
+    count: 3947
+    percent: 44.18
   newton_faster:
-    count: 4445
-    percent: 49.75
+    count: 4986
+    percent: 55.81
   tied:
-    count: 12
-    percent: 0.13
+    count: 1
+    percent: 0.01
 kappa_histogram:
   description: Count per integer kappa value (clipped to [-25, 25])
   values:
