@@ -155,7 +155,7 @@ class MathematicaVecEnv(VecEnv):
         self._slot_episode_steps[slot] = 0
 
         self.replay_buffer.start_episode(uuid)
-        pyg_data, _ = self.preprocessor.process(state_dict, dataloader=None)
+        pyg_data, _ = self.preprocessor.process(state_dict)
         self._slot_obs[slot] = self._pad_graph(pyg_data)
 
     def _stack_obs(self) -> Dict[str, np.ndarray]:
@@ -452,7 +452,7 @@ class MathematicaVecEnv(VecEnv):
             return
 
         self._slot_state[slot] = payload
-        pyg_data, _ = self.preprocessor.process(payload, dataloader=None)
+        pyg_data, _ = self.preprocessor.process(payload)
         self._slot_obs[slot] = self._pad_graph(pyg_data)
         rewards[slot] = 0.0
         dones[slot] = False

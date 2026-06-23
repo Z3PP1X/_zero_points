@@ -23,7 +23,6 @@ class UnifiedDataLoader:
         dataset_name: str,
         run_key: Optional[str] = None,
         mode: str = "graph",
-        heterogeneous: bool = False,
         add_traces: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
@@ -46,7 +45,6 @@ class UnifiedDataLoader:
             d_name,
             r_key,
             mode,
-            heterogeneous,
             add_traces,
             str(base_dir) if base_dir else None,
             is_synthetic,
@@ -61,7 +59,6 @@ class UnifiedDataLoader:
                 dataset_name=d_name,
                 run_key=r_key,
                 mode=mode,
-                heterogeneous=heterogeneous,
                 add_traces=add_traces,
                 base_dir=base_dir,
                 is_synthetic=is_synthetic,
@@ -83,7 +80,6 @@ class UnifiedDataLoader:
         dataset_name: str,
         run_key: str,
         mode: str,
-        heterogeneous: bool,
         add_traces: bool,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
@@ -96,7 +92,6 @@ class UnifiedDataLoader:
         self.dataset_name = dataset_name
         self.run_key = run_key
         self.mode = mode
-        self.heterogeneous = heterogeneous
         self.add_traces = add_traces
         self.base_dir = base_dir
         self.is_synthetic = is_synthetic
@@ -123,7 +118,6 @@ class UnifiedDataLoader:
         self.graph_loader = GraphDataLoader(
             name=graph_loader_name,
             mode=self.mode,
-            heterogeneous=self.heterogeneous,
             base_dir=graphs_path if graphs_path is not None else self.base_dir,
             is_synthetic=self.is_synthetic,
             edge_direction=self.edge_direction,

@@ -7,8 +7,7 @@ from gnn.shared.utils.graph_vocab import (
     ROOT_COLOR_VOCAB, NUM_ROOT_COLORS,
     HISTOGRAM_GROUP_BY_LABEL, HISTOGRAM_VARIABLE_BIN, HISTOGRAM_CONSTANT_BIN,
     NUM_HISTOGRAM_BINS, HISTOGRAM_FEATURES,
-    VIRTUAL_NODE_TYPES,
-    NUM_NODE_TYPES, NUM_CANONICAL_LABELS,
+    NUM_CANONICAL_LABELS,
     NODE_TYPE_ONEHOT, NODE_TYPE_ONEHOT_DIM,
     LABEL_ONEHOT_NAMES,
     SUPERNODE_NODE_TYPE, SUPERNODE_NODE_ID,
@@ -25,7 +24,6 @@ from gnn.shared.utils.feature_extraction import (
     compute_normalized_dirichlet_energy,
 )
 from gnn.shared.utils.graph_converter import (
-    get_relation_type,
     _find_global_node_id, _mark_function_roots,
     ExpressionGraphData, ExpressionGraphConverter,
     parse_graphml_node_name, _determine_node_type_from_label,

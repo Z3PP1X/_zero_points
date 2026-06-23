@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 
 from gnn.supervised_learning.run_results.eval_metrics import (
-    CONFIDENCE_METRICS,
     EVAL_WARMUP_EPOCHS,
     LOWER_IS_BETTER_METRICS,
     MIN_CLASSIFICATION_METRIC,
@@ -125,7 +124,7 @@ class GNNResultEvaluator:
         skip_slices: bool = False,
         top_k: int = 10,
     ):
-        """
+        """Initialize the GNNResultEvaluator."""
         self.naming_var = naming_var
         self.base_dir = Path(base_dir) if base_dir else Path(__file__).resolve().parent
         self.data_dir = self.base_dir / self.naming_var / "agg"

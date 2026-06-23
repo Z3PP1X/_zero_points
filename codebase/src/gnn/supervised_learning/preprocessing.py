@@ -8,7 +8,6 @@ from torch_geometric.loader import DataLoader
 
 from gnn.supervised_learning.dataset import DatasetLoader
 from gnn.shared.utils.graph_utils import (
-    EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
     slice_active_features,
 )
@@ -66,7 +65,6 @@ class GraphPipeline:
     def __init__(
         self,
         dataset_name: str,
-        experiments_dir: str = "",
         seed: int = 42,
         mode: str = "graph",
         active_features: list[str] | None = None,
@@ -75,7 +73,6 @@ class GraphPipeline:
         synthetic: bool = False,
         synthetic_dataset_name: str | None = None,
         layer_type: str = "ginconv",
-        heterogeneous: bool = False,
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
         curated_csv_path: "Path | str | None" = None,
@@ -89,7 +86,6 @@ class GraphPipeline:
         self.synthetic = synthetic
         self.synthetic_dataset_name = synthetic_dataset_name if synthetic_dataset_name else None
         self.layer_type = validate_layer_type(layer_type)
-        self.heterogeneous = heterogeneous
         self.add_kappa = add_kappa
         self.add_virtual_supernode = add_virtual_supernode
 
@@ -99,7 +95,6 @@ class GraphPipeline:
             self.unified_loader = UnifiedDataLoader.get_instance(
                 dataset_name=dataset_name,
                 mode=mode,
-                heterogeneous=heterogeneous,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
                 csv_path=curated_csv_path,
@@ -110,7 +105,6 @@ class GraphPipeline:
             self.synthetic_unified_loader = UnifiedDataLoader.get_instance(
                 dataset_name=self.synthetic_dataset_name or "synthetic",
                 mode=mode,
-                heterogeneous=heterogeneous,
                 is_synthetic=True,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
@@ -159,7 +153,6 @@ class GraphPipeline:
     def pipe(
         self, test_size=0.2, batch_size=32, stratify: bool = False, num_workers: int = 0
     ):
-        self._validate_edge_features()
         if self.synthetic:
             if self.synthetic_unified_loader is None:
                 raise ValueError("Synthetic mode is active, but synthetic_dataset_name is not provided.")
@@ -239,25 +232,6 @@ class GraphPipeline:
         if self.active_features is not None:
             return len(self.active_features)
         return len(NODE_FEATURE_SCHEMA)
-
-    @property
-    def edge_dim(self) -> int:
-        return len(EDGE_FEATURE_SCHEMA)
-
-    def _validate_edge_features(self):
-        if not self.graphs:
-            return
-        sample = next(iter(self.graphs.values()))
-        edge_attr = getattr(sample, "edge_attr", None)
-        if edge_attr is None:
-            return
-        expected_dim = self.edge_dim
-        if edge_attr.ndim != 2 or edge_attr.shape[1] != expected_dim:
-            raise ValueError(
-                f"expected edge_attr with {expected_dim} features, "
-                f"got shape {tuple(edge_attr.shape)}"
-            )
-
 
 def parse_float(val) -> float:
     if val is None:

@@ -202,9 +202,7 @@ def inject_virtual_supernode(
     existing_nodes = [nid for nid in node_ids if nid != SUPERNODE_NODE_ID]
 
     supernode_attrs: dict[str, Any] = {
-        # node_type one-hot: supernode (code 5 → index 3)
-        "node_type_global": 0.0, "node_type_operator": 0.0,
-        "node_type_function": 0.0, "node_type_supernode": 1.0,
+        "node_type_global": 1.0, "node_type_operator": 0.0, "node_type_function": 0.0,
         # root_color one-hot: none (0)
         "root_color_none": 1.0, "root_color_f": 0.0,
         "root_color_d1": 0.0, "root_color_d2": 0.0, "root_color_kappa": 0.0,

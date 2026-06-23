@@ -171,7 +171,7 @@ class CuratedEvalCallback(pl.callbacks.Callback):
         pred_parts = []
 
         mp_embeddings = []
-        def hook_fn(module, inputs, outputs):
+        def hook_fn(module, _inputs, outputs):
             mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
 
         hook_handle = _register_mp_hook(pl_module, hook_fn)
@@ -263,21 +263,21 @@ class DirichletLoggerCallback(LoggerCallback):
     def on_train_epoch_start(self, trainer, pl_module):
         super().on_train_epoch_start(trainer, pl_module)
         self._embeddings = []
-        def hook_fn(module, inputs, outputs):
+        def hook_fn(module, _inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
         self._hook_handle = _register_mp_hook(pl_module, hook_fn)
 
     def on_validation_epoch_start(self, trainer, pl_module):
         super().on_validation_epoch_start(trainer, pl_module)
         self._embeddings = []
-        def hook_fn(module, inputs, outputs):
+        def hook_fn(module, _inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
         self._hook_handle = _register_mp_hook(pl_module, hook_fn)
 
     def on_test_epoch_start(self, trainer, pl_module):
         super().on_test_epoch_start(trainer, pl_module)
         self._embeddings = []
-        def hook_fn(module, inputs, outputs):
+        def hook_fn(module, _inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu()))
         self._hook_handle = _register_mp_hook(pl_module, hook_fn)
 
@@ -340,7 +340,7 @@ class ValMetricLogger(pl.callbacks.Callback):
             
     def on_validation_epoch_start(self, trainer, pl_module):
         self._embeddings = []
-        def hook_fn(module, inputs, outputs):
+        def hook_fn(module, _inputs, outputs):
             self._embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
         self._hook_handle = _register_mp_hook(pl_module, hook_fn)
     

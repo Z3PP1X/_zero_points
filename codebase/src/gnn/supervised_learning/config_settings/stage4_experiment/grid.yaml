@@ -12,3 +12,16 @@ gnn.dim_inner:
 gnn.layers_mp:
   - 2
   - 4
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — Strukturerweiterungen als Sweep-Dimensionen
+# Zum Aktivieren: Kommentare entfernen und gewünschte Werte eintragen.
+#
+# expression_graph.add_virtual_supernode:
+#   - false
+#   - true
+#
+# expression_graph.add_kappa:
+#   - false
+#   - true
+# ---------------------------------------------------------------------------

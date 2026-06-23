@@ -1,7 +1,7 @@
 # =====================================================================================
 # STUFE 3 — Vollständiger Graph (32 Features: alle NODE_FEATURE_SCHEMA-Spalten)
 # =====================================================================================
-# Alle verfügbaren Features aktiv: node_type (4) + root_color (5) + label (14)
+# Alle verfügbaren Features aktiv: node_type (3) + root_color (5) + label (15)
 # + Topologie (2) + Histogramm (4) + Anchor-PE (3) = 32 Features.
 # Leeres active_features = alle Spalten aus NODE_FEATURE_SCHEMA werden genutzt.
 #
@@ -20,8 +20,8 @@ share:
   num_splits: 3
 
 data:
-  curated_csv:  datasets/run_20260604_154509/dataset_joined.csv
-  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset.csv
+  curated_csv:  datasets/run_20260604_154509/dataset2_joined.csv
+  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset2.csv
   graphs_dir:   datasets/graphs
 
 dataset:
@@ -38,7 +38,20 @@ expression_graph:
   mode: graph
   edge_direction: top_down
   synthetic: True
+  features:
+    node: true       # node_type_* + root_color_* + label_*
+    topology: true   # subtree_size, subtree_depth, hist_*
+    positional: true  # anchor_trigonometric, anchor_exponential, anchor_variable
   active_features: ""  # leer = alle 32 Features aus NODE_FEATURE_SCHEMA
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL — Strukturerweiterungen (default: aus, jederzeit einschaltbar)
+  # Ändern die Graphstruktur, nicht den Feature-Vektor dieser Stufe.
+  #   add_virtual_supernode: vollvernetzter Hilfsknoten — verkürzt Message-Passing-Pfade
+  #   add_kappa:             κ-Teilgraph einbetten — vergrößert den Graph erheblich
+  # ---------------------------------------------------------------------------
+  add_virtual_supernode: false
+  add_kappa: false
 
 train:
   mode: custom

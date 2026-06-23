@@ -7,7 +7,7 @@
 #
 # FIX:
 #   model.type=expression_classifier, gnn.layer_type=ginconv,
-#   active_features = node_type_* (4) + label_* (14) = 18 Features
+#   active_features = node_type_* (3) + label_* (15) = 18 Features
 #
 # EINSTELLBAR (siehe grid.yaml):
 #   gnn.dim_inner, gnn.layers_mp, gnn.dropout
@@ -20,8 +20,8 @@ share:
   num_splits: 3
 
 data:
-  curated_csv:  datasets/run_20260604_154509/dataset_joined.csv
-  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset.csv
+  curated_csv:  datasets/run_20260604_154509/dataset2_joined.csv
+  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset2.csv
   graphs_dir:   datasets/graphs
 
 dataset:
@@ -38,7 +38,20 @@ expression_graph:
   mode: graph
   edge_direction: top_down
   synthetic: True
-  active_features: "node_type_global,node_type_operator,node_type_function,node_type_supernode,label_UNK,label_CONSTANT,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
+  features:
+    node: true       # node_type_* + root_color_* + label_*
+    topology: false  # subtree_size, subtree_depth, hist_*
+    positional: false  # anchor_trigonometric, anchor_exponential, anchor_variable
+  active_features: "node_type_global,node_type_operator,node_type_function,label_UNK,label_CONSTANT,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power,label_Sqrt"
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL — Strukturerweiterungen (default: aus, jederzeit einschaltbar)
+  # Ändern die Graphstruktur, nicht den Feature-Vektor dieser Stufe.
+  #   add_virtual_supernode: vollvernetzter Hilfsknoten — verkürzt Message-Passing-Pfade
+  #   add_kappa:             κ-Teilgraph einbetten — vergrößert den Graph erheblich
+  # ---------------------------------------------------------------------------
+  add_virtual_supernode: false
+  add_kappa: false
 
 train:
   mode: custom

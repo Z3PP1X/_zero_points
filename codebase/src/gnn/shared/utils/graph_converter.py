@@ -373,7 +373,6 @@ class ExpressionGraphConverter:
             enriched_attrs["node_type_global"] = nt_oh[0]
             enriched_attrs["node_type_operator"] = nt_oh[1]
             enriched_attrs["node_type_function"] = nt_oh[2]
-            enriched_attrs["node_type_supernode"] = nt_oh[3]
 
             # One-hot columns for root_color
             rc_oh = root_color_onehot(int(enriched_attrs["root_color"]))
@@ -400,183 +399,33 @@ class ExpressionGraphConverter:
         edge_direction = validate_edge_direction(edge_direction)
 
         if isinstance(source, nx.DiGraph):
-            # Extract pure AST nodes (exclude global and kappa subgraph).
-            ast_nodes = [
-                n for n in source.nodes
-                if n != "global"
-                and not str(n).startswith("kappa_")
-                and str(n) != SUPERNODE_NODE_ID
-            ]
-            G_ast = source.subgraph(ast_nodes).copy()
-            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
-            hist = _compute_subtree_histograms(G_ast)
-            ast_node_ids = list(G_ast.nodes)
-            ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
-
-            node_ids = list(source.nodes)
-            G_directed = source
-
-            G_enriched = nx.DiGraph()
-            self._enrich_nodes(node_ids, source, ast_id_to_idx, topo, hist, G_enriched)
-
-            child_counters = {}
-            for u, v, attrs in source.edges(data=True):
-                if "child_index" in attrs or "direction" in attrs:
-                    G_enriched.add_edge(u, v, **attrs)
-                    continue
-
-                parent = u
-                child = v
-                etype = attrs.get("type") or attrs.get("etype") or "child_of"
-
-                child_idx = child_counters.get(parent, 0)
-                child_counters[parent] = child_idx + 1
-
-                self._add_ast_edges(
-                    G_enriched, parent, child, child_idx, etype, edge_direction
-                )
-
-            raw = None
+            G_enriched, G_directed, node_ids, topo, raw = self._build_enriched_from_networkx(
+                source, edge_direction
+            )
         else:
-            raw = self._load(source)
+            G_enriched, G_directed, node_ids, topo, raw = self._build_enriched_from_raw(
+                source, mode, edge_direction
+            )
 
-            raw = dict(raw)
-
-            if "graphml_f" in raw:
-                nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
-
-                # If mode is tree, we only compile the function graph f.
-                # If mode is tree_derivatives or graph, we compile all three (f, f', f'').
-                if mode in ["tree_derivatives", "graph"]:
-                    nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
-                    nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
-                else:
-                    nodes_d1, edges_d1 = [], []
-                    nodes_d2, edges_d2 = [], []
-
-                combined_nodes = nodes_f + nodes_d1 + nodes_d2
-                combined_nodes.insert(0, {
-                    "id": "global",
-                    "label": "GLOBAL",
-                    "type": "global",
-                    "value": None
-                })
-
-                roots_f = find_roots(nodes_f, edges_f)
-                roots_d1 = find_roots(nodes_d1, edges_d1)
-                roots_d2 = find_roots(nodes_d2, edges_d2)
-
-                # Mark AST roots with root_color; node_type stays as natural type.
-                _root_specs = [("f", roots_f, nodes_f), ("d1", roots_d1, nodes_d1), ("d2", roots_d2, nodes_d2)]
-                for color, roots, nodes_list in _root_specs:
-                    root_set = set(roots)
-                    for node in nodes_list:
-                        if node["id"] in root_set:
-                            node["root_color"] = ROOT_COLOR_VOCAB[color]
-
-                combined_edges = edges_f + edges_d1 + edges_d2
-                # Direct global → root child_of edges.
-                for color, roots in [("f", roots_f), ("d1", roots_d1), ("d2", roots_d2)]:
-                    for root in roots:
-                        combined_edges.append({"source": "global", "target": root, "type": "child_of"})
-
-                raw["nodes"] = combined_nodes
-                raw["edges"] = combined_edges
-            else:
-                raw["nodes"] = list(raw.get("nodes", []))
-                raw["edges"] = list(raw.get("edges", []))
-                _mark_function_roots(raw)
-
-            global_id_raw = _find_global_node_id(raw) or "global"
-            raw_ast = {
-                "nodes": [n for n in raw["nodes"]
-                          if n["id"] != global_id_raw and not str(n["id"]).startswith("kappa_")],
-                "edges": [e for e in raw["edges"]
-                          if e["source"] != global_id_raw and e["target"] != global_id_raw
-                          and not str(e["source"]).startswith("kappa_")
-                          and not str(e["target"]).startswith("kappa_")],
-            }
-
-            G_ast = self._build_networkx(raw_ast)
-            topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
-            hist = _compute_subtree_histograms(G_ast)
-            ast_node_ids = list(G_ast.nodes)
-            ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(ast_node_ids)}
-
-            G_directed = self._build_networkx(raw)
-
-            G_enriched = nx.DiGraph()
-            node_ids = list(G_directed.nodes)
-            self._enrich_nodes(node_ids, G_directed, ast_id_to_idx, topo, hist, G_enriched)
-
-            child_counters = {}
-            for edge in raw.get("edges", []):
-                parent = edge["source"]
-                child = edge["target"]
-                etype = edge["type"]
-
-                child_idx = child_counters.get(parent, 0)
-                child_counters[parent] = child_idx + 1
-
-                self._add_ast_edges(
-                    G_enriched,
-                    parent,
-                    child,
-                    child_idx,
-                    etype,
-                    edge_direction,
-                )
-
-        # Optional fully-connected supernode: injected after topology/PE features and the
-        # augmented edges so it does not perturb the AST structural features. Independent
-        # of mode — it connects to every node regardless of graph/tree/tree_derivatives.
         if add_virtual_supernode:
             inject_virtual_supernode(G_enriched, G_directed, node_ids)
 
         node_kappas = [G_enriched.nodes[nid].get("kappa_value") for nid in node_ids]
-
-        # Remove kappa_value from node attributes to prevent PyG from_networkx mismatch error
-        for nid in G_enriched.nodes:
-            if "kappa_value" in G_enriched.nodes[nid]:
-                del G_enriched.nodes[nid]["kappa_value"]
-
-        # Ensure all nodes have exactly the same set of attribute keys
-        all_node_keys = set()
-        for nid in G_enriched.nodes:
-            all_node_keys.update(G_enriched.nodes[nid].keys())
-        for nid in G_enriched.nodes:
-            for key in all_node_keys:
-                if key not in G_enriched.nodes[nid]:
-                    G_enriched.nodes[nid][key] = None
-
-        # Ensure all edges have the same attribute keys so PyG from_networkx does not
-        # raise on heterogeneous edge dicts (e.g. bare nesting edges vs child_of edges).
-        all_edge_keys: set[str] = set()
-        for u, v in G_enriched.edges:
-            all_edge_keys.update(G_enriched.edges[u, v].keys())
-        for u, v in G_enriched.edges:
-            for key in all_edge_keys:
-                if key not in G_enriched.edges[u, v]:
-                    G_enriched.edges[u, v][key] = None
+        self._normalize_graph_attrs(G_enriched)
 
         from gnn.shared.utils.homogeneous_converter import to_homogeneous
         data = to_homogeneous(G_enriched, raw or {})
         data.__class__ = ExpressionGraphData
         data.node_ids = node_ids
-
         data.node_kappas = node_kappas
 
-        node_type_tensor = torch.tensor(
+        data.node_type = torch.tensor(
             [G_directed.nodes[n]["node_type"] for n in node_ids], dtype=torch.long
         )
-        root_color_tensor = torch.tensor(
+        data.root_color = torch.tensor(
             [G_directed.nodes[n].get("root_color", ROOT_COLOR_VOCAB["none"]) for n in node_ids],
             dtype=torch.long,
         )
-
-        data.node_type = node_type_tensor
-        data.root_color = root_color_tensor
-
         data.tree_depth = topo["tree_depth"]
         data.tree_width = topo["tree_width"]
         data.nodes = G_directed.number_of_nodes()
@@ -585,6 +434,137 @@ class ExpressionGraphConverter:
         data.num_edges = G_directed.number_of_edges()
 
         return data
+
+    def _build_enriched_from_networkx(
+        self, source: nx.DiGraph, edge_direction: str
+    ) -> tuple:
+        """Handle the nx.DiGraph fast-path (already-built graph passed directly)."""
+        ast_nodes = [
+            n for n in source.nodes
+            if n != "global"
+            and not str(n).startswith("kappa_")
+            and str(n) != SUPERNODE_NODE_ID
+        ]
+        G_ast = source.subgraph(ast_nodes).copy()
+        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
+        hist = _compute_subtree_histograms(G_ast)
+        ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(G_ast.nodes)}
+
+        node_ids = list(source.nodes)
+        G_directed = source
+        G_enriched = nx.DiGraph()
+        self._enrich_nodes(node_ids, source, ast_id_to_idx, topo, hist, G_enriched)
+
+        child_counters: dict = {}
+        for u, v, attrs in source.edges(data=True):
+            if "child_index" in attrs or "direction" in attrs:
+                G_enriched.add_edge(u, v, **attrs)
+                continue
+            etype = attrs.get("type") or attrs.get("etype") or "child_of"
+            child_idx = child_counters.get(u, 0)
+            child_counters[u] = child_idx + 1
+            self._add_ast_edges(G_enriched, u, v, child_idx, etype, edge_direction)
+
+        return G_enriched, G_directed, node_ids, topo, None
+
+    def _build_enriched_from_raw(
+        self, source: Union[str, Path, dict], mode: str, edge_direction: str
+    ) -> tuple:
+        """Handle the raw dict/file path (JSON or GraphML) input."""
+        raw = dict(self._load(source))
+
+        if "graphml_f" in raw:
+            self._merge_graphml_sources(raw, mode)
+        else:
+            raw["nodes"] = list(raw.get("nodes", []))
+            raw["edges"] = list(raw.get("edges", []))
+            _mark_function_roots(raw)
+
+        global_id = _find_global_node_id(raw) or "global"
+        raw_ast = {
+            "nodes": [
+                n for n in raw["nodes"]
+                if n["id"] != global_id and not str(n["id"]).startswith("kappa_")
+            ],
+            "edges": [
+                e for e in raw["edges"]
+                if e["source"] != global_id and e["target"] != global_id
+                and not str(e["source"]).startswith("kappa_")
+                and not str(e["target"]).startswith("kappa_")
+            ],
+        }
+
+        G_ast = self._build_networkx(raw_ast)
+        topo = TopologicalFeatureExtractor.extract_and_annotate(G_ast)
+        hist = _compute_subtree_histograms(G_ast)
+        ast_id_to_idx = {node_id: idx for idx, node_id in enumerate(G_ast.nodes)}
+
+        G_directed = self._build_networkx(raw)
+        node_ids = list(G_directed.nodes)
+        G_enriched = nx.DiGraph()
+        self._enrich_nodes(node_ids, G_directed, ast_id_to_idx, topo, hist, G_enriched)
+
+        child_counters: dict = {}
+        for edge in raw.get("edges", []):
+            parent = edge["source"]
+            child = edge["target"]
+            child_idx = child_counters.get(parent, 0)
+            child_counters[parent] = child_idx + 1
+            self._add_ast_edges(G_enriched, parent, child, child_idx, edge["type"], edge_direction)
+
+        return G_enriched, G_directed, node_ids, topo, raw
+
+    @staticmethod
+    def _merge_graphml_sources(raw: dict, mode: str) -> None:
+        """Merge f/f'/f'' GraphML sources into raw['nodes'] and raw['edges'] in-place."""
+        nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
+        if mode in ["tree_derivatives", "graph"]:
+            nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
+            nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
+        else:
+            nodes_d1, edges_d1 = [], []
+            nodes_d2, edges_d2 = [], []
+
+        combined_nodes = nodes_f + nodes_d1 + nodes_d2
+        combined_nodes.insert(0, {"id": "global", "label": "GLOBAL", "type": "global", "value": None})
+        combined_edges = edges_f + edges_d1 + edges_d2
+
+        for color, roots_list, nodes_list in [
+            ("f", find_roots(nodes_f, edges_f), nodes_f),
+            ("d1", find_roots(nodes_d1, edges_d1), nodes_d1),
+            ("d2", find_roots(nodes_d2, edges_d2), nodes_d2),
+        ]:
+            root_set = set(roots_list)
+            for node in nodes_list:
+                if node["id"] in root_set:
+                    node["root_color"] = ROOT_COLOR_VOCAB[color]
+            for root in roots_list:
+                combined_edges.append({"source": "global", "target": root, "type": "child_of"})
+
+        raw["nodes"] = combined_nodes
+        raw["edges"] = combined_edges
+
+    @staticmethod
+    def _normalize_graph_attrs(G_enriched: nx.DiGraph) -> None:
+        """Remove kappa_value and pad all node/edge dicts to a uniform key set."""
+        for nid in G_enriched.nodes:
+            G_enriched.nodes[nid].pop("kappa_value", None)
+
+        all_node_keys: set[str] = set()
+        for nid in G_enriched.nodes:
+            all_node_keys.update(G_enriched.nodes[nid].keys())
+        for nid in G_enriched.nodes:
+            for key in all_node_keys:
+                if key not in G_enriched.nodes[nid]:
+                    G_enriched.nodes[nid][key] = None
+
+        all_edge_keys: set[str] = set()
+        for u, v in G_enriched.edges:
+            all_edge_keys.update(G_enriched.edges[u, v].keys())
+        for u, v in G_enriched.edges:
+            for key in all_edge_keys:
+                if key not in G_enriched.edges[u, v]:
+                    G_enriched.edges[u, v][key] = None
 
     @staticmethod
     def _load(source: Union[str, Path, dict]) -> dict:

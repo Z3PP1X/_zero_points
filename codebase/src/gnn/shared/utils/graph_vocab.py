@@ -17,6 +17,7 @@ CANONICAL_LABELS: tuple[str, ...] = (
     "Times",
     "Divide",
     "Power",
+    "Sqrt",
 )
 CANONICAL_LABEL_VOCAB: dict[str, int] = {label: idx for idx, label in enumerate(CANONICAL_LABELS)}
 NUM_CANONICAL_LABELS: int = len(CANONICAL_LABELS)
@@ -37,6 +38,7 @@ LABEL_ONEHOT_NAMES: tuple[str, ...] = (
     "label_Times",
     "label_Divide",
     "label_Power",
+    "label_Sqrt",
 )
 
 # Anchor-based positional encoding. Reduced to 3 semantic groups.
@@ -74,12 +76,10 @@ HISTOGRAM_FEATURES: tuple[str, ...] = (
     "hist_constants",
 )
 
-VIRTUAL_NODE_TYPES: frozenset[str] = frozenset()
-
 NUM_NODE_TYPES: int = 6  # codes 0=global,1=operator,2=root,5=supernode
-# node_type integer code → one-hot index (4 distinct codes)
-NODE_TYPE_ONEHOT: dict[int, int] = {0: 0, 1: 1, 2: 2, 5: 3}
-NODE_TYPE_ONEHOT_DIM: int = 4
+# node_type integer code → one-hot index (3 distinct codes; supernode omitted — always 0 when add_virtual_supernode=False)
+NODE_TYPE_ONEHOT: dict[int, int] = {0: 0, 1: 1, 2: 2}
+NODE_TYPE_ONEHOT_DIM: int = 3
 ROOT_COLOR_ONEHOT_DIM: int = NUM_ROOT_COLORS  # 5
 
 SUPERNODE_NODE_TYPE: int = 5
@@ -87,18 +87,17 @@ SUPERNODE_NODE_ID: str = "virtual_supernode"
 
 # 32-column one-hot node feature schema.
 NODE_FEATURE_SCHEMA: list[str] = [
-    # node_type one-hot (4 values: global=0, operator=1, function=2, supernode=5)
+    # node_type one-hot (3 values: global=0, operator=1, function=2)
     "node_type_global",
     "node_type_operator",
     "node_type_function",
-    "node_type_supernode",
     # root_color one-hot (5 values: none=0, f=1, d1=2, d2=3, kappa=4)
     "root_color_none",
     "root_color_f",
     "root_color_d1",
     "root_color_d2",
     "root_color_kappa",
-    # label one-hot (14 entries matching CANONICAL_LABELS; GLOBAL omitted — redundant with node_type_global)
+    # label one-hot (15 entries matching CANONICAL_LABELS; GLOBAL omitted — redundant with node_type_global)
     "label_UNK",
     "label_CONSTANT",
     "label_x",
@@ -113,7 +112,7 @@ NODE_FEATURE_SCHEMA: list[str] = [
     "label_Times",
     "label_Divide",
     "label_Power",
-    # topology (continuous)
+    "label_Sqrt",
     "subtree_size",
     "subtree_depth",
     # histogram (4 bins)
@@ -159,7 +158,7 @@ def encode_label(label: str) -> int:
 
 def node_type_onehot(code: int) -> list[float]:
     vec = [0.0] * NODE_TYPE_ONEHOT_DIM
-    idx = NODE_TYPE_ONEHOT.get(code, 1)
+    idx = NODE_TYPE_ONEHOT.get(code, 0)
     vec[idx] = 1.0
     return vec
 

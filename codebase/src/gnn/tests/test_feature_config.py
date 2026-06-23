@@ -81,15 +81,6 @@ def test_positional_false_disables_pe():
     assert not any(feature.startswith("anchor_") for feature in active)
 
 
-def test_edge_list_coerces_to_enabled():
-    # Edge features have been removed (EDGE_FEATURE_SCHEMA is empty).
-    # Disabling the edge category via False should be accepted.
-    selection = parse_feature_selection_from_mapping(
-        {"features": {"edge": False}}
-    )
-    assert selection.edge is False
-    assert "edge" not in selection.enabled_groups()
-
 
 def test_nested_positional_form_rejected():
     with pytest.raises(ValueError, match="Nested feature config"):
@@ -103,7 +94,6 @@ def test_per_category_cli_overrides():
         parse_feature_selection_from_mapping({}),
         node_features=["node_type_operator"],
         topology_features=["none"],
-        edge_features=["none"],
     )
     active = resolve_active_node_features(selection)
     assert active is not None
@@ -113,7 +103,6 @@ def test_per_category_cli_overrides():
         feature in active
         for feature in ("subtree_depth", "subtree_size", "hist_trigonometric")
     )
-    assert selection.edge is False
 
 
 def test_unknown_node_feature_raises():
@@ -170,7 +159,6 @@ def test_feature_classes_cover_catalog():
     assert "node" in FEATURE_CLASSES
     assert "topology" in FEATURE_CLASSES
     assert "positional" in FEATURE_CLASSES
-    assert "edge" in FEATURE_CLASSES
 
 
 def test_positional_with_supernode_raises():

@@ -80,13 +80,13 @@ def test_node_features_change_output():
 
 
 def test_supernode_participates_in_message_passing():
-    """Supernode (node_type_supernode = col 3) is a regular MP node; perturbing it changes readout."""
+    """Supernode is encoded as node_type_global and participates in message passing."""
     input_dim = INPUT_DIM
     x = torch.randn(4, input_dim)
-    x[:, 0:4] = 0.0
+    x[:, 0:3] = 0.0
     x[0, 1] = 1.0   # operator
-    x[1, 2] = 1.0   # root
-    x[2, 3] = 1.0   # supernode
+    x[1, 2] = 1.0   # function
+    x[2, 0] = 1.0   # supernode → encoded as global (col 0)
     x[3, 1] = 1.0   # operator
     edge_index = torch.tensor([[0, 1, 2, 3, 0], [1, 2, 0, 0, 3]], dtype=torch.long)
     batch = torch.zeros(4, dtype=torch.long)
@@ -108,5 +108,3 @@ def test_supernode_participates_in_message_passing():
 
     assert out_base.shape == (1, 16)
     assert not torch.allclose(out_base, out_perturbed, atol=1e-5), "supernode perturbation had no effect"
-
-

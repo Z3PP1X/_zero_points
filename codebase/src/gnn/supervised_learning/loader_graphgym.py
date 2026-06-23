@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.graphgym.register import register_act
-from torch_geometric.graphgym.register import register_layer, register_loss
+from torch_geometric.graphgym.register import register_loss
 import math
 from torch.optim.lr_scheduler import LambdaLR
 from torch.optim import AdamW
@@ -382,7 +382,6 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.features.node = None
     cfg.expression_graph.features.topology = None
     cfg.expression_graph.features.positional = None
-    cfg.expression_graph.features.edge = None
     cfg.expression_graph.active_features = ""  # Explicit override list, or empty for grouped toggles
     cfg.expression_graph.synthetic = False
     cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name (legacy; prefer cfg.data.*)
@@ -392,7 +391,6 @@ def set_custom_cfg(cfg):
     cfg.data.synthetic_csv = ""  # e.g. datasets/run_20260604_154509/synthetic_dataset.csv
     cfg.data.graphs_dir = ""     # e.g. datasets/graphs  (contains graphs.json + synthetic_graphs.json)
     cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
-    cfg.expression_graph.heterogeneous = False  # heterogeneous or homogeneous graph representation
     cfg.expression_graph.add_kappa = False  # merge kappa (h-function) subgraphs from datasets/kappas/
     cfg.expression_graph.add_virtual_supernode = False  # add a fully-connected virtual supernode
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
@@ -400,9 +398,6 @@ def set_custom_cfg(cfg):
     # ExpressionClassifierNetwork (built later by create_model) can locate categorical
     # columns BY NAME. Empty => fall back to the full node schema.
     cfg.expression_graph.active_feature_names = []
-    # Edge-type metadata for the heterogeneous to_hetero model, stashed by the loader as a
-    # list of [src, relation, dst] lists. Empty unless cfg.expression_graph.heterogeneous.
-    cfg.expression_graph.hetero_edge_types = []
     # Structural / pooling axes for the ExpressionClassifierNetwork backbone. Declared here
     # so YACS accepts grid.yaml overrides; ignored when cfg.model.type == "gnn".
     cfg.gnn.variant = "legacy"        # legacy | standard | pooling | pooling_skip
@@ -435,7 +430,7 @@ def set_custom_cfg(cfg):
 register_config("expression_graph", set_custom_cfg)
 
 
-def load_custom_expression_graphs(format, name, dataset_dir):
+def load_custom_expression_graphs(format, name, _dataset_dir):
     """
     GraphGym Loader for custom expression graphs.
     Uses Dependency Injection by reading dataset properties dynamically from GraphGym's
@@ -470,7 +465,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     edge_direction = validate_edge_direction(
         getattr(cfg.expression_graph, "edge_direction", "top_down")
     )
-    heterogeneous = getattr(cfg.expression_graph, "heterogeneous", False)
     add_kappa = getattr(cfg.expression_graph, "add_kappa", False)
     add_virtual_supernode = getattr(
         cfg.expression_graph, "add_virtual_supernode", False
@@ -531,7 +525,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         print(f"  Synthetic Graphs:        {synthetic_graphs_path}")
     elif synthetic:
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
-    print(f"  Injected Heterogeneous:  {heterogeneous}")
     print(f"  Injected Add Kappa:      {add_kappa}")
     print(f"  Injected Add Supernode:  {add_virtual_supernode}")
     print(f"  Injected Feature Groups: {feature_selection.enabled_groups()}")
@@ -549,7 +542,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
         layer_type=layer_type,
-        heterogeneous=heterogeneous,
         curated_csv_path=curated_csv_path,
         synthetic_csv_path=synthetic_csv_path,
         curated_graphs_path=curated_graphs_path,
@@ -687,12 +679,6 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         print(f"[GraphGym] Saved split CSVs to {split_dir}/split_{{train,val,test}}.csv")
     except Exception as e:
         print(f"[Warning] Failed to save split CSVs: {e}")
-
-    if heterogeneous:
-        all_data_list, edge_types = prepare_hetero_data_list(all_data_list)
-        # Stash the edge-type metadata so the network can build its to_hetero model.
-        cfg.expression_graph.hetero_edge_types = [list(et) for et in edge_types]
-        print(f"[GraphGym] Heterogeneous mode: {len(edge_types)} edge types collected")
 
     return ExpressionGraphDataset(
         all_data_list, train_indices, val_indices, test_indices

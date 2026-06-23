@@ -75,7 +75,6 @@ def resolve_expression_graph_features(
     node_features: list[str] | None = None,
     topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
-    edge_features: list[str] | None = None,
     active_features: list[str] | None = None,
 ) -> tuple[FeatureSelection, list[str] | None]:
     """Resolve grouped feature toggles into an active node-feature list."""
@@ -85,7 +84,6 @@ def resolve_expression_graph_features(
         node_features=node_features,
         topology_features=topology_features,
         positional_encoding=positional_encoding,
-        edge_features=edge_features,
         active_features=active_features,
     )
     return selection, resolve_active_node_features(selection)
@@ -100,11 +98,9 @@ def apply_expression_graph_overrides(
     node_features: list[str] | None = None,
     topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
-    edge_features: list[str] | None = None,
     synthetic: bool | None = None,
     synthetic_dataset: str | None = None,
     edge_direction: str | None = None,
-    heterogeneous: bool | None = None,
     add_kappa: bool | None = None,
     add_virtual_supernode: bool | None = None,
 ) -> FeatureSelection:
@@ -122,7 +118,6 @@ def apply_expression_graph_overrides(
         node_features=node_features,
         topology_features=topology_features,
         positional_encoding=positional_encoding,
-        edge_features=edge_features,
         active_features=active_features,
     )
     cfg.expression_graph.active_features = active_features_to_csv(resolved_features)
@@ -132,8 +127,6 @@ def apply_expression_graph_overrides(
         cfg.expression_graph.synthetic_dataset = synthetic_dataset
     if edge_direction is not None:
         cfg.expression_graph.edge_direction = validate_edge_direction(edge_direction)
-    if heterogeneous is not None:
-        cfg.expression_graph.heterogeneous = heterogeneous
     if add_kappa is not None:
         cfg.expression_graph.add_kappa = add_kappa
     if add_virtual_supernode is not None:
@@ -178,5 +171,4 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
         "synthetic_dataset": expression_graph.get("synthetic_dataset") or None,
         "active_features": active_features,
         "feature_selection": feature_selection,
-        "heterogeneous": bool(expression_graph.get("heterogeneous", False)),
     }

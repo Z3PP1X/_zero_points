@@ -80,7 +80,7 @@ def evaluate(model, loader):
     mp_embeddings = []
     hook_handle = None
     if hasattr(model, "mp"):
-        def hook_fn(module, inputs, outputs):
+        def hook_fn(module, _inputs, outputs):
             mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, "edge_attr", None)))
         hook_handle = model.mp.register_forward_hook(hook_fn)
 
@@ -245,12 +245,10 @@ def main(
     node_features: list[str] | None = None,
     topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
-    edge_features: list[str] | None = None,
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
     layer_type: str = "ginconv",
     edge_direction: str = "top_down",
-    heterogeneous: bool = False,
     add_kappa: bool = False,
     add_virtual_supernode: bool = False,
 ):
@@ -264,11 +262,9 @@ def main(
         node_features=node_features,
         topology_features=topology_features,
         positional_encoding=positional_encoding,
-        edge_features=edge_features,
         synthetic=synthetic,
         synthetic_dataset=synthetic_dataset,
         edge_direction=edge_direction,
-        heterogeneous=heterogeneous,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )
@@ -298,7 +294,6 @@ def main(
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=dataset_name,
         mode=mode,
-        heterogeneous=heterogeneous,
         edge_direction=edge_direction,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
@@ -313,7 +308,6 @@ def main(
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
         layer_type=layer_type,
-        heterogeneous=heterogeneous,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )
@@ -646,11 +640,6 @@ if __name__ == "__main__":
         help="Synthetic dataset name, optionally including run key (e.g. synthetic_run_key/synthetic_dataset_name)",
     )
     parser.add_argument(
-        "--heterogeneous",
-        action="store_true",
-        help="Enables heterogeneous graph mode.",
-    )
-    parser.add_argument(
         "--add-kappa",
         action="store_true",
         help="Merge kappa (h-function) subgraphs from datasets/kappas/ into each graph.",
@@ -678,7 +667,6 @@ if __name__ == "__main__":
     layer_type = settings["layer_type"]
     synthetic = args.synthetic or settings["synthetic"]
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
-    heterogeneous = args.heterogeneous or settings["heterogeneous"]
     add_kappa = args.add_kappa or settings["add_kappa"]
     add_virtual_supernode = (
         args.add_virtual_supernode or settings["add_virtual_supernode"]
@@ -694,7 +682,6 @@ if __name__ == "__main__":
         node_features=args.node_features,
         topology_features=args.topology_features,
         positional_encoding=args.positional_encoding,
-        edge_features=args.edge_features,
         active_features=args.active_features,
     )
     validate_positional_supernode_compatibility(_guard_selection, add_virtual_supernode)
@@ -705,7 +692,6 @@ if __name__ == "__main__":
         loader = UnifiedDataLoader.get_instance(
             dataset_name=dataset_name,
             mode=mode,
-            heterogeneous=heterogeneous,
             edge_direction=edge_direction,
             add_kappa=add_kappa,
             add_virtual_supernode=add_virtual_supernode,
@@ -721,7 +707,6 @@ if __name__ == "__main__":
             synth_loader = UnifiedDataLoader.get_instance(
                 dataset_name=synthetic_dataset,
                 mode=mode,
-                heterogeneous=heterogeneous,
                 edge_direction=edge_direction,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
@@ -742,7 +727,6 @@ if __name__ == "__main__":
                 node_features=args.node_features,
                 topology_features=args.topology_features,
                 positional_encoding=args.positional_encoding,
-                edge_features=args.edge_features,
                 active_features=args.active_features,
             )
             print(f"Feature groups: {preview_selection.enabled_groups()}")
@@ -759,13 +743,11 @@ if __name__ == "__main__":
                 node_features=args.node_features,
                 topology_features=args.topology_features,
                 positional_encoding=args.positional_encoding,
-                edge_features=args.edge_features,
                 active_features=args.active_features,
                 synthetic=synthetic,
                 synthetic_dataset=synthetic_dataset,
                 layer_type=layer_type,
                 edge_direction=edge_direction,
-                heterogeneous=heterogeneous,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
             )

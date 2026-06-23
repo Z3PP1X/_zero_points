@@ -367,7 +367,6 @@ def main() -> None:
         node_features=args.node_features,
         topology_features=args.topology_features,
         positional_encoding=args.positional_encoding,
-        edge_features=args.edge_features,
         active_features=args.active_features,
     )
     # Anchor positional encoding and the fully-connected supernode are mutually exclusive.

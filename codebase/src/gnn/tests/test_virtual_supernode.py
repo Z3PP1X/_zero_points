@@ -17,7 +17,6 @@ from graph_utils import (
 
 @pytest.fixture
 def sample_raw():
-    # Expression: Plus[x, 2]
     return {
         "id": "P-supernode-test-1",
         "nodes": [

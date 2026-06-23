@@ -25,7 +25,6 @@ class GraphDataLoader:
         self,
         name: str,
         mode: str = "graph",
-        heterogeneous: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
         edge_direction: str = "top_down",

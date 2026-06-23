@@ -8,11 +8,10 @@ from typing import Any, Iterable
 
 from gnn.shared.utils.graph_utils import (
     ANCHOR_GROUP_FEATURES,
-    EDGE_FEATURE_SCHEMA,
     NODE_FEATURE_SCHEMA,
 )
 
-FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional", "edge")
+FEATURE_CLASSES: tuple[str, ...] = ("node", "topology", "positional")
 POSITIONAL_ENCODING_CHOICES: tuple[str, ...] = ANCHOR_GROUP_FEATURES
 
 NODE_FEATURES: tuple[str, ...] = (
@@ -39,6 +38,7 @@ NODE_FEATURES: tuple[str, ...] = (
     "label_Times",
     "label_Divide",
     "label_Power",
+    "label_Sqrt",
 )
 
 TOPOLOGY_FEATURES: tuple[str, ...] = (
@@ -53,8 +53,6 @@ TOPOLOGY_FEATURES: tuple[str, ...] = (
 POSITIONAL_ENCODING_FEATURES: dict[str, tuple[str, ...]] = {
     name: (name,) for name in POSITIONAL_ENCODING_CHOICES
 }
-
-EDGE_FEATURES: tuple[str, ...] = tuple(EDGE_FEATURE_SCHEMA)
 
 NODE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {}
 
@@ -120,7 +118,6 @@ CATEGORY_MEMBERS: dict[str, tuple[str, ...]] = {
     "node": NODE_FEATURES,
     "topology": TOPOLOGY_FEATURES,
     "positional": POSITIONAL_ENCODING_CHOICES,
-    "edge": EDGE_FEATURES,
 }
 
 
@@ -180,11 +177,6 @@ def _split_positional(value: bool | tuple[str, ...]) -> tuple[bool, tuple[str, .
     return True, tuple(value)
 
 
-def _coerce_edge(value: bool | tuple[str, ...]) -> bool:
-    """Edge slicing is deferred; a member list means 'enabled' (all edge columns)."""
-    return bool(value)
-
-
 def _apply_list_override(
     values: list[str], members: tuple[str, ...], *, label: str
 ) -> bool | tuple[str, ...]:
@@ -203,7 +195,6 @@ class FeatureSelection:
     topology: bool | tuple[str, ...] = True
     positional_enabled: bool = True
     positional_encodings: tuple[str, ...] = POSITIONAL_ENCODING_CHOICES
-    edge: bool = True
     explicit_features: list[str] | None = None
 
     def enabled_groups(self) -> list[str]:
@@ -214,8 +205,6 @@ class FeatureSelection:
             groups.append("topology")
         if self.positional_enabled and self.positional_encodings:
             groups.append("positional")
-        if self.edge:
-            groups.append("edge")
         return groups
 
     def summary(self) -> str:
@@ -254,7 +243,7 @@ def validate_positional_supernode_compatibility(
 def parse_feature_selection_from_mapping(
     expression_graph: dict[str, Any] | None,
 ) -> FeatureSelection:
-    
+
     expression_graph = plain_dict(expression_graph)
     features = plain_dict(expression_graph.get("features"))
 
@@ -267,10 +256,6 @@ def parse_feature_selection_from_mapping(
     positional_value = _resolve_category_value(
         features.get("positional", True), POSITIONAL_ENCODING_CHOICES, label="positional"
     )
-    edge_value = _resolve_category_value(
-        features.get("edge", True), EDGE_FEATURES, label="edge"
-    )
-
     positional_enabled, positional_encodings = _split_positional(positional_value)
     explicit_features = parse_csv_list(expression_graph.get("active_features"))
 
@@ -279,7 +264,6 @@ def parse_feature_selection_from_mapping(
         topology=topology,
         positional_enabled=positional_enabled,
         positional_encodings=positional_encodings,
-        edge=_coerce_edge(edge_value),
         explicit_features=explicit_features,
     )
 
@@ -291,21 +275,19 @@ def merge_feature_selection(
     node_features: list[str] | None = None,
     topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
-    edge_features: list[str] | None = None,
     active_features: list[str] | None = None,
 ) -> FeatureSelection:
     """Apply CLI overrides onto a YAML-backed FeatureSelection.
 
     ``--feature-groups`` sets coarse category on/off first; the per-category list
-    overrides (``node_features``/``topology_features``/``positional_encoding``/
-    ``edge_features``) then refine individual categories.
+    overrides (``node_features``/``topology_features``/``positional_encoding``)
+    then refine individual categories.
     """
     selection = FeatureSelection(
         node=base.node,
         topology=base.topology,
         positional_enabled=base.positional_enabled,
         positional_encodings=base.positional_encodings,
-        edge=base.edge,
         explicit_features=base.explicit_features,
     )
 
@@ -313,7 +295,6 @@ def merge_feature_selection(
         enabled = set(validate_feature_groups(feature_groups))
         selection.node = "node" in enabled
         selection.topology = "topology" in enabled
-        selection.edge = "edge" in enabled
         selection.positional_enabled = "positional" in enabled
 
     if node_features is not None:
@@ -321,10 +302,6 @@ def merge_feature_selection(
     if topology_features is not None:
         selection.topology = _apply_list_override(
             topology_features, TOPOLOGY_FEATURES, label="topology"
-        )
-    if edge_features is not None:
-        selection.edge = _coerce_edge(
-            _apply_list_override(edge_features, EDGE_FEATURES, label="edge")
         )
 
     if positional_encoding is not None:
@@ -440,17 +417,6 @@ def add_feature_cli_args(parser: argparse.ArgumentParser) -> None:
             "Anchor positional-encoding groups to use when the positional group is "
             f"enabled. Subset of {', '.join(POSITIONAL_ENCODING_CHOICES)}, or 'none'. "
             "Incompatible with --add-virtual-supernode."
-        ),
-    )
-    parser.add_argument(
-        "--edge-features",
-        nargs="+",
-        default=None,
-        metavar="FEATURE",
-        choices=[*EDGE_FEATURES, "none", "all"],
-        help=(
-            "Edge features to load. 'none' disables edge features; any subset "
-            "currently enables all edge columns (per-edge slicing is deferred)."
         ),
     )
     parser.add_argument(

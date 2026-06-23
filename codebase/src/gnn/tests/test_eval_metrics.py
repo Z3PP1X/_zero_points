@@ -58,7 +58,6 @@ def test_resolve_feature_names_with_custom_pos_encodings():
         "topology": True,
         # one anchor group only -> the other 2 anchor columns are dropped
         "positional": ["anchor_trigonometric"],
-        "edge": True
     }
 
     cfg.expression_graph.features = features_dict
@@ -69,7 +68,7 @@ def test_resolve_feature_names_with_custom_pos_encodings():
     ]
 
     feature_names = resolve_feature_names(cfg)
-    # Schema: 23 node one-hot + 6 topology + 1 anchor PE (trigonometric only) = 30 features.
+    # Schema: 23 node one-hot (3 node_type + 5 root_color + 15 label) + 6 topology + 1 anchor PE = 30 features.
     assert len(feature_names) == 30
     assert "anchor_trigonometric" in feature_names
     assert "anchor_exponential" not in feature_names

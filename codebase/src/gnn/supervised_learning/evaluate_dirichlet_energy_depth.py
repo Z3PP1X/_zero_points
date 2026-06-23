@@ -37,7 +37,7 @@ def evaluate_dirichlet_for_depth(model, val_loader):
     model.eval()
     
     mp_embeddings = []
-    def hook_fn(module, inputs, outputs):
+    def hook_fn(module, _inputs, outputs):
         mp_embeddings.append((outputs.x.detach().cpu(), outputs.edge_index.detach().cpu(), getattr(outputs, 'edge_attr', None)))
         
     hook_handle = model.mp.register_forward_hook(hook_fn)

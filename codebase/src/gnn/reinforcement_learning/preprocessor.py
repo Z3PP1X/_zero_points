@@ -51,7 +51,6 @@ class Preprocessor:
             self.loader = GraphDataLoader(
                 name=Path(graphs_dir).name,
                 mode=mode,
-                heterogeneous=False,
                 base_dir=graphs_dir,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
@@ -93,7 +92,7 @@ class Preprocessor:
         self._store_template(cache_key, data)
         return data
 
-    def process(self, message: Dict[str, Any], dataloader: Any = None):
+    def process(self, message: Dict[str, Any]):
         graph_id = message.get("id")
         if graph_id is None:
             raise ValueError("Message has no 'id'; cannot load graph.")

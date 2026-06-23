@@ -131,7 +131,7 @@ class MathematicaGraphEnv(gym.Env):
         self.current_uuid = state_dict.get("uuid")
         self.replay_buffer.start_episode(self.current_uuid)
         self.current_state_dict = state_dict
-        pyg_data, _ = self.preprocessor.process(state_dict, dataloader=None)
+        pyg_data, _ = self.preprocessor.process(state_dict)
         self.current_obs = self._pad_graph(pyg_data)
         return self.current_obs, {}
 
@@ -181,7 +181,7 @@ class MathematicaGraphEnv(gym.Env):
             }
 
         self.current_state_dict = next_state_dict
-        pyg_data, _ = self.preprocessor.process(next_state_dict, dataloader=None)
+        pyg_data, _ = self.preprocessor.process(next_state_dict)
         self.current_obs = self._pad_graph(pyg_data)
         return self.current_obs, 0.0, False, False, {}
 

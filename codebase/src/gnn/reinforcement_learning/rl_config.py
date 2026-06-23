@@ -73,7 +73,6 @@ def resolve_rl_features(
     node_features: list[str] | None = None,
     topology_features: list[str] | None = None,
     positional_encoding: list[str] | None = None,
-    edge_features: list[str] | None = None,
     active_features: list[str] | None = None,
 ) -> tuple[FeatureSelection, list[str] | None]:
     selection = merge_feature_selection(
@@ -82,7 +81,6 @@ def resolve_rl_features(
         node_features=node_features,
         topology_features=topology_features,
         positional_encoding=positional_encoding,
-        edge_features=edge_features,
         active_features=active_features,
     )
     return selection, resolve_active_node_features(selection)

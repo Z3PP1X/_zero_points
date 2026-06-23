@@ -21,8 +21,8 @@ share:
   num_splits: 3
 
 data:
-  curated_csv:  datasets/run_20260604_154509/dataset_joined.csv
-  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset.csv
+  curated_csv:  datasets/run_20260604_154509/dataset2_joined.csv
+  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset2.csv
   graphs_dir:   datasets/graphs
 
 dataset:
@@ -39,7 +39,20 @@ expression_graph:
   mode: graph
   edge_direction: top_down
   synthetic: True
-  active_features: ""
+  features:
+    node: true       # node_type_* + root_color_* + label_*
+    topology: true   # subtree_size, subtree_depth, hist_*
+    positional: true  # anchor_trigonometric, anchor_exponential, anchor_variable
+  active_features: ""  # leer = alle 32 Features; oder explizite Teilmenge eintragen
+
+  # ---------------------------------------------------------------------------
+  # OPTIONAL — Strukturerweiterungen (default: aus, jederzeit einschaltbar)
+  # Ändern die Graphstruktur, nicht den Feature-Vektor dieser Stufe.
+  #   add_virtual_supernode: vollvernetzter Hilfsknoten — verkürzt Message-Passing-Pfade
+  #   add_kappa:             κ-Teilgraph einbetten — vergrößert den Graph erheblich
+  # ---------------------------------------------------------------------------
+  add_virtual_supernode: false
+  add_kappa: false
 
 train:
   mode: custom

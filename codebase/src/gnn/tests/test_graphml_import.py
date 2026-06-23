@@ -4,6 +4,11 @@ import torch
 from graph_utils import (
     create_virtual_global_node,
     ExpressionGraphConverter,
+    parse_graphml_node_name,
+    parse_graphml_to_nodes_and_edges,
+    _determine_node_type_from_label,
+    _parse_constant_value,
+    find_roots,
 )
 
 GRAPHML_F = """<?xml version='1.0' encoding='UTF-8'?>
