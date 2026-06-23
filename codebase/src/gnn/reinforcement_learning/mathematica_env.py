@@ -122,7 +122,7 @@ class MathematicaGraphEnv(gym.Env):
             return self.state_ingress.take_next_training_start()
         return self.state_ingress.take_next_for_episode(self.current_uuid, timeout_s)
 
-    def reset(self, seed=None, options=None):
+    def reset(self, seed=None, _options=None):
         super().reset(seed=seed)
         if self.current_uuid and self.replay_buffer.has_episode(self.current_uuid):
             self.replay_buffer.clear_episode(self.current_uuid)

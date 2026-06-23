@@ -487,7 +487,7 @@ class MathematicaVecEnv(VecEnv):
         method = getattr(self, method_name)
         return [method(*method_args, **method_kwargs) for _ in indices]
 
-    def env_is_wrapped(self, wrapper_class, indices=None):
+    def env_is_wrapped(self, _wrapper_class, indices=None):
         indices = self._get_indices(indices)
         return [False for _ in indices]
 
