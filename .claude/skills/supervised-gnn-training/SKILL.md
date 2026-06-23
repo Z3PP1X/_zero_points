@@ -12,7 +12,7 @@ Goal: binary classification — given an expression graph + start/target values,
 ## Two entry paths
 
 ### A. Custom training — `main.py`
-Reads graphs from CSV/GraphML, train/val splits, trains a GATv2 (or other) classifier.
+Reads graphs from CSV/GraphML, train/val splits, trains a GINConv classifier.
 
 ```bash
 python main.py --dry-run                                  # validate dataset load only
@@ -47,13 +47,12 @@ python run_results/eval.py res_with_enrich
 ## Config files
 
 - `config_supervised.yaml` — base GraphGym config. Key blocks: `gnn:` (`layers_mp`, `dim_inner`, `layer_type`, `act`), `dataset.name`, and `expression_graph:` (`mode`, `enrich`, `edge_direction`, `features:`). `loader_graphgym.py` reads `expression_graph` keys via dependency injection and wires them into the shared pipeline.
-- `grid.yaml` — hyperparameter sweep, e.g. `gnn.layer_type: [sageconv, gcnconv, ginconv, gatv2conv]`, `gnn.layers_mp: [2,3]`, `model.graph_pooling: [add, mean]`.
+- `grid.yaml` — hyperparameter sweep, e.g. `gnn.layer_type: [ginconv]`, `gnn.layers_mp: [2,3]`, `model.graph_pooling: [add, mean]`.
 
 ## Architectures
 
-Supported layer types and their stacks are declared in `supervised_config.py`:
-`gatv2conv→gatv2_stack`, `gineconv→gine_stack`, `gcnconv→gcn_stack`, `ginconv→gin_stack`.
-**`gcnconv` and `ginconv` ignore edge features** (`LAYERS_WITHOUT_EDGE_FEATURES`) — don't expect native edge_attr to matter for those. Backbones live in `shared/models/gnn_backbones.py`; classifier heads in `shared/models/classifiers.py` (`SupervisedGraphClassifier`). To add an architecture, register it in `supervised_config.py`, add the stack in `gnn_backbones.py`, and add the option to `grid.yaml`.
+Only `ginconv` (`gin_stack`) is supported. `SUPERVISED_LAYER_TYPES = ("ginconv",)` in `supervised_config.py` — any other value raises `ValueError` at load time.
+**`ginconv` ignores edge features** — don't expect edge_attr to matter. The backbone lives in `shared/models/gnn_backbones.py`; the classifier head in `shared/models/classifiers.py` (`SupervisedGraphClassifier`). To add an architecture, add the stack in `gnn_backbones.py`, register it in `supervised_config.py`'s `SUPERVISED_LAYER_TYPES`, and add it to `grid.yaml`.
 
 ## Model selection & split semantics (don't mislabel these)
 

@@ -248,8 +248,6 @@ class ExpressionClassifierNetwork(torch.nn.Module):
 
     def __init__(self, dim_in, dim_out, **kwargs):
         super().__init__()
-        self._last_aux_loss = torch.zeros(())
-
         validate_layer_type(cfg.gnn.layer_type)
         names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
         self.net = ExpressionGNN(
@@ -272,33 +270,6 @@ class ExpressionClassifierNetwork(torch.nn.Module):
         if logits.size(-1) == 1:  # match the stock single-logit BCE path
             logits = logits.view(-1)
         return logits, batch.y
-
-
-# DiffPool exposes a link+entropy auxiliary loss on the network; fold it into the
-# training loss. Patching _shared_step mirrors the Logger/LoggerCallback monkeypatches
-# above. No-op for the stock GNN (no _last_aux_loss) and for topk/legacy (aux == 0).
-import time as _time
-from torch_geometric.graphgym.model_builder import GraphGymModule
-from torch_geometric.graphgym.loss import compute_loss as _compute_loss
-
-
-def _shared_step_with_aux(self, batch, split):
-    batch.split = split
-    pred, true = self(batch)
-    loss, pred_score = _compute_loss(pred, true)
-    if split == "train":
-        aux = getattr(self.model, "_last_aux_loss", None)
-        if aux is not None:
-            loss = loss + float(getattr(cfg.gnn, "aux_loss_weight", 1.0)) * aux
-    return dict(
-        loss=loss,
-        true=true,
-        pred_score=pred_score.detach(),
-        step_end_time=_time.time(),
-    )
-
-
-GraphGymModule._shared_step = _shared_step_with_aux
 
 
 def _make_lr_lambda(warmup_epochs: int, post_fn):
@@ -400,9 +371,6 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.active_feature_names = []
     # Structural / pooling axes for the ExpressionClassifierNetwork backbone. Declared here
     # so YACS accepts grid.yaml overrides; ignored when cfg.model.type == "gnn".
-    cfg.gnn.variant = "legacy"        # legacy | standard | pooling | pooling_skip
-    cfg.gnn.pool_type = "topk"        # topk | diffpool (only used by pooling* variants)
-    cfg.gnn.aux_loss_weight = 1.0     # weight for the DiffPool link+entropy aux loss
     cfg.train.mode = "custom"
     cfg.train.epochs = 100
     cfg.train.epoch_warmup = 5

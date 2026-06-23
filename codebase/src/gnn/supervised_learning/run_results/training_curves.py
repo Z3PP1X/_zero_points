@@ -26,7 +26,7 @@ CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "brier_score"
 
 _CONFIG_COLS = {
     "layer_type", "layers_mp", "dim_inner", "dropout", "graph_pooling",
-    "act", "base_lr", "variant", "pool_type", "aux_loss_weight", "mode", "edge_direction",
+    "act", "base_lr", "mode", "edge_direction",
 }
 SPLIT_COLORS = {
     "train": "#2A9D8F",
@@ -82,7 +82,7 @@ class TrainingCurvePlotter:
 
     def _iter_run_dirs(self):
         for path in sorted(self.results_dir.iterdir()):
-            if path.is_dir() and path.name.startswith("grid"):
+            if path.is_dir() and path.name != "agg":
                 yield path
 
     def _load_run_series(self, run_dir: Path) -> dict:
@@ -251,14 +251,12 @@ class TrainingCurvePlotter:
 
         out_root = self.output_dir / "top_configs"
         for idx, row in ranked.iterrows():
-            run_name = "grid-" + "-".join(
-                f"{col}={row[col]}" for col in config_cols if col in row and pd.notna(row[col])
-            )
+            run_name = row.get("run_name") if "run_name" in row.index else None
+            if not run_name:
+                print(f"    Skipping curves for rank {idx + 1}: no run_name in leaderboard")
+                continue
             run_dir = self.results_dir / run_name
             if not run_dir.exists():
-                matches = list(self.results_dir.glob(f"{run_name}*"))
-                run_dir = matches[0] if matches else None
-            if run_dir is None or not run_dir.exists():
                 print(f"    Skipping curves for missing run dir: {run_name}")
                 continue
 

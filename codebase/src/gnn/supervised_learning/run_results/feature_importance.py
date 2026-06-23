@@ -232,8 +232,6 @@ def _load_feature_importance_records(results_dir: Path) -> list[dict]:
     for run_dir in sorted(results_dir.iterdir()):
         if not run_dir.is_dir() or run_dir.name == "agg":
             continue
-        if not run_dir.name.startswith("grid"):
-            continue
 
         for json_path in sorted(run_dir.glob("feature_importance_*.json")):
             with open(json_path, encoding="utf-8") as handle:

@@ -82,26 +82,8 @@ def _is_valid_config(config: dict) -> bool:
 
 
 def _canonical_signature(config: dict, swept_keys: list[str]) -> tuple:
-    """Signature of a config over the swept axes, nullifying inert combinations.
-
-    The pooling axes interact: ``variant=legacy`` ignores ``pool_type``, and
-    ``pool_type=topk`` ignores ``aux_loss_weight``. Blindly crossing them emits runs that
-    train to identical behaviour. Collapsing those inert axes to ``None`` here lets
-    generate_configs() skip the duplicate before it costs a full training run.
-    """
-    gnn = config.get("gnn", {}) or {}
-    variant = gnn.get("variant")
-    pool_type = gnn.get("pool_type")
-
-    sig = {}
-    for key in swept_keys:
-        short = key.split(".")[-1]
-        value = get_nested_value(config, key)
-        if short == "pool_type" and variant == "legacy":
-            value = None  # legacy variant ignores pool_type entirely
-        elif short == "aux_loss_weight" and (variant == "legacy" or pool_type == "topk"):
-            value = None  # aux loss is a DiffPool-only term
-        sig[key] = value
+    """Signature of a config over the swept axes for deduplication in generate_configs()."""
+    sig = {key: get_nested_value(config, key) for key in swept_keys}
     return tuple(sorted((k, str(v)) for k, v in sig.items()))
 
 

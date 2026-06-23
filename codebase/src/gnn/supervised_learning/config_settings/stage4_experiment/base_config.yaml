@@ -82,7 +82,6 @@ gnn:
   layer_type: ginconv
   act: prelu
   dropout: 0.2
-  att_heads: 4
 
 optim:
   optimizer: adamw

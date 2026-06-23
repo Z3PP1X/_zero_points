@@ -46,9 +46,6 @@ class GNNResultEvaluator:
         "graph_pooling",
         "act",
         "base_lr",
-        "variant",
-        "pool_type",
-        "aux_loss_weight",
         "mode",
         "edge_direction",
     )
