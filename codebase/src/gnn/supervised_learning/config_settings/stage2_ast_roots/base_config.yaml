@@ -26,7 +26,7 @@ data:
 
 dataset:
   format: custom_expression_graphs
-  name: run_20260604_154509/dataset_joined
+  name: expression_graph_data
   task: graph
   task_type: classification
   transductive: False
