@@ -6,7 +6,7 @@
 # zur Funktion, zur ersten oder zur zweiten Ableitung gehört.
 #
 # FIX:
-#   model.type=expression_classifier, gnn.layer_type=gatv2conv,
+#   model.type=expression_classifier, gnn.layer_type=ginconv,
 #   active_features = node_type_* (4) + root_color_* (5) + label_* (14) = 23 Features
 #
 # EINSTELLBAR (siehe grid.yaml):
@@ -15,6 +15,9 @@
 
 out_dir: results
 seed: 42001
+
+share:
+  num_splits: 3
 
 dataset:
   format: custom_expression_graphs
@@ -58,7 +61,7 @@ model:
 gnn:
   layers_mp: 3
   dim_inner: 128
-  layer_type: gatv2conv
+  layer_type: ginconv
   act: prelu
   dropout: 0.2
   att_heads: 4

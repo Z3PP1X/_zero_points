@@ -6,7 +6,7 @@
 # Stufen oder neue Ideen erprobt werden.
 #
 # Empfohlene Startpunkte für grid.yaml:
-#   - gnn.layer_type:    gatv2conv | gineconv
+#   - gnn.layer_type:    ginconv
 #   - gnn.dim_inner:     64 | 128 | 256
 #   - gnn.layers_mp:     2 | 3 | 4
 #   - gnn.dropout:       0.0 | 0.1 | 0.2
@@ -16,6 +16,9 @@
 
 out_dir: results
 seed: 42001
+
+share:
+  num_splits: 3
 
 dataset:
   format: custom_expression_graphs
@@ -59,7 +62,7 @@ model:
 gnn:
   layers_mp: 3
   dim_inner: 128
-  layer_type: gatv2conv
+  layer_type: ginconv
   act: prelu
   dropout: 0.2
   att_heads: 4

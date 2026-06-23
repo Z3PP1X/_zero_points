@@ -3,8 +3,7 @@
 # Passe diesen Grid frei an deine Forschungsfrage an.
 
 gnn.layer_type:
-  - gatv2conv
-  - gineconv
+  - ginconv
 
 gnn.dim_inner:
   - 64

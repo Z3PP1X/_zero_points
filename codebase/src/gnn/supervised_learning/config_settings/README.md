@@ -13,7 +13,7 @@ python run_all.py --stage 1 --experiment-name stufe1_lauf1
 python run_all.py --stage stage1_pure_ast    # Ordnername geht auch
 ```
 
-Alle Stufen nutzen **ExpressionGNN** (`model.type: expression_classifier`, `gnn.layer_type: gatv2conv`).
+Alle Stufen nutzen **ExpressionGNN** (`model.type: expression_classifier`, `gnn.layer_type: ginconv`).
 Features werden über `active_features` gesteuert — eine kommaseparierte Liste von
 Spaltennamen aus `NODE_FEATURE_SCHEMA` (28 Spalten gesamt). Leeres `active_features`
 aktiviert alle 28 Features.

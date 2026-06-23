@@ -6,7 +6,7 @@
 # Leeres active_features = alle Spalten aus NODE_FEATURE_SCHEMA werden genutzt.
 #
 # FIX:
-#   model.type=expression_classifier, gnn.layer_type=gatv2conv,
+#   model.type=expression_classifier, gnn.layer_type=ginconv,
 #   active_features = "" (alle 32 Features)
 #
 # EINSTELLBAR (siehe grid.yaml):
@@ -15,6 +15,9 @@
 
 out_dir: results
 seed: 42001
+
+share:
+  num_splits: 3
 
 dataset:
   format: custom_expression_graphs
@@ -58,7 +61,7 @@ model:
 gnn:
   layers_mp: 3
   dim_inner: 132
-  layer_type: gatv2conv
+  layer_type: ginconv
   act: prelu
   dropout: 0.2
   att_heads: 4
