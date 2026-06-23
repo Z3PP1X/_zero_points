@@ -33,7 +33,7 @@ expression_graph:
   mode: graph
   edge_direction: top_down
   synthetic: True
-  synthetic_dataset: run_20260604_154509/dataset_joined
+  synthetic_dataset: run_20260604_154509/synthetic_dataset
   active_features: ""  # leer = alle 32 Features aus NODE_FEATURE_SCHEMA
 
 train:
