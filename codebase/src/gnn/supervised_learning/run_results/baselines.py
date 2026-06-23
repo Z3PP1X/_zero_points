@@ -20,10 +20,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# faster_algorithm: 0 = gMGF, 1 = Newton. The pipeline treats class 1 as the
-# positive class for pr_auc / precision / recall, so baselines mirror that.
-DEFAULT_POS_LABEL = 1
-
 # class_balance.json split key -> the run CSV stem it corresponds to.
 SPLIT_KEYS = {
     "validation_synthetic": "val_bestepoch",
@@ -39,7 +35,7 @@ def _f1(precision: float, recall: float) -> float:
     return _safe_div(2.0 * precision * recall, precision + recall)
 
 
-def split_baselines(counts: dict, pos_label: int = DEFAULT_POS_LABEL) -> dict:
+def split_baselines(counts: dict, pos_label: int = 1) -> dict:
     """Closed-form baseline metrics for one split given its class counts.
 
     ``counts`` is ``{"0": n0, "1": n1, "total": n}`` (``total`` optional).
@@ -109,13 +105,12 @@ def load_class_balance(agg_dir: Path) -> dict | None:
         return None
 
 
-def compute_baselines(
-    agg_dir: Path, pos_label: int = DEFAULT_POS_LABEL
-) -> dict:
+def compute_baselines(agg_dir: Path) -> dict:
     """Baselines for every split present in ``class_balance.json``.
 
     Returns ``{run_stem: split_baselines(...)}`` keyed by the run CSV stem
     (e.g. ``val_bestepoch``) so the report can line baselines up with metrics.
+    Each split uses its own minority class as pos_label (matching the eval pipeline).
     Empty dict when no class balance file is available.
     """
     balance = load_class_balance(agg_dir)
@@ -127,6 +122,9 @@ def compute_baselines(
         counts = balance.get(split_key)
         if not counts:
             continue
+        n0 = int(counts.get("0", 0))
+        n1 = int(counts.get("1", 0))
+        pos_label = 0 if n0 < n1 else 1
         result = split_baselines(counts, pos_label=pos_label)
         if result:
             out[run_stem] = result

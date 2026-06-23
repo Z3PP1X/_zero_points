@@ -15,6 +15,39 @@ from gnn.supervised_learning.run_results.eval_metrics import (
 
 logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
+_CLASS_NAMES = {0: "gMGF", 1: "Newton"}
+
+
+def _load_class_note(agg_dir: Path) -> str | None:
+    """Build a one-line annotation describing each split's class distribution and pos_label."""
+    cb_file = agg_dir / "class_balance.json"
+    if not cb_file.exists():
+        return None
+    try:
+        with open(cb_file, encoding="utf-8") as fh:
+            info = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    parts = []
+    keys = [("validation_synthetic", "Synthetic val"), ("validation_curated", "Curated")]
+    for key, label in keys:
+        d = info.get(key, {})
+        total = int(d.get("total", 0))
+        if total == 0:
+            continue
+        n0 = int(d.get("0", 0))
+        n1 = int(d.get("1", 0))
+        pos = 0 if n0 < n1 else 1
+        pct0 = n0 / total * 100
+        pct1 = n1 / total * 100
+        parts.append(
+            f"{label}: gMGF={n0}({pct0:.0f}%) Newton={n1}({pct1:.0f}%) "
+            f"→ pos_label={pos}({_CLASS_NAMES[pos]})"
+        )
+    return "  |  ".join(parts) if parts else None
+
+
 SPLIT_LABELS = {
     "train": "Train (Synthetic)",
     "val": "Validation Synthetic",
@@ -116,6 +149,7 @@ class TrainingCurvePlotter:
         best_epoch: int | None = None,
         *,
         verbose: bool = True,
+        class_note: str | None = None,
     ):
         available_metrics = [
             m
@@ -159,7 +193,13 @@ class TrainingCurvePlotter:
             if metric == available_metrics[0]:
                 ax.legend(fontsize=8, frameon=False)
 
-        plt.suptitle(title, fontsize=14, fontweight="bold", y=1.01)
+        plt.suptitle(title, fontsize=14, fontweight="bold", y=1.02)
+        if class_note:
+            fig.text(
+                0.5, 1.0, class_note,
+                ha="center", va="bottom", fontsize=7, color="#555555", style="italic",
+                transform=fig.transFigure,
+            )
         plt.tight_layout()
         save_figure(output_path)
         plt.close(fig)
@@ -170,6 +210,7 @@ class TrainingCurvePlotter:
     def plot_all_configs(self, output_root: Path | None = None) -> int:
         """Plot training curves for every grid configuration (best val epoch marked)."""
         out_root = output_root or (self.output_dir / "configs")
+        class_note = _load_class_note(self.results_dir / "agg")
         plotted = 0
         for run_dir in self._iter_run_dirs():
             series = self._load_run_series(run_dir)
@@ -178,8 +219,7 @@ class TrainingCurvePlotter:
             slug = run_dir.name.removeprefix("grid-")
             output_path = out_root / slug / "training_curves.png"
             title = f"Training Curves — {slug} — {self.experiment_name}"
-            
-            # Also save inside the run directory itself
+
             try:
                 run_output_path = run_dir / "training_curves.png"
                 self._plot_series(
@@ -188,6 +228,7 @@ class TrainingCurvePlotter:
                     run_output_path,
                     best_epoch=self._best_val_epoch(series),
                     verbose=False,
+                    class_note=class_note,
                 )
             except Exception as e:
                 print(f"    Warning: Failed to save training curves inside run dir {run_dir}: {e}")
@@ -198,6 +239,7 @@ class TrainingCurvePlotter:
                 output_path,
                 best_epoch=self._best_val_epoch(series),
                 verbose=False,
+                class_note=class_note,
             ):
                 plotted += 1
         if plotted == 0:
@@ -238,7 +280,8 @@ class TrainingCurvePlotter:
             return False
 
         title = f"Training Curves Overview — {self.experiment_name}"
-        return self._plot_series(averaged, title, output_path)
+        class_note = _load_class_note(self.results_dir / "agg")
+        return self._plot_series(averaged, title, output_path, class_note=class_note)
 
     def plot_top_configs(self, leaderboard_csv: Path, top_k: int = 5):
         """Plot training curves for the top-K configs from the leaderboard."""
@@ -248,6 +291,7 @@ class TrainingCurvePlotter:
 
         ranked = pd.read_csv(leaderboard_csv).head(top_k)
         config_cols = [c for c in ranked.columns if c in _CONFIG_COLS]
+        class_note = _load_class_note(self.results_dir / "agg")
 
         out_root = self.output_dir / "top_configs"
         for idx, row in ranked.iterrows():
@@ -272,4 +316,5 @@ class TrainingCurvePlotter:
                 title,
                 output_path,
                 best_epoch=self._best_val_epoch(series),
+                class_note=class_note,
             )

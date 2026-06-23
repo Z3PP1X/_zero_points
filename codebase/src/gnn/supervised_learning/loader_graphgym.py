@@ -94,12 +94,16 @@ def _hard_predictions(pred_score, pos_label: int, thresh: float):
     return torch.tensor((scores <= (1.0 - thresh)).astype(int))
 
 
-def compute_binary_metrics(true, pred_score, round_digits=None):
+def compute_binary_metrics(true, pred_score, round_digits=None, pos_label: int | None = None):
     """
     Compute classification metrics with the minority class as positive.
     Used by both LoggerCallback (stats.json) and ValMetricLogger (checkpointing).
+
+    pos_label: explicit override; defaults to get_pos_label() (set from training class counts).
+    Pass per-dataset minority class when evaluating a split whose distribution differs from training.
     """
-    pos_label = get_pos_label()
+    if pos_label is None:
+        pos_label = get_pos_label()
     thresh = getattr(cfg.model, "thresh", 0.5)
     rnd = round_digits if round_digits is not None else cfg.round
 
@@ -110,7 +114,11 @@ def compute_binary_metrics(true, pred_score, round_digits=None):
     y_true_np = _to_numpy(true_t)
 
     try:
-        r_a_score = roc_auc_score(y_true_np, scores)
+        # roc_auc_score has no pos_label parameter; it always treats higher score = class 1.
+        # _positive_class_scores with pos_label=1 always returns P(class_1), which is what
+        # sklearn expects regardless of which class we treat as positive for PR-AUC.
+        roc_scores = _positive_class_scores(pred_t, pos_label=1)
+        r_a_score = roc_auc_score(y_true_np, roc_scores)
     except ValueError:
         r_a_score = 0.0
 
@@ -144,6 +152,7 @@ def compute_binary_metrics(true, pred_score, round_digits=None):
         ),
         "auc": round(r_a_score, rnd),
         "pr_auc": round(pr_auc_score, rnd),
+        "pos_label": pos_label,
     }
     metrics.update(
         compute_confidence_metrics(

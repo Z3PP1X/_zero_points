@@ -154,10 +154,18 @@ class CuratedEvalCallback(pl.callbacks.Callback):
             prog_bar=True,
             sync_dist=True,
         )
+        pl_module.log(
+            "val_pos_label_curated",
+            float(metrics.get("pos_label", -1)),
+            prog_bar=False,
+            sync_dist=True,
+        )
         self._write_test_logger_stats(trainer, metrics)
+        pos_label_used = metrics.get("pos_label", "?")
         print(
             f"[GraphGym] Curated holdout eval (epoch {trainer.current_epoch + 1}, "
-            f"reason={reason}) | PR-AUC={metrics['pr_auc']:.4f} | Dirichlet Energy={metrics.get('dirichlet_energy', 0.0):.6f}"
+            f"reason={reason}) | PR-AUC(pos_label={pos_label_used})={metrics['pr_auc']:.4f} | "
+            f"ROC-AUC={metrics['auc']:.4f} | Dirichlet Energy={metrics.get('dirichlet_energy', 0.0):.6f}"
         )
 
     def _evaluate_curated(self, pl_module) -> dict[str, float]:
@@ -204,7 +212,17 @@ class CuratedEvalCallback(pl.callbacks.Callback):
 
         true = torch.cat(true_parts)
         pred = torch.cat(pred_parts)
-        metric_values = compute_binary_metrics(true, pred)
+
+        curated_counts = torch.bincount(true.long(), minlength=2)
+        pos_label_curated = int(curated_counts.argmin().item())
+        n = len(true)
+        print(
+            f"[GraphGym] Curated class dist: "
+            f"class0(gMGF)={int(curated_counts[0])} ({curated_counts[0]/n*100:.1f}%), "
+            f"class1(Newton)={int(curated_counts[1])} ({curated_counts[1]/n*100:.1f}%), "
+            f"pos_label={pos_label_curated}"
+        )
+        metric_values = compute_binary_metrics(true, pred, pos_label=pos_label_curated)
 
         # Calculate dirichlet energy
         energies = []
@@ -585,7 +603,6 @@ def main():
 
     print("\n[GraphGym Command Center] Launching training run...")
     print(f"[GraphGym] Architecture layer_type={layer_type} (from config YAML)")
-    print(f"[GraphGym] Edge dim={cfg.dataset.edge_dim}")
     print(f"[GraphGym] Random seed: {cfg.seed} (seeded weight init / shuffling / split)")
     print(f"[GraphGym] Best-model selection: monitor=val_pr_auc, mode=max")
     print(f"[GraphGym] Final test (curated real data) will use the BEST saved checkpoint.\n")

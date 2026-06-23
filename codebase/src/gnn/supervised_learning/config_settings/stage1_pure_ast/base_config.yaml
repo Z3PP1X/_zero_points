@@ -20,8 +20,8 @@ share:
   num_splits: 3
 
 data:
-  curated_csv:  datasets/run_20260604_154509/dataset2_joined.csv
-  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset2.csv
+  curated_csv:  datasets/run_20260603_123013/parallel_benchmark_results.csv
+  synthetic_csv: datasets/run_20260604_154509/dataset2_joined.csv
   graphs_dir:   datasets/graphs
 
 dataset:
@@ -62,7 +62,7 @@ train:
   epoch_warmup: 5
   epochs: 60
   restart_period: 20
-  curated_eval_period: 5
+  curated_eval_period: 1
   curated_eval_on_test_highscore: true
   early_stopping: true
   early_stopping_monitor: val_pr_auc
