@@ -19,6 +19,11 @@ seed: 42001
 share:
   num_splits: 3
 
+data:
+  curated_csv:  datasets/run_20260604_154509/dataset_joined.csv
+  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset.csv
+  graphs_dir:   datasets/graphs
+
 dataset:
   format: custom_expression_graphs
   name: run_20260604_154509/dataset_joined
@@ -33,7 +38,6 @@ expression_graph:
   mode: graph
   edge_direction: top_down
   synthetic: True
-  synthetic_dataset: run_20260604_154509/synthetic_dataset
   active_features: "node_type_global,node_type_operator,node_type_function,node_type_supernode,root_color_none,root_color_f,root_color_d1,root_color_d2,root_color_kappa,label_UNK,label_CONSTANT,label_x,label_E,label_Log,label_Pi,label_Sin,label_Cos,label_Tan,label_Plus,label_Minus,label_Times,label_Divide,label_Power"
 
 train:

@@ -385,7 +385,12 @@ def set_custom_cfg(cfg):
     cfg.expression_graph.features.edge = None
     cfg.expression_graph.active_features = ""  # Explicit override list, or empty for grouped toggles
     cfg.expression_graph.synthetic = False
-    cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name
+    cfg.expression_graph.synthetic_dataset = ""  # Synthetic dataset name (legacy; prefer cfg.data.*)
+    # Explicit file paths relative to repo root — bypass name-based lookup when set.
+    cfg.data = CN()
+    cfg.data.curated_csv = ""    # e.g. datasets/run_20260604_154509/dataset_joined.csv
+    cfg.data.synthetic_csv = ""  # e.g. datasets/run_20260604_154509/synthetic_dataset.csv
+    cfg.data.graphs_dir = ""     # e.g. datasets/graphs  (contains graphs.json + synthetic_graphs.json)
     cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
     cfg.expression_graph.heterogeneous = False  # heterogeneous or homogeneous graph representation
     cfg.expression_graph.add_kappa = False  # merge kappa (h-function) subgraphs from datasets/kappas/
@@ -492,11 +497,25 @@ def load_custom_expression_graphs(format, name, dataset_dir):
         run_key = dataset_name
 
     repo_root = Path(__file__).resolve().parents[4]
-    experiments_dir = repo_root / "_datasets" / run_key / "graphs"
+
+    # Resolve explicit file paths from cfg.data (preferred) falling back to name-based logic.
+    data_cfg = getattr(cfg, "data", None)
+    curated_csv_path = None
+    synthetic_csv_path = None
+    curated_graphs_path = None
+    synthetic_graphs_path = None
+    if data_cfg is not None:
+        if getattr(data_cfg, "curated_csv", ""):
+            curated_csv_path = repo_root / data_cfg.curated_csv
+        if getattr(data_cfg, "synthetic_csv", ""):
+            synthetic_csv_path = repo_root / data_cfg.synthetic_csv
+        if getattr(data_cfg, "graphs_dir", ""):
+            gdir = repo_root / data_cfg.graphs_dir
+            curated_graphs_path = gdir / "graphs.json"
+            synthetic_graphs_path = gdir / "synthetic_graphs.json"
 
     print("\n--- [GraphGym Dependency Injection] ---")
     print(f"  Injecting Dataset Name:  {dataset_name}")
-    print(f"  Resolved Directory:      {experiments_dir}")
     print(f"  Injected Batch Size:     {batch_size}")
     print(f"  Injected Random Seed:    {seed}")
     print(f"  Injected Mode:           {mode}")
@@ -504,7 +523,13 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Edge Dim:       {cfg.dataset.edge_dim}")
     print(f"  Injected Synthetic:      {synthetic}")
     print(f"  Injected Edge Direction: {edge_direction}")
-    if synthetic:
+    if curated_csv_path:
+        print(f"  Curated CSV:             {curated_csv_path}")
+        print(f"  Curated Graphs:          {curated_graphs_path}")
+    if synthetic and synthetic_csv_path:
+        print(f"  Synthetic CSV:           {synthetic_csv_path}")
+        print(f"  Synthetic Graphs:        {synthetic_graphs_path}")
+    elif synthetic:
         print(f"  Injected Synth Dataset:  {synthetic_dataset}")
     print(f"  Injected Heterogeneous:  {heterogeneous}")
     print(f"  Injected Add Kappa:      {add_kappa}")
@@ -514,29 +539,21 @@ def load_custom_expression_graphs(format, name, dataset_dir):
     print(f"  Injected Features:       {feature_selection.summary()}")
     print("----------------------------------------\n")
 
-    from gnn.shared.utils.graph_loader import GraphDataLoader
-
-    loader = GraphDataLoader(
-        name=dataset_name,
-        mode=mode,
-        heterogeneous=heterogeneous,
-        edge_direction=edge_direction,
-        add_kappa=add_kappa,
-        add_virtual_supernode=add_virtual_supernode,
-    )
-
     pipeline = GraphPipeline(
         dataset_name=dataset_name,
         seed=seed,
         mode=mode,
         active_features=active_features,
-        graph_loader=loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
         layer_type=layer_type,
         heterogeneous=heterogeneous,
+        curated_csv_path=curated_csv_path,
+        synthetic_csv_path=synthetic_csv_path,
+        curated_graphs_path=curated_graphs_path,
+        synthetic_graphs_path=synthetic_graphs_path,
     )
 
     pipeline.pipe(

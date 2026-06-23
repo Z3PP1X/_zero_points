@@ -78,7 +78,8 @@ def canonical_dataset_column(col: str) -> str | None:
 
 class DatasetLoader:
     def __init__(
-        self, dataset_name: str, run_key: str = None, addTraces=False, base_dir=None
+        self, dataset_name: str, run_key: str = None, addTraces=False, base_dir=None,
+        csv_path: "Path | str | None" = None,
     ):
         if "/" in dataset_name and run_key is None:
             run_key, dataset_name = dataset_name.split("/", 1)
@@ -86,6 +87,7 @@ class DatasetLoader:
         self.dataset_name = dataset_name
         self.run_key = run_key
         self.base_dir = base_dir
+        self.csv_path = Path(csv_path) if csv_path is not None else None
         self.working_directory = self._set_working_directory()
         self._data = None
         self.addTraces = addTraces
@@ -115,7 +117,7 @@ class DatasetLoader:
             self._data = self._data.rename(columns=rename_dict)
 
     def _load_dataset_from_csv(self):
-        filepath = self.working_directory / f"{self.dataset_name}.csv"
+        filepath = self.csv_path if self.csv_path is not None else self.working_directory / f"{self.dataset_name}.csv"
         self._data = pd.read_csv(filepath, sep=",")
         self._normalize_headers()
         if "problem_id" in self._data.columns:

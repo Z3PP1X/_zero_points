@@ -30,7 +30,9 @@ class UnifiedDataLoader:
         edge_direction: str = "top_down",
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
-    ) -> UnifiedDataLoader:
+        csv_path: Union[Path, str, None] = None,
+        graphs_path: Union[Path, str, None] = None,
+    ) -> "UnifiedDataLoader":
         """
         Retrieves a cached singleton/multiton instance matching the parameter configuration.
         """
@@ -51,6 +53,8 @@ class UnifiedDataLoader:
             edge_direction,
             add_kappa,
             add_virtual_supernode,
+            str(csv_path) if csv_path else None,
+            str(graphs_path) if graphs_path else None,
         )
         if key not in cls._instances:
             cls._instances[key] = cls(
@@ -64,6 +68,8 @@ class UnifiedDataLoader:
                 edge_direction=edge_direction,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
+                csv_path=csv_path,
+                graphs_path=graphs_path,
             )
         return cls._instances[key]
 
@@ -84,6 +90,8 @@ class UnifiedDataLoader:
         edge_direction: str = "top_down",
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
+        csv_path: Union[Path, str, None] = None,
+        graphs_path: Union[Path, str, None] = None,
     ):
         self.dataset_name = dataset_name
         self.run_key = run_key
@@ -103,6 +111,7 @@ class UnifiedDataLoader:
             run_key=self.run_key,
             addTraces=self.add_traces,
             base_dir=self.base_dir,
+            csv_path=csv_path,
         )
         kappa_map: dict[str, float] = {}
         if self.add_kappa:
@@ -115,7 +124,7 @@ class UnifiedDataLoader:
             name=graph_loader_name,
             mode=self.mode,
             heterogeneous=self.heterogeneous,
-            base_dir=self.base_dir,
+            base_dir=graphs_path if graphs_path is not None else self.base_dir,
             is_synthetic=self.is_synthetic,
             edge_direction=self.edge_direction,
             add_kappa=self.add_kappa,

@@ -78,6 +78,10 @@ class GraphPipeline:
         heterogeneous: bool = False,
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
+        curated_csv_path: "Path | str | None" = None,
+        synthetic_csv_path: "Path | str | None" = None,
+        curated_graphs_path: "Path | str | None" = None,
+        synthetic_graphs_path: "Path | str | None" = None,
     ):
         self.seed = seed
         self.mode = mode
@@ -98,16 +102,20 @@ class GraphPipeline:
                 heterogeneous=heterogeneous,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
+                csv_path=curated_csv_path,
+                graphs_path=curated_graphs_path,
             )
 
-        if self.synthetic and self.synthetic_dataset_name is not None:
+        if self.synthetic and (self.synthetic_dataset_name is not None or synthetic_csv_path is not None):
             self.synthetic_unified_loader = UnifiedDataLoader.get_instance(
-                dataset_name=self.synthetic_dataset_name,
+                dataset_name=self.synthetic_dataset_name or "synthetic",
                 mode=mode,
                 heterogeneous=heterogeneous,
                 is_synthetic=True,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
+                csv_path=synthetic_csv_path,
+                graphs_path=synthetic_graphs_path,
             )
         else:
             self.synthetic_unified_loader = None

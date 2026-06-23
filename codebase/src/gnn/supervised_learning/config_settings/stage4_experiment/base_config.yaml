@@ -20,6 +20,11 @@ seed: 42001
 share:
   num_splits: 3
 
+data:
+  curated_csv:  datasets/run_20260604_154509/dataset_joined.csv
+  synthetic_csv: datasets/run_20260604_154509/synthetic_dataset.csv
+  graphs_dir:   datasets/graphs
+
 dataset:
   format: custom_expression_graphs
   name: run_20260604_154509/dataset_joined
@@ -34,7 +39,6 @@ expression_graph:
   mode: graph
   edge_direction: top_down
   synthetic: True
-  synthetic_dataset: run_20260604_154509/synthetic_dataset
   active_features: ""
 
 train:
