@@ -9,13 +9,6 @@ import torch.nn.functional as F
 EVAL_WARMUP_EPOCHS = 3
 MIN_CLASSIFICATION_METRIC = 0.25
 QUALITY_THRESHOLD_METRICS = ("recall", "f1", "precision")
-CONFIDENCE_METRICS = (
-    "mean_confidence",
-    "mean_margin",
-    "mean_entropy",
-    "brier_score",
-    "ece",
-)
 LOWER_IS_BETTER_METRICS = frozenset({"loss", "brier_score", "ece", "mean_entropy"})
 
 

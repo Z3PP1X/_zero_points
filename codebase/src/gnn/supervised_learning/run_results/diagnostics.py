@@ -393,7 +393,7 @@ class DiagnosticPlotter:
             print(f"    [{rank}] {slug} — ckpt: {ckpt_path.name}")
 
             try:
-                model, datamodule, get_pos_label, hard_pred_fn, pos_scores_fn = (
+                model, datamodule, get_pos_label, hard_pred_fn, _ = (
                     self._load_model_and_loaders(config_path)
                 )
                 checkpoint = torch.load(ckpt_path, map_location=self.device)

@@ -42,11 +42,6 @@ def resolve_edge_dim() -> int:
     return len(EDGE_FEATURE_SCHEMA)
 
 
-def get_batch_edge_attr(batch):
-    """Return edge attributes for a PyG batch, or None for homogeneous graphs."""
-    return getattr(batch, "edge_attr", None)
-
-
 def bootstrap_graphgym_cfg(config_path: Path | str, seed: int | None = None):
     """Load GraphGym cfg from YAML and register custom loaders/layers/loss."""
     from torch_geometric.graphgym.config import cfg, load_cfg, set_cfg

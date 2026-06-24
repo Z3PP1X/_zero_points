@@ -30,13 +30,6 @@ class FeatureEngineering:
         values = [1, 0]
         self._loader.add_column("faster_algorithm", np.select(boundaries, values))
 
-    def _conserve_relationships(self):
-        """Conserve relationships between absolute times"""
-        self._loader.add_column(
-            "conserved_step_rel",
-            self._loader.data["Newton_iterSteps"] / self._loader.data["GMGF_iterSteps"],
-        )
-
 
 def _pid_split(df, test_size, seed, stratify=False):
     """Split a DataFrame by problem_id, stratifying on faster_algorithm when possible."""
@@ -136,8 +129,6 @@ class GraphPipeline:
         else:
             self.graphs = self.unified_loader.load_all(kappa_map=kappa_map)
             
-        self.graph_pipeline = self
-        
         self.train_loader = None
         self.test_loader = None
         self.curated_loader = None
@@ -145,10 +136,6 @@ class GraphPipeline:
         self.test_dataset = None
         self.curated_dataset = None
         self.class_weights = None
-        self.Y_train = None
-        self.Y_test = None
-        self.train_pids = None
-        self.test_pids = None
 
     def pipe(
         self, test_size=0.2, batch_size=32, stratify: bool = False, num_workers: int = 0
@@ -232,23 +219,6 @@ class GraphPipeline:
         if self.active_features is not None:
             return len(self.active_features)
         return len(NODE_FEATURE_SCHEMA)
-
-def parse_float(val) -> float:
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    if isinstance(val, str):
-        val = val.strip()
-        try:
-            if "/" in val:
-                parts = val.split("/")
-                if len(parts) == 2:
-                    return float(parts[0]) / float(parts[1])
-            return float(val)
-        except ValueError:
-            return 0.0
-    return 0.0
 
 
 class ProblemRunDataset(Dataset):
