@@ -1,3 +1,4 @@
+import shutil
 import sys
 import warnings
 from pathlib import Path
@@ -11,7 +12,7 @@ if _src_root not in sys.path:
 warnings.filterwarnings("ignore", message=".*InMemoryDataset.*")
 import torch
 from torch_geometric.graphgym.cmd_args import parse_args
-from torch_geometric.graphgym.config import cfg, set_cfg, load_cfg, set_run_dir, dump_cfg
+from torch_geometric.graphgym.config import cfg, set_cfg, load_cfg, set_run_dir
 from torch_geometric.graphgym.model_builder import create_model
 from torch_geometric.graphgym.train import GraphGymDataModule
 from torch_geometric.graphgym.checkpoint import get_ckpt_dir
@@ -607,10 +608,13 @@ def main():
     # several PyG scatter kernels lack deterministic GPU implementations and would raise.)
     pl.seed_everything(cfg.seed, workers=True)
 
-    # Snapshot the fully-resolved config next to this run's outputs so the experiment is
-    # recoverable from its own folder, independent of the transient shared configs/ dir
-    # (which configs_gen.py overwrites on the next run). Writes <out_dir>/config.yaml.
-    dump_cfg(cfg)
+    # Snapshot the EXACT grid config that produced this run (base config + swept overrides)
+    # next to its outputs as <out_dir>/config.yaml — a verbatim copy of the generating
+    # config, NOT GraphGym's resolved cfg dump. This keeps the snapshot free of the inactive
+    # GraphGym defaults (generic feature/edge-encoder knobs the ExpressionNodeEncoder +
+    # ginconv pipeline never uses). aggregate_graphgym and the eval diagnostics read it back
+    # through the same load_cfg, so reproducibility is preserved without the confusing dump.
+    shutil.copyfile(args.cfg_file, Path(cfg.out_dir) / "config.yaml")
     dump_summary_cfg(cfg, Path(cfg.out_dir))
 
     print("\n[GraphGym Command Center] Launching training run...")

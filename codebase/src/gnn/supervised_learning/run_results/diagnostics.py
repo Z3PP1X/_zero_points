@@ -146,6 +146,11 @@ class DiagnosticPlotter:
         cfg.set_new_allowed(True)
         args = argparse.Namespace(cfg_file=str(config_path), opts=[])
         load_cfg(cfg, args)
+        # config.yaml is now the verbatim grid config (without GraphGym's resolved runtime
+        # fields), so re-apply the same edge_dim resolution main_graphgym does — the rebuilt
+        # model then matches the trained one exactly (ginconv ignores edges, but stay consistent).
+        from gnn.supervised_learning.supervised_config import resolve_edge_dim
+        cfg.dataset.edge_dim = resolve_edge_dim()
 
         datamodule = GraphGymDataModule()
         datamodule.setup()
