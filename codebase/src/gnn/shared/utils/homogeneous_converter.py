@@ -9,7 +9,8 @@ from gnn.shared.utils.graph_utils import NODE_FEATURE_SCHEMA
 def to_homogeneous(G: nx.DiGraph, raw: dict) -> Data:
     """Convert a NetworkX DiGraph to a homogeneous PyG Data object.
 
-    Edge features are omitted — edge_attr is only populated in heterogeneous mode.
+    Only node features (``group_node_attrs``) are emitted; edge attributes are
+    not part of the homogeneous graph schema, so ``edge_attr`` is left unset.
     """
     group_node_attrs = list(NODE_FEATURE_SCHEMA)
     if G.number_of_edges() == 0:
