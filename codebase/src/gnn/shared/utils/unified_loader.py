@@ -110,10 +110,25 @@ class UnifiedDataLoader:
         )
         kappa_map: dict[str, float] = {}
         if self.add_kappa:
+            # F-08: never silently fall back to kappa-less graphs when add_kappa=True.
+            # A swallowed failure (or an empty map) would turn a "kappa" experiment into a
+            # secret baseline run while configs, logs and reports still claim Kappa=True —
+            # invalidating any kappa ablation. Fail loudly instead.
             try:
                 kappa_map = self.build_kappa_map()
             except Exception as e:
-                logger.warning(f"Could not build kappa_map from tabular data: {e}")
+                raise RuntimeError(
+                    f"add_kappa=True but kappa-map construction failed for dataset "
+                    f"{self.dataset_name!r}: {e}. Refusing to load graphs without the kappa "
+                    f"subgraph. Fix the kappa source or set add_kappa=False."
+                ) from e
+            if not kappa_map:
+                raise RuntimeError(
+                    f"add_kappa=True but the kappa map is EMPTY for dataset "
+                    f"{self.dataset_name!r} (no 'kappa' column / values found in the tabular "
+                    f"data). Refusing to silently train/evaluate without kappa; set "
+                    f"add_kappa=False if this dataset genuinely has no kappa."
+                )
 
         self.graph_loader = GraphDataLoader(
             name=graph_loader_name,

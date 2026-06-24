@@ -498,7 +498,19 @@ def train_with_best_ckpt(model, datamodule, logger=True):
         callbacks.append(_build_early_stopping_callback())
 
     curated_loader = None
-    if cfg.expression_graph.synthetic and len(datamodule.loaders) >= 3:
+    if cfg.expression_graph.synthetic:
+        # F-04: synthetic mode requires train+val+curated(test) loaders. GraphGym's
+        # set_dataset_info recomputes cfg.share.num_splits from the dataset's
+        # val/test_graph_index, so 3 loaders are normally guaranteed — but fail loudly
+        # rather than silently skip curated-holdout eval AND val_pr_auc checkpoint
+        # selection if that ever does not hold.
+        if len(datamodule.loaders) < 3:
+            raise RuntimeError(
+                f"synthetic=True but only {len(datamodule.loaders)} data loader(s) were "
+                "created (expected 3: train / val-synthetic / curated). Curated-holdout "
+                "evaluation and val_pr_auc checkpoint selection would be silently skipped. "
+                "Check that the dataset exposes val_graph_index and test_graph_index."
+            )
         curated_loader = datamodule.loaders[2]
         curated_schedule = parse_curated_eval_schedule(cfg.train)
         callbacks.append(CuratedEvalCallback(curated_loader, curated_schedule))

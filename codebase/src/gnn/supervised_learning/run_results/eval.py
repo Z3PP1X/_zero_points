@@ -235,34 +235,44 @@ class GNNResultEvaluator:
                 "Attempting fallback calculation..."
             )
             try:
-                # Dataset names are resolved from the run's config — never hardcoded,
-                # otherwise the fallback would compute class balance against the wrong
-                # dataset. If the config (or the dataset name) is unavailable we skip the
-                # annotation rather than guess.
-                config_file = self.base_dir.parent / "config_supervised.yaml"
-                if not config_file.exists():
-                    print(
-                        f"  Cannot compute class balance: config not found at "
-                        f"{config_file}. Skipping class-balance annotation."
-                    )
-                    return
+                # F-05: resolve dataset + seed + explicit CSV/graph paths from the SAME
+                # source the run actually used (run_manifest.json -> base_config, falling
+                # back to config_supervised.yaml), via self._exp_config. Previously this
+                # re-read config_supervised.yaml directly and hardcoded seed=42001, which
+                # (a) pointed at a stale/non-existent dataset name and (b) could compute a
+                # different val split (and thus a different prevalence baseline) than the run.
+                cfg_data = self._exp_config or {}
+                dataset_cfg = cfg_data.get("dataset", {}) or {}
+                expr_cfg = cfg_data.get("expression_graph", {}) or {}
+                data_cfg = cfg_data.get("data", {}) or {}
 
-                import yaml
+                dataset_name = dataset_cfg.get("name")
+                synthetic = bool(expr_cfg.get("synthetic", True))
+                synthetic_dataset_name = expr_cfg.get("synthetic_dataset")
+                add_kappa = bool(expr_cfg.get("add_kappa", False))
+                seed = int(cfg_data.get("seed", 42001))
 
-                with open(config_file, "r", encoding="utf-8") as f:
-                    cfg_data = yaml.safe_load(f) or {}
-                dataset_name = cfg_data.get("dataset", {}).get("name")
-                synthetic_dataset_name = cfg_data.get("expression_graph", {}).get(
-                    "synthetic_dataset"
+                # Explicit file paths are preferred (stage configs use data.* and a
+                # placeholder dataset.name; legacy name-based resolution would fail there).
+                repo_root = Path(__file__).resolve().parents[4]
+                curated_csv = data_cfg.get("curated_csv")
+                synthetic_csv = data_cfg.get("synthetic_csv")
+                graphs_dir = data_cfg.get("graphs_dir")
+                curated_csv_path = repo_root / curated_csv if curated_csv else None
+                synthetic_csv_path = repo_root / synthetic_csv if synthetic_csv else None
+                curated_graphs_path = (repo_root / graphs_dir / "graphs.json") if graphs_dir else None
+                synthetic_graphs_path = (
+                    (repo_root / graphs_dir / "synthetic_graphs.json") if graphs_dir else None
                 )
-                add_kappa = bool(
-                    cfg_data.get("expression_graph", {}).get("add_kappa", False)
-                )
-                if not dataset_name or not synthetic_dataset_name:
+
+                has_explicit = curated_csv_path is not None
+                has_named = bool(dataset_name and synthetic_dataset_name)
+                if not (has_explicit or has_named):
                     print(
-                        "  Cannot compute class balance: dataset.name / "
-                        "expression_graph.synthetic_dataset missing from "
-                        f"{config_file}. Skipping class-balance annotation."
+                        "  Cannot compute class balance: neither data.curated_csv nor "
+                        "dataset.name/expression_graph.synthetic_dataset is available in the "
+                        "run config (run_manifest.json / config_supervised.yaml). "
+                        "Skipping class-balance annotation."
                     )
                     return
 
@@ -270,24 +280,24 @@ class GNNResultEvaluator:
                 if src_path not in sys.path:
                     sys.path.insert(0, src_path)
 
-                from gnn.shared.utils.graph_loader import GraphDataLoader
                 from gnn.supervised_learning.preprocessing import GraphPipeline
 
                 print(
-                    f"  Loading dataset for class balance: "
-                    f"{dataset_name} / {synthetic_dataset_name}"
-                )
-                loader = GraphDataLoader(
-                    name=dataset_name, mode="graph", add_kappa=add_kappa
+                    f"  Loading dataset for class balance (seed={seed}): "
+                    f"curated={curated_csv or dataset_name} / "
+                    f"synthetic={synthetic_csv or synthetic_dataset_name}"
                 )
                 pipeline = GraphPipeline(
-                    dataset_name=dataset_name,
-                    seed=42001,
+                    dataset_name=dataset_name or "expression_graph_data",
+                    seed=seed,
                     mode="graph",
-                    graph_loader=loader,
-                    synthetic=True,
+                    synthetic=synthetic,
                     synthetic_dataset_name=synthetic_dataset_name,
                     add_kappa=add_kappa,
+                    curated_csv_path=curated_csv_path,
+                    synthetic_csv_path=synthetic_csv_path,
+                    curated_graphs_path=curated_graphs_path,
+                    synthetic_graphs_path=synthetic_graphs_path,
                 )
                 pipeline.pipe(test_size=0.2, batch_size=256, stratify=True)
 
@@ -296,10 +306,13 @@ class GNNResultEvaluator:
                 val_syn_1 = int((val_syn_df["faster_algorithm"] == 1).sum())
                 val_syn_total = len(val_syn_df)
 
-                val_cur_df = pipeline.curated_dataset.df
-                val_cur_0 = int((val_cur_df["faster_algorithm"] == 0).sum())
-                val_cur_1 = int((val_cur_df["faster_algorithm"] == 1).sum())
-                val_cur_total = len(val_cur_df)
+                if synthetic and pipeline.curated_dataset is not None:
+                    val_cur_df = pipeline.curated_dataset.df
+                    val_cur_0 = int((val_cur_df["faster_algorithm"] == 0).sum())
+                    val_cur_1 = int((val_cur_df["faster_algorithm"] == 1).sum())
+                    val_cur_total = len(val_cur_df)
+                else:
+                    val_cur_0 = val_cur_1 = val_cur_total = 0
 
                 self.class_balance = {
                     "validation_synthetic": {

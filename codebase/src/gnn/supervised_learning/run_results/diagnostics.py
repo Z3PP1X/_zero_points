@@ -155,19 +155,24 @@ class DiagnosticPlotter:
 
     def _collect_predictions(self, model, loader, split_name: str):
         model.eval()
-        y_true, y_score = [], []
+        y_true, y_score, pids = [], [], []
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(self.device)
                 out = model._shared_step(batch, split_name)
                 y_true.append(out["true"].detach().cpu())
                 y_score.append(out["pred_score"].detach().cpu())
+                # Per-graph problem id (set in ProblemRunDataset) → lets the plot caption
+                # report how many DISTINCT graphs back a metric (provenance / F-09 context).
+                bpid = getattr(batch, "pid", None)
+                if bpid is not None:
+                    pids.extend(list(bpid) if isinstance(bpid, (list, tuple)) else [bpid])
         if not y_true:
-            return None, None
-        return torch.cat(y_true), torch.cat(y_score)
+            return None, None, None
+        return torch.cat(y_true), torch.cat(y_score), (pids or None)
 
     def _plot_confusion_matrix(
-        self, y_true, y_pred, title: str, output_path: Path, pos_label: int
+        self, y_true, y_pred, title: str, output_path: Path, pos_label: int, provenance: str = ""
     ):
         cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
         cm_norm = cm.astype(float) / np.maximum(cm.sum(axis=1, keepdims=True), 1)
@@ -202,43 +207,70 @@ class DiagnosticPlotter:
                     )
             fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-        fig.suptitle(f"{title}\n(positive class = {pos_label})", fontsize=12, fontweight="bold")
+        pos_name = CLASS_NAMES.get(int(pos_label), str(pos_label))
+        caption = f"positive class = {pos_label} ({pos_name})"
+        if provenance:
+            caption = f"{caption}\n{provenance}"
+        fig.suptitle(f"{title}\n{caption}", fontsize=12, fontweight="bold")
         plt.tight_layout()
         save_figure(output_path)
         plt.close(fig)
 
-    def _plot_roc_curve(self, y_true, y_score, title: str, output_path: Path, pos_label: int):
-        scores = _positive_class_scores_np(y_score, pos_label)
+    def _plot_roc_curve(
+        self, y_true, y_score, title: str, output_path: Path, pos_label: int, provenance: str = ""
+    ):
+        scores = _positive_class_probs(y_score, pos_label)
         y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
-        fpr, tpr, _ = roc_curve(y_np, scores, pos_label=pos_label)
-        roc_auc = roc_auc_score(y_np, scores) if len(np.unique(y_np)) > 1 else 0.0
+        # Curve AND legend AUC use positive == pos_label with the SAME probability scores,
+        # so the drawn curve can never disagree with its own AUC value (F-10).
+        y_bin = (y_np == int(pos_label)).astype(int)
+        if len(np.unique(y_bin)) > 1:
+            fpr, tpr, _ = roc_curve(y_bin, scores)
+            roc_auc = roc_auc_score(y_bin, scores)
+        else:
+            fpr, tpr, roc_auc = np.array([0.0, 1.0]), np.array([0.0, 1.0]), float("nan")
 
         fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
         ax.plot(fpr, tpr, color="#2A9D8F", linewidth=2, label=f"AUC = {roc_auc:.4f}")
-        ax.plot([0, 1], [0, 1], linestyle="--", color="#999999")
+        ax.plot([0, 1], [0, 1], linestyle="--", color="#999999", label="no-skill (AUC = 0.5)")
         ax.set_xlabel("False Positive Rate")
         ax.set_ylabel("True Positive Rate")
-        ax.set_title(title, fontsize=12, fontweight="bold")
         ax.legend(loc="lower right")
         ax.grid(linestyle="--", alpha=0.4)
-        plt.tight_layout()
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+        if provenance:
+            ax.set_title(provenance, fontsize=7.5, color="#555555")
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         save_figure(output_path)
         plt.close(fig)
 
-    def _plot_pr_curve(self, y_true, y_score, title: str, output_path: Path, pos_label: int):
-        scores = _positive_class_scores_np(y_score, pos_label)
+    def _plot_pr_curve(
+        self, y_true, y_score, title: str, output_path: Path, pos_label: int, provenance: str = ""
+    ):
+        scores = _positive_class_probs(y_score, pos_label)
         y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
-        precision, recall, _ = precision_recall_curve(y_np, scores, pos_label=pos_label)
+        y_bin = (y_np == int(pos_label)).astype(int)
+        precision, recall, _ = precision_recall_curve(y_bin, scores)
         pr_auc = auc(recall, precision)
+        prevalence = float(y_bin.mean())
 
         fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
         ax.plot(recall, precision, color="#E76F51", linewidth=2, label=f"PR-AUC = {pr_auc:.4f}")
+        # The PR no-skill baseline is the positive-class prevalence — draw it so the reader
+        # can see directly whether the model beats chance for this split (F-09/provenance).
+        ax.axhline(
+            prevalence, linestyle=":", color="#888888", linewidth=1.3,
+            label=f"no-skill (prevalence = {prevalence:.4f})",
+        )
         ax.set_xlabel("Recall")
         ax.set_ylabel("Precision")
-        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_ylim(0.0, 1.02)
         ax.legend(loc="lower left")
         ax.grid(linestyle="--", alpha=0.4)
-        plt.tight_layout()
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+        if provenance:
+            ax.set_title(provenance, fontsize=7.5, color="#555555")
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         save_figure(output_path)
         plt.close(fig)
 
@@ -250,6 +282,7 @@ class DiagnosticPlotter:
         output_path: Path,
         pos_label: int,
         n_bins: int = 10,
+        provenance: str = "",
     ):
         """Reliability diagram: per-bin accuracy vs mean confidence (+ ECE)."""
         probs = prediction_probabilities(y_score)
@@ -291,10 +324,14 @@ class DiagnosticPlotter:
         ax.set_ylim(0, 1)
         ax.set_xlabel("Predicted probability (positive class)")
         ax.set_ylabel("Observed accuracy")
-        ax.set_title(f"{title}\nECE = {ece:.4f}", fontsize=12, fontweight="bold")
         ax.legend(loc="upper left", frameon=False, fontsize=9)
         ax.grid(linestyle="--", alpha=0.4)
-        plt.tight_layout()
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+        caption = f"ECE = {ece:.4f}"
+        if provenance:
+            caption = f"{caption}  ·  {provenance}"
+        ax.set_title(caption, fontsize=7.5, color="#555555")
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
         save_figure(output_path)
         plt.close(fig)
 
@@ -364,7 +401,8 @@ class DiagnosticPlotter:
                 model.load_state_dict(state_dict, strict=False)
                 model.to(self.device)
 
-                pos_label = get_pos_label()
+                train_pos_label = get_pos_label()
+                data_cfg = getattr(model.cfg, "data", None)
                 loaders = datamodule.loaders
                 synthetic = bool(getattr(model.cfg.expression_graph, "synthetic", False))
                 split_loaders = []
@@ -377,9 +415,22 @@ class DiagnosticPlotter:
                     split_loaders = [("val", loaders[1], "Validation")]
 
                 for split_key, loader, split_title in split_loaders:
-                    y_true, y_score = self._collect_predictions(model, loader, split_key)
+                    y_true, y_score, pids = self._collect_predictions(model, loader, split_key)
                     if y_true is None:
                         continue
+                    # F-03: use THIS split's minority class as positive (matches baselines.py
+                    # and the curated CSV metric) instead of the single training pos_label —
+                    # otherwise the curated plots use the synthetic minority and disagree with
+                    # the reported baselines. Training default kept only for transparency.
+                    pos_label = _split_pos_label(y_true)
+                    n_graphs = len(set(pids)) if pids else None
+                    dataset_label = _dataset_label_for_split(split_title, data_cfg)
+                    provenance = _provenance_subtitle(y_true, pos_label, dataset_label, n_graphs)
+                    if pos_label != train_pos_label:
+                        print(
+                            f"    [{rank}] {split_title}: per-split pos_label={pos_label} "
+                            f"(training default was {train_pos_label})"
+                        )
                     y_pred = hard_pred_fn(y_score, pos_label, getattr(model.cfg.model, "thresh", 0.5))
                     prefix = split_title.lower().replace(" ", "_")
                     self._plot_confusion_matrix(
@@ -388,6 +439,7 @@ class DiagnosticPlotter:
                         f"Confusion Matrix — {split_title}",
                         out_dir / f"confusion_{prefix}.png",
                         pos_label,
+                        provenance,
                     )
                     self._plot_roc_curve(
                         y_true,
@@ -395,6 +447,7 @@ class DiagnosticPlotter:
                         f"ROC Curve — {split_title}",
                         out_dir / f"roc_{prefix}.png",
                         pos_label,
+                        provenance,
                     )
                     self._plot_pr_curve(
                         y_true,
@@ -402,6 +455,7 @@ class DiagnosticPlotter:
                         f"PR Curve — {split_title}",
                         out_dir / f"pr_{prefix}.png",
                         pos_label,
+                        provenance,
                     )
                     self._plot_reliability(
                         y_true,
@@ -409,6 +463,7 @@ class DiagnosticPlotter:
                         f"Reliability — {split_title}",
                         out_dir / f"reliability_{prefix}.png",
                         pos_label,
+                        provenance=provenance,
                     )
                     # Dump per-prediction positive-class probabilities so the
                     # report can bootstrap CIs / paired tests without reloading.
@@ -429,12 +484,52 @@ class DiagnosticPlotter:
                 print(f"    [{rank}] Diagnostics failed: {exc}")
 
 
-def _positive_class_scores_np(y_score, pos_label: int):
-    if hasattr(y_score, "dim") and y_score.dim() > 1 and y_score.shape[1] > 1:
-        scores = y_score[:, pos_label]
-    else:
-        scores = y_score
-    arr = scores.numpy() if hasattr(scores, "numpy") else np.asarray(scores)
-    if pos_label == 0:
-        arr = 1.0 - arr
-    return arr
+CLASS_NAMES = {0: "gMGF", 1: "Newton"}
+
+
+def _positive_class_probs(y_score, pos_label: int) -> np.ndarray:
+    """P(class == pos_label) in [0, 1] from raw/log-softmax model scores.
+
+    Uses the same prediction_probabilities() conversion as the CSV/leaderboard metrics
+    and the reliability diagram, so the curve, its AUC and the reported number are all
+    built on a proper probability of the SAME positive class. This replaces the previous
+    ``1 - score`` trick which, for pos_label==0, produced anti-correlated scores >1 and
+    made the drawn ROC curve disagree with its own legend AUC (F-10).
+    """
+    probs = prediction_probabilities(y_score)
+    return probs[:, int(pos_label)].detach().cpu().numpy()
+
+
+def _split_pos_label(y_true) -> int:
+    """Minority class of THIS split — matches baselines.py and the curated CSV metric."""
+    arr = np.asarray(y_true.numpy() if hasattr(y_true, "numpy") else y_true).astype(int)
+    counts = np.bincount(arr, minlength=2)
+    return int(counts.argmin())
+
+
+def _dataset_label_for_split(split_title: str, data_cfg) -> str:
+    """Human-readable dataset identity (CSV file name) for a split's plot caption."""
+    syn = Path(str(getattr(data_cfg, "synthetic_csv", "") or "")).name if data_cfg else ""
+    cur = Path(str(getattr(data_cfg, "curated_csv", "") or "")).name if data_cfg else ""
+    if "Curated" in split_title:
+        return f"curated: {cur}" if cur else "curated"
+    if "Synthetic" in split_title:
+        return f"synthetic: {syn}" if syn else "synthetic"
+    return f"curated: {cur}" if cur else "dataset"
+
+
+def _provenance_subtitle(y_true, pos_label: int, dataset_label: str, n_graphs=None) -> str:
+    """One-line caption documenting exactly how a diagnostic number was produced:
+    which dataset, the positive class, sample size (rows + distinct graphs) and the
+    positive-class prevalence (the PR no-skill baseline)."""
+    arr = np.asarray(y_true.numpy() if hasattr(y_true, "numpy") else y_true).astype(int)
+    n = len(arr)
+    n1 = int((arr == 1).sum())
+    n0 = n - n1
+    prev = float((arr == int(pos_label)).mean()) if n else 0.0
+    name = CLASS_NAMES.get(int(pos_label), str(pos_label))
+    graphs = f" / {n_graphs} distinct graphs" if n_graphs is not None else ""
+    return (
+        f"{dataset_label}  ·  positive = {int(pos_label)} ({name})  ·  "
+        f"N={n} rows{graphs}  ·  counts 0:{n0} / 1:{n1}  ·  prevalence={prev:.4f}"
+    )

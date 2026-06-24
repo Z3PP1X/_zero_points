@@ -114,11 +114,14 @@ def compute_binary_metrics(true, pred_score, round_digits=None, pos_label: int |
     y_true_np = _to_numpy(true_t)
 
     try:
-        # roc_auc_score has no pos_label parameter; it always treats higher score = class 1.
-        # _positive_class_scores with pos_label=1 always returns P(class_1), which is what
-        # sklearn expects regardless of which class we treat as positive for PR-AUC.
-        roc_scores = _positive_class_scores(pred_t, pos_label=1)
-        r_a_score = roc_auc_score(y_true_np, roc_scores)
+        # F-06: report ROC-AUC for the SAME positive class as PR-AUC / precision / recall,
+        # so a single metrics row is internally consistent. roc_auc_score takes no pos_label,
+        # so we score the positive-class indicator (y == pos_label) against P(pos_label).
+        # ROC-AUC is symmetric (AUC(pos=0) == AUC(pos=1) for the complementary score), so the
+        # numeric value is identical to the previous "always class 1" form — only the
+        # semantics are now explicit and aligned with pos_label.
+        y_pos_indicator = (y_true_np == pos_label).astype(int)
+        r_a_score = roc_auc_score(y_pos_indicator, scores)
     except ValueError:
         r_a_score = 0.0
 
