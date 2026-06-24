@@ -1,0 +1,345 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{codebg}{RGB}{245,245,247}
+\definecolor{codekw}{RGB}{0,90,160}
+\definecolor{codecm}{RGB}{110,120,130}
+\definecolor{codestr}{RGB}{160,60,30}
+\definecolor{accent}{RGB}{30,70,140}
+
+\lstdefinestyle{py}{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecm}\itshape,
+  stringstyle=\color{codestr},
+  language=Python,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  framesep=5pt,
+  rulecolor=\color{lightgray},
+  columns=fullflexible,
+  keepspaces=true,
+}
+\lstdefinestyle{ascii}{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  framesep=5pt,
+  rulecolor=\color{lightgray},
+  columns=fullflexible,
+  keepspaces=true,
+  literate={ä}{{\"a}}1 {ö}{{\"o}}1 {ü}{{\"u}}1 {ß}{{\ss}}1,
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small Skalar-Feature-Fusion im Expression-GNN}
+\rhead{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{Fusion problembasierter Skalar-Features mit dem\\
+Expression-Graph-GNN}\\[2pt]
+\large Technischer Bericht: Wiederherstellung des \code{GlobalEncoder} für\\
+Supervised Learning und Reinforcement Learning}
+\author{Patrick Fuchs \\ \small Bachelorarbeit -- GNN/RL Solver-Klassifikation}
+\date{24.\,Juni 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{abstract}
+\noindent
+Das Expression-GNN klassifiziert pro Iterationsschritt, welcher numerische Solver
+(Newton vs.\ gMGF) schneller konvergiert. Bisher war das Modell ein \emph{rein
+struktureller} Graph-Encoder: es verarbeitete ausschließlich die one-hot-kodierten
+Knoten-Features des Ausdrucksgraphen. Die numerischen Problemgrößen
+($x_0,\ f(x_0),\ f'(x_0),\ f''(x_0),\ y_{\text{target}}$) wurden zwar erhoben, aber nur zur
+Label-Berechnung genutzt und \emph{nicht} ins Modell gegeben. Dieser Bericht
+dokumentiert die Wiederherstellung eines dedizierten, kleinen MLP-Pfades
+(\code{GlobalEncoder}), der diese Skalare normalisiert, kodiert und \emph{nach} dem
+Message Passing mit dem Graph-Embedding fusioniert. Das one-hot-Encoding der
+Struktur bleibt dabei vollständig erhalten; die Skalare bilden einen zweiten,
+separaten Informationsstrom (\emph{separation of concerns}). Beschrieben werden
+Datenrepräsentation, Architektur und je ein vollständiger Forward Pass für
+Supervised Learning (SL) und Reinforcement Learning (RL).
+\end{abstract}
+
+\section{Motivation und Kontext}
+
+Der Ausdruck eines Wurzelsuchproblems wird vollständig als Graph kodiert: Knoten sind
+Operatoren/Funktionen/Operanden, Kanten die AST-Struktur. Die Knoten-Features sind
+kategorial \emph{one-hot} (Knotentyp, Wurzelfarbe, Label) plus ganzzahlige
+Topologie-Merkmale. Der Zahlenwert einer Konstanten geht dabei verloren -- jede
+Zahl kollabiert auf ein einziges \code{label\_CONSTANT}-One-Hot.
+
+Damit fehlte dem Modell der \emph{Per-Sample-Kontext}: $x_0, f(x_0), f'(x_0), f''(x_0)$
+variieren pro Iterationszeile (Auswertungspunkt), nicht nur pro Graph. Zwei Zeilen
+desselben Graphen mit unterschiedlichen Funktionswerten waren für das Modell
+ununterscheidbar. Ein früherer \code{GlobalEncoder}, der genau diese Skalare einband,
+war im Zuge eines Refactorings entfernt worden (Commit \code{7e872cd}). Dieser Bericht
+beschreibt seine originalgetreue Wiederherstellung und Aktivierung für den
+supervised Klassifikator sowie den Rückbau des RL-Pfades auf denselben Mechanismus.
+
+\section{Datenrepräsentation: zwei Informationsströme}
+
+Entscheidend ist die Trennung: das One-Hot-Encoding bleibt unverändert, die Skalare
+kommen \emph{zusätzlich} über einen eigenen Pfad hinzu (Tabelle~\ref{tab:streams}).
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}p{2.4cm}p{6.2cm}p{4.6cm}@{}}
+\toprule
+\textbf{Strom} & \textbf{Inhalt} & \textbf{Eintrittspunkt} \\
+\midrule
+Struktur \newline (one-hot) &
+\code{data.x}, 32 Spalten: node\_type (3), root\_color (5), label (15),
+subtree\_size/-depth + 4 Histogramm-Bins (6), Anchor-Positional (3) &
+\emph{vorne}: Node-Encoder, dann Message Passing \\[4pt]
+Skalare \newline (kontinuierlich) &
+\code{data.global\_features}; SL: $k{=}5$ $[x_0, y_{\text{target}}, f, f', f'']$,
+RL: $k{=}8$ Solver-State &
+\emph{hinten}: kleines MLP, Fusion \emph{nach} dem Pooling \\
+\bottomrule
+\end{tabular}
+\caption{Die beiden getrennten Eingangsströme des Modells.}
+\label{tab:streams}
+\end{table}
+
+Die Skalare werden pro Graph als $[1,k]$-Tensor angehängt; PyGs Collate stapelt sie
+über einen Batch zu $[B,k]$ (Batch-Dimension $B$ = Anzahl Graphen).
+
+\section{Architektur: \texorpdfstring{\code{GlobalEncoder}}{GlobalEncoder} und Fusion}
+
+Sei $X \in \mathbb{R}^{N\times d_{\text{in}}}$ die one-hot-Knotenmatrix ($N$ Knoten im
+Batch), $E$ die Kantenliste, $\text{batch}\in\{0,\dots,B-1\}^N$ die
+Knoten-zu-Graph-Zuordnung und $s \in \mathbb{R}^{B\times k}$ die Skalarmatrix.
+Mit verborgener Breite $d$ und Skalar-Encoder-Breite $h_g$:
+
+\begin{align}
+\textbf{Node-Encoder:}\quad & H^{(0)} = \phi\!\big(W_e\,\mathrm{LN}(X)\big) \in \mathbb{R}^{N\times d}\\
+\textbf{Message Passing:}\quad & H^{(l)} = \phi_l\!\big(\mathrm{GINConv}_l(H^{(l-1)}, E)\big),\quad l=1,\dots,L\\
+\textbf{Pooling:}\quad & z = \mathrm{POOL}\big(H^{(L)}, \text{batch}\big) \in \mathbb{R}^{B\times d}\\
+\textbf{Skalar-Encoder:}\quad & g = \phi\!\big(W_g\,\mathrm{LN}(s)\big) \in \mathbb{R}^{B\times h_g}\\
+\textbf{Fusion:}\quad & u = [\,z \,\|\, g\,] \in \mathbb{R}^{B\times(d+h_g)}\\
+\textbf{Tail:}\quad & t = \mathrm{Drop}\big(\phi(\mathrm{LN}(W_t\,u))\big) \in \mathbb{R}^{B\times d}\\
+\textbf{Head:}\quad & \hat{y} = W_h\,t \in \mathbb{R}^{B\times C}\ \text{(SL)} \quad\text{bzw.}\quad \text{Features} = t\ \text{(RL)}
+\end{align}
+
+Dabei ist $\phi$ die Aktivierung (Default PReLU), $\mathrm{LN}$ LayerNorm,
+$\mathrm{Drop}$ Dropout. Für $h_g{=}0$ (Skalare deaktiviert) entfällt der
+Skalar-Encoder, $u=z$, und der Tail-Input ist $d$ -- das Modell ist dann
+identisch zum reinen Struktur-GNN (vollständig rückwärtskompatibel).
+
+\paragraph{Normalisierung.} Der Skalar-Encoder normalisiert mit einer lernbaren
+\code{LayerNorm($k$)} \emph{vor} dem Linear. Das ist originalgetreu, hat aber eine
+bewusste Eigenschaft: \code{LayerNorm} zentriert pro Sample über die $k$ Skalare,
+d.\,h.\ eine \emph{uniforme} additive Verschiebung aller $k$ Werte ist unsichtbar --
+der Encoder reagiert auf das \emph{relative} Muster, nicht auf das absolute Niveau.
+
+\section{Forward Pass: Supervised Learning}
+
+\textbf{Eingang} (Batch aus $B$ Graphen, $N$ Knoten gesamt):
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Feld & Form & Bedeutung \\
+\midrule
+\code{batch.x} & $[N, 32]$ & one-hot Knoten-Features (Struktur) \\
+\code{batch.edge\_index} & $[2, E]$ & Kanten \\
+\code{batch.batch} & $[N]$ & Knoten $\rightarrow$ Graph \\
+\code{batch.global\_features} & $[B, 5]$ & Skalare $[x_0, y_{\text{target}}, f, f', f'']$ \\
+\code{batch.y} & $[B]$ & Label (nur Loss/Metrik, nie Input) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[style=ascii]
+   STRUKTUR-PFAD (one-hot)                       SKALAR-PFAD (kontinuierlich)
+ batch.x [N,32]                              batch.global_features [B,5]
+    |  node_encoder: LN(32)->Linear(32,d)->phi    |  global_norm: LN(5)
+    v                                             |  global_encoder: Linear(5,h_g)
+  [N,d]                                           |  phi
+    |  GINConv x L  (Message Passing ueber E)     v
+    v                                           g [B,h_g]
+  [N,d]                                           |
+    |  POOL (mean/add/max) ueber batch.batch      |
+    v                                             |
+  z [B,d] --------------------+                   |
+                              v                   v
+              u = concat([z, g], dim=-1)  [B, d+h_g]      <-- FUSION
+                              |
+                              |  tail: Linear(d+h_g, d)->LN->phi->Dropout
+                              v
+                            [B, d]
+                              |  head: Linear(d, C)         (C=1 BCE / 2 CE)
+                              v
+                       logits [B, C]
+ return (logits, batch.y)  ->  gewichtete CE/BCE + Metriken (PR-AUC, ...)
+\end{lstlisting}
+
+Bei \code{use\_scalar\_features=False} existiert der rechte Pfad nicht
+($h_g{=}0$), und $u=z$.
+
+\section{Forward Pass: Reinforcement Learning}
+
+Im RL stammt die Eingabe nicht als PyG-Batch, sondern als Gym-Observation-Dict aus
+dem Mathematica-Environment. Der SB3-Feature-Extractor rekonstruiert daraus erst
+das PyG-Objekt. Die Skalare ($k{=}8$ Solver-State) reisen als eigener
+Observation-Key, \emph{nicht} in \code{x} einkonkateniert.
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Observation-Key & Form & Bedeutung \\
+\midrule
+\code{x} & $[\text{max\_nodes}, 32]$ & one-hot Knoten-Features (nativ) \\
+\code{edge\_index} & $[2, \text{max\_edges}]$ & Kanten (gepadded) \\
+\code{global\_features} & $[8]$ & Solver-State-Skalare \\
+\code{num\_nodes}, \code{num\_edges} & $[1]$ & echte Längen (Padding-Schnitt) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Solver-State (Reihenfolge): \code{currentX, yTarget, lastStepError, fx, dfx, ddfx,
+kappa, lastKappa}. Encoder-Breite $h_g \in \{6,8\}$ ist ein Optuna-Hyperparameter.
+
+\begin{lstlisting}[style=ascii]
+ Env-Observation ----> CustomGNNFeaturesExtractor.forward
+   - schneidet Padding ab (num_nodes/num_edges)
+   - baut Batch.from_data_list(...) inkl. global_features
+   - ruft ExpressionGNN(x, edge_index, batch, global_features)   [classify=False]
+
+   STRUKTUR-PFAD                                  SKALAR-PFAD
+ x [N,32]                                    global_features [B,8]
+    |  node_encoder: LN(32)->Linear(32,d)->phi    |  global_norm: LN(8)
+    v                                             |  global_encoder: Linear(8,h_g)
+  GINConv x L  ->  POOL  ->  z [B,d] ---+         |  phi  ->  g [B,h_g]
+                                        v         v
+                       u = concat([z, g])  [B, d+h_g]            <-- FUSION
+                                        |
+                                        |  tail: Linear(d+h_g, d)->LN->phi->Dropout
+                                        v
+                                  Features [B, d]   <-- head=None: tail IST das Feature
+                                        |
+                                        |  -> SB3 Policy/Value (MlpExtractor)
+                                        v
+                          action [B,2] (Solver-Wahl + Toleranz) + value [B,1]
+\end{lstlisting}
+
+\paragraph{Unterschiede SL vs.\ RL.}
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & \textbf{Supervised} & \textbf{Reinforcement} \\
+\midrule
+Skalare $k$ & 5 (Problemwerte) & 8 (Solver-State) \\
+Transport & \code{data.global\_features} $[1,5]$ & Gym-Observation-Box $[8]$ \\
+\code{classify} & True ($\rightarrow$ \code{head}=Linear) & False ($\rightarrow$ \code{head}=None) \\
+Ausgang & Logits $[B,C]$ & Feature-Vektor $[B,d]$ für PPO \\
+\bottomrule
+\end{tabular}
+\end{center}
+Identisch sind in beiden Fällen der Backbone (\code{ExpressionGNN}), die one-hot
+Struktur-Features und der Fusionsmechanismus.
+
+\section{Implementierung}
+
+\begin{center}\small
+\begin{tabular}{@{}p{6.4cm}p{8.0cm}@{}}
+\toprule
+\textbf{Datei} & \textbf{Änderung} \\
+\midrule
+\code{shared/models/gnn\_backbones.py} & \code{GlobalEncoder} wiederhergestellt
+(\code{global\_dim}, \code{global\_hidden\_dim}, Fusion, Forward-Signatur) \\
+\code{supervised\_learning/preprocessing.py} & \code{data.global\_features} $[1,k]$ in
+\code{ProblemRunDataset}; \code{\_parse\_scalar} (bruchtolerant); Spalten-Guard \\
+\code{supervised\_learning/loader\_graphgym.py} & Config-Flags; \code{global\_dim} aus
+Config; \code{global\_features} in \code{forward} \\
+\code{supervised\_learning/main.py} & Skalar-Auflösung im Custom-Trainingspfad \\
+\code{reinforcement\_learning/} (8 Dateien) & Rückbau: Skalare separat statt Broadcast;
+Observation-Space-Key; \code{global\_dim} an Call-Sites \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Aktivierung (Supervised).} Off by default; einschalten per YAML/\code{grid.yaml}:
+\begin{lstlisting}[style=py]
+expression_graph:
+  use_scalar_features: true            # Default: false (reiner Struktur-GNN)
+  scalar_features: "x0,y_target,fx,d1x,d2x"
+gnn:
+  global_hidden_dim: 8                 # Breite des kleinen Skalar-MLP (tunebar)
+\end{lstlisting}
+Die Curated-CSV muss die Spalten \code{x0, y\_target, fx, d1x, d2x} enthalten, sonst
+greift ein expliziter \code{RuntimeError} (kein stilles Überspringen).
+
+\paragraph{Kern der Fusion (Backbone).}
+\begin{lstlisting}[style=py]
+def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
+    x = self.node_encoder(x)
+    for i, conv in enumerate(self.convs):
+        x = self.layer_activations[i](conv(x, edge_index))
+    x_pooled = self.pool_fn(x, batch)
+    if self._g_enc_dim > 0:
+        if global_features is not None:
+            gf = global_features.view(x_pooled.size(0), -1)
+            g = self.global_activation(self.global_encoder(self.global_norm(gf)))
+        else:
+            g = x_pooled.new_zeros(x_pooled.size(0), self._g_enc_dim)
+        h = torch.cat([x_pooled, g], dim=-1)
+    else:
+        h = x_pooled
+    out = self.tail(h)
+    return self.head(out) if self.head is not None else out
+\end{lstlisting}
+
+\section{Verifikation}
+
+Die volle Test-Suite (\textbf{128 Tests}) läuft grün. Neue Tests:
+\begin{itemize}\setlength\itemsep{1pt}
+  \item \textbf{Backbone:} Fusions-Form ($\text{tail\_in}=d+h_g$), Skalar-Sensitivität,
+        Gradient-Fluss in den \code{global\_encoder}, $h_g{=}0$-Invarianz.
+  \item \textbf{Supervised:} Skalar-Anhang als $[1,k]$ + korrektes Batch-Collate zu
+        $[B,k]$, Bruch-/Fehlwert-Parsing, Spalten-Guard.
+  \item \textbf{RL:} Tests auf den restaurierten Contract (Skalare separat) zurückgesetzt.
+\end{itemize}
+Integrativ bestätigt: Flag aus $\Rightarrow$ \code{global\_dim}=0; Flag an
+$\Rightarrow$ \code{global\_dim}=5, Tail-Input $d+h_g$.
+
+\section{Hinweise und Grenzen}
+
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \textbf{LayerNorm-Eigenschaft.} \code{LayerNorm($k$)} ist invariant gegenüber
+        einer uniformen Verschiebung aller $k$ Skalare eines Samples. Falls große
+        Funktionswerte später stören, ist der Tausch auf \code{BatchNorm1d} oder ein
+        vorgeschalteter \code{asinh}-Transform ein Einzeiler im Encoder.
+  \item \textbf{RL-Ripple.} Der Rückbau ändert den Observation-Space-Vertrag; bestehende
+        RL-Checkpoints und Optuna-Studien sind inkompatibel (der Suchraum-Suffix wird
+        automatisch verändert) $\Rightarrow$ frische Studie/Neutraining nötig.
+  \item \textbf{Kappa.} \code{kappa} ist \emph{nicht} Teil des Skalar-Vektors und bleibt
+        strikt hinter dem bestehenden \code{add\_kappa}-Gate (Default \code{false}).
+  \item \textbf{Kein Label-Leak.} \code{y\_target} ist die Lösung (Wurzel) des
+        Problems, nicht das Klassifikationslabel (\code{faster\_algorithm}); es ist ein
+        gültiges Eingangs-Feature für die Solver-Geschwindigkeitsvorhersage.
+\end{itemize}
+
+\end{document}
