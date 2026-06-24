@@ -54,6 +54,19 @@ expression_graph:
   add_virtual_supernode: false
   add_kappa: false
 
+  # ---------------------------------------------------------------------------
+  # OPTIONAL — Problembasierte Skalar-Features (default: aus)
+  # Numerische Problemwerte werden durch ein kleines MLP kodiert und NACH dem Message
+  # Passing mit dem Graph-Embedding fusioniert (separation of concerns). Ändern NICHT
+  # den Knoten-Feature-Vektor / das One-Hot. MLP-Breite via gnn.global_hidden_dim (Default 8).
+  #   WICHTIG: erfordert die CSV-Spalten x0, y_target, fx, d1x, d2x.
+  #   synthetic_dataset2.csv hat nur y_target → Einschalten im synthetic-Modus bricht mit
+  #   klarem Fehler ab. Nutzbar mit dem Curated-Datensatz (synthetic: false) oder einem
+  #   Synthetic-CSV, das diese Spalten enthält.
+  # ---------------------------------------------------------------------------
+  use_scalar_features: false
+  scalar_features: "x0,y_target,fx,d1x,d2x"
+
 train:
   mode: custom
   batch_size: 256

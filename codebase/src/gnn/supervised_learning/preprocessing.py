@@ -61,6 +61,7 @@ class GraphPipeline:
         seed: int = 42,
         mode: str = "graph",
         active_features: list[str] | None = None,
+        scalar_features: list[str] | None = None,
         graph_loader: GraphDataLoader | None = None,
         unified_loader: UnifiedDataLoader | None = None,
         synthetic: bool = False,
@@ -76,6 +77,7 @@ class GraphPipeline:
         self.seed = seed
         self.mode = mode
         self.active_features = active_features
+        self.scalar_features = scalar_features
         self.synthetic = synthetic
         self.synthetic_dataset_name = synthetic_dataset_name if synthetic_dataset_name else None
         self.layer_type = validate_layer_type(layer_type)
@@ -171,9 +173,9 @@ class GraphPipeline:
             self.class_weights, class_counts = _compute_class_weights(synthetic_train_df)
 
             pin = torch.cuda.is_available()
-            self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, active_features=self.active_features)
-            self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, active_features=self.active_features)
-            self.curated_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, active_features=self.active_features)
+            self.train_dataset = ProblemRunDataset(synthetic_train_df, graphs_synth, mode=self.mode, active_features=self.active_features, scalar_features=self.scalar_features)
+            self.test_dataset = ProblemRunDataset(synthetic_test_df, graphs_synth, mode=self.mode, active_features=self.active_features, scalar_features=self.scalar_features)
+            self.curated_dataset = ProblemRunDataset(test_df, graphs_curated, mode=self.mode, active_features=self.active_features, scalar_features=self.scalar_features)
             self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin)
             self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin)
             self.curated_loader = DataLoader(self.curated_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin)
@@ -198,8 +200,8 @@ class GraphPipeline:
             self.class_weights, class_counts = _compute_class_weights(train_df)
 
             pin = torch.cuda.is_available()
-            self.train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, active_features=self.active_features)
-            self.test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, active_features=self.active_features)
+            self.train_dataset = ProblemRunDataset(train_df, self.graphs, mode=self.mode, active_features=self.active_features, scalar_features=self.scalar_features)
+            self.test_dataset = ProblemRunDataset(test_df, self.graphs, mode=self.mode, active_features=self.active_features, scalar_features=self.scalar_features)
             self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin)
             self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin)
 
@@ -221,13 +223,54 @@ class GraphPipeline:
         return len(NODE_FEATURE_SCHEMA)
 
 
+def _parse_scalar(value) -> float:
+    """Best-effort float for a per-problem scalar cell.
+
+    Handles plain numbers, Mathematica fraction strings (e.g. "1/3"), and
+    missing/non-finite cells (-> 0.0). Mirrors the tolerance the AST label
+    encoder applies to numeric constants (see graph_vocab._is_numeric_label).
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return 0.0
+        try:
+            return float(s)
+        except ValueError:
+            if "/" in s:
+                num, _, den = s.partition("/")
+                try:
+                    d = float(den)
+                    return float(num) / d if d != 0.0 else 0.0
+                except ValueError:
+                    return 0.0
+            return 0.0
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if np.isfinite(f) else 0.0
+
+
 class ProblemRunDataset(Dataset):
-    def __init__(self, df, base_graphs, mode: str = "graph", active_features: list[str] | None = None):
+    def __init__(self, df, base_graphs, mode: str = "graph", active_features: list[str] | None = None, scalar_features: list[str] | None = None):
         self.df = df.reset_index(drop=True)
         self.base_graphs = base_graphs
         self.mode = mode
         self.active_features = active_features
-        
+        self.scalar_features = scalar_features
+
+        if self.scalar_features:
+            missing = [c for c in self.scalar_features if c not in self.df.columns]
+            if missing:
+                raise RuntimeError(
+                    f"scalar_features requested {self.scalar_features} but column(s) {missing} "
+                    f"are absent from the dataset (available columns: {list(self.df.columns)}). "
+                    f"Provide them in the CSV or disable cfg.expression_graph.use_scalar_features."
+                )
+
         self._node_id_indices = {}
         for pid, graph in self.base_graphs.items():
             if hasattr(graph, 'node_types') and 'virtual' in graph.node_types:
@@ -247,6 +290,15 @@ class ProblemRunDataset(Dataset):
 
         data.y = torch.tensor([row["faster_algorithm"]], dtype=torch.long)
         data.pid = pid
+
+        if self.scalar_features:
+            # Per-graph scalar vector stored as [1, k] (leading batch dim) so PyG collate
+            # stacks it to [num_graphs, k] — same convention as the RL preprocessor. The
+            # global encoder in ExpressionGNN then fuses it with the pooled embedding.
+            data.global_features = torch.tensor(
+                [_parse_scalar(row.get(c)) for c in self.scalar_features],
+                dtype=torch.float,
+            ).unsqueeze(0)
 
         if self.active_features is not None and data.x is not None:
             data.x = slice_active_features(data.x, self.active_features)

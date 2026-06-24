@@ -279,6 +279,21 @@ def main(
             if feature.strip()
         ]
     )
+    resolved_scalar_features = (
+        None
+        if not getattr(cfg.expression_graph, "use_scalar_features", False)
+        else [
+            name.strip()
+            for name in str(getattr(cfg.expression_graph, "scalar_features", "")).split(",")
+            if name.strip()
+        ]
+    )
+    if getattr(cfg.expression_graph, "use_scalar_features", False) and not resolved_scalar_features:
+        raise ValueError(
+            "cfg.expression_graph.use_scalar_features is True but cfg.expression_graph.scalar_features "
+            "is empty. Set scalar_features to a comma-separated column list "
+            "(e.g. 'x0,y_target,fx,d1x,d2x') or disable use_scalar_features."
+        )
     cfg.gnn.layer_type = validate_layer_type(layer_type)
     cfg.dataset.edge_dim = resolve_edge_dim()
 
@@ -304,6 +319,7 @@ def main(
         seed=seed,
         mode=mode,
         active_features=resolved_active_features,
+        scalar_features=resolved_scalar_features,
         unified_loader=unified_loader,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
@@ -348,6 +364,7 @@ def main(
     # Expose resolved names so ExpressionClassifierNetwork.__init__ can locate
     # categorical columns by name under any active-feature subset.
     cfg.expression_graph.active_feature_names = resolved_active_features or []
+    cfg.expression_graph.scalar_feature_names = resolved_scalar_features or []
     from gnn.supervised_learning.loader_graphgym import ExpressionClassifierNetwork
     print("Initializing ExpressionClassifierNetwork...")
     model = ExpressionClassifierNetwork(dim_in=dim_in, dim_out=1).to(DEVICE)

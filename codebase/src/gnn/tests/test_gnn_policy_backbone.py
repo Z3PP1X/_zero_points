@@ -79,6 +79,79 @@ def test_node_features_change_output():
     assert not torch.allclose(out_a, out_b, atol=1e-5), "node feature change had no effect"
 
 
+def test_global_encoder_fusion_shape():
+    """global_dim>0 builds the scalar encoder and widens the tail input by global_hidden_dim."""
+    x, edge_index, batch = _make_batch()
+    hidden_dim, global_dim, global_hidden_dim = 32, 5, 8
+    model = ExpressionGNN(
+        input_dim=INPUT_DIM,
+        hidden_dim=hidden_dim,
+        global_dim=global_dim,
+        global_hidden_dim=global_hidden_dim,
+        output_dim=2,
+        num_layers=2,
+        classify=True,
+    )
+    assert model.tail[0].in_features == hidden_dim + global_hidden_dim
+    gf = torch.randn(2, global_dim)
+    model.eval()
+    with torch.no_grad():
+        out = model(x, edge_index, batch, global_features=gf)
+    assert out.shape == (2, 2)
+    assert torch.isfinite(out).all()
+
+
+def test_global_features_change_output():
+    """Different scalar values produce a different fused output (the global path is live)."""
+    x, edge_index, batch = _make_batch()
+    global_dim = 5
+    torch.manual_seed(0)
+    model = ExpressionGNN(
+        input_dim=INPUT_DIM, hidden_dim=32, global_dim=global_dim,
+        global_hidden_dim=8, num_layers=2, classify=False,
+    )
+    model.eval()
+    gf = torch.randn(2, global_dim)
+    # Non-uniform perturbation: LayerNorm(global_dim) mean-centres across the k scalars per
+    # sample, so a *uniform* shift would be invisible. Changing the relative pattern is what
+    # the encoder actually responds to.
+    gf_b = gf.clone()
+    gf_b[:, 0] += 5.0
+    with torch.no_grad():
+        out_a = model(x, edge_index, batch, global_features=gf)
+        out_b = model(x, edge_index, batch, global_features=gf_b)
+        out_none = model(x, edge_index, batch, global_features=None)
+    assert not torch.allclose(out_a, out_b, atol=1e-5), "scalar change had no effect"
+    assert out_none.shape == out_a.shape, "None scalars must zero-pad, not crash"
+
+
+def test_global_encoder_receives_gradient():
+    """Gradients flow into the scalar encoder, confirming it is part of the trained graph."""
+    x, edge_index, batch = _make_batch()
+    global_dim = 5
+    model = ExpressionGNN(
+        input_dim=INPUT_DIM, hidden_dim=16, global_dim=global_dim,
+        global_hidden_dim=8, output_dim=2, num_layers=2, classify=True,
+    )
+    out = model(x, edge_index, batch, global_features=torch.randn(2, global_dim))
+    out.sum().backward()
+    assert model.global_encoder.weight.grad is not None
+    assert model.global_encoder.weight.grad.abs().sum().item() > 0
+
+
+def test_global_dim_zero_is_pure_structural():
+    """global_dim=0 (default) builds no scalar encoder and ignores any passed scalars."""
+    x, edge_index, batch = _make_batch()
+    model = ExpressionGNN(input_dim=INPUT_DIM, hidden_dim=32, num_layers=2, classify=False)
+    assert model.tail[0].in_features == 32
+    assert not hasattr(model, "global_encoder")
+    model.eval()
+    with torch.no_grad():
+        out_a = model(x, edge_index, batch, global_features=torch.randn(2, 5))
+        out_b = model(x, edge_index, batch, global_features=None)
+    assert torch.allclose(out_a, out_b), "global_dim=0 must ignore global_features"
+
+
 def test_supernode_participates_in_message_passing():
     """Supernode is encoded as node_type_global and participates in message passing."""
     input_dim = INPUT_DIM

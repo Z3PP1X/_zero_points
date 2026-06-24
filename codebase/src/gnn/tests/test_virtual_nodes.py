@@ -7,7 +7,7 @@ from pathlib import Path
 import networkx as nx
 
 from graph_utils import ExpressionGraphConverter, NODE_FEATURE_SCHEMA
-from feature_layout import NATIVE_GLOBAL_FEATURE_COUNT, NATIVE_NODE_FEATURE_COUNT
+from feature_layout import NATIVE_NODE_FEATURE_COUNT
 from reinforcement_learning.preprocessor import Preprocessor
 from supervised_learning.preprocessing import ProblemRunDataset
 
@@ -76,7 +76,7 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
 
     assert "f_root" not in data_graph.node_ids
     assert data_graph.num_nodes == 2   # global + f1
-    assert data_graph.x.shape[1] == NATIVE_NODE_FEATURE_COUNT + NATIVE_GLOBAL_FEATURE_COUNT
+    assert data_graph.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
     idx_f1 = data_graph.node_ids.index("f1")
     assert data_graph.x[idx_f1, _NT_FUNC].item() == 1.0   # node_type_function (x)
     assert data_graph.x[idx_f1, _RC_F].item() == 1.0       # root_color_f
@@ -119,6 +119,59 @@ def test_supervised_learning_preprocessor_static_initialization():
     data_no_fx_graph = dataset_no_fx_graph[0]
 
     assert data_no_fx_graph.x.shape == base_graph_graph.x.shape
+    # Without scalar_features no global vector is attached (pure structural graph).
+    assert not hasattr(data_no_fx_graph, "global_features") or data_no_fx_graph.global_features is None
+
+
+def _single_node_base_graphs(pid: str):
+    raw = {
+        "id": pid,
+        "nodes": [
+            {"id": "global", "label": "GLOBAL", "type": "global", "value": None},
+            {"id": "f1", "label": "x", "type": "variable", "value": None},
+        ],
+        "edges": [],
+    }
+    return {pid: ExpressionGraphConverter().convert(raw, mode="graph")}
+
+
+def test_supervised_scalar_features_attach_and_collate():
+    """Scalars are attached as [1, k] and PyG collate stacks them to [num_graphs, k]."""
+    from torch_geometric.loader import DataLoader
+    from supervised_learning.preprocessing import _parse_scalar
+
+    base_graphs = _single_node_base_graphs("P-scalars")
+    scalar_cols = ["x0", "y_target", "fx", "d1x", "d2x"]
+    df = pd.DataFrame([
+        {"problem_id": "P-scalars", "faster_algorithm": 1,
+         "x0": 2.5, "y_target": 4.0, "fx": "1/2", "d1x": -3.0, "d2x": None},
+        {"problem_id": "P-scalars", "faster_algorithm": 0,
+         "x0": 1.0, "y_target": 0.0, "fx": 9.0, "d1x": 0.5, "d2x": 7.0},
+    ])
+
+    dataset = ProblemRunDataset(df, base_graphs, mode="graph", scalar_features=scalar_cols)
+    item = dataset[0]
+    assert tuple(item.global_features.shape) == (1, len(scalar_cols))
+    # Fraction string "1/2" -> 0.5 ; missing None -> 0.0.
+    assert torch.allclose(
+        item.global_features, torch.tensor([[2.5, 4.0, 0.5, -3.0, 0.0]])
+    )
+
+    batch = next(iter(DataLoader(dataset, batch_size=2)))
+    assert tuple(batch.global_features.shape) == (2, len(scalar_cols))
+
+    assert _parse_scalar("1/4") == 0.25
+    assert _parse_scalar(None) == 0.0
+    assert _parse_scalar("") == 0.0
+    assert _parse_scalar(float("nan")) == 0.0
+
+
+def test_supervised_scalar_features_missing_column_raises():
+    """A requested scalar column absent from the dataframe fails loudly (no silent skip)."""
+    base_graphs = _single_node_base_graphs("P-missing")
+    df = pd.DataFrame([{"problem_id": "P-missing", "faster_algorithm": 1, "x0": 1.0}])
+    with pytest.raises(RuntimeError, match="scalar_features"):
+        ProblemRunDataset(df, base_graphs, mode="graph", scalar_features=["x0", "fx"])
 
 
 def test_dynamic_feature_slicing_and_selection(tmp_path):
@@ -159,4 +212,4 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     }
 
     data, extracted = preprocessor.process(message)
-    assert data.x.shape[1] == 3 + NATIVE_GLOBAL_FEATURE_COUNT
+    assert data.x.shape[1] == 3

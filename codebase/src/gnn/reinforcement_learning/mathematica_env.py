@@ -7,6 +7,9 @@ import numpy as np
 from gymnasium import spaces
 
 from gnn.reinforcement_learning.feature_layout import (
+    NATIVE_GLOBAL_FEATURE_COUNT,
+    NATIVE_NODE_FEATURE_COUNT,
+    PADDED_GLOBAL_FEATURE_COUNT,
     PADDED_NODE_FEATURE_COUNT,
 )
 from gnn.reinforcement_learning.gateway.mathematica_state_ingress import MathematicaStateIngress
@@ -74,6 +77,12 @@ class MathematicaGraphEnv(gym.Env):
                     shape=(2, self.max_edges),
                     dtype=np.int64,
                 ),
+                "global_features": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(PADDED_GLOBAL_FEATURE_COUNT,),
+                    dtype=np.float32,
+                ),
                 "num_nodes": spaces.Box(
                     low=0, high=self.max_nodes, shape=(1,), dtype=np.int64
                 ),
@@ -94,6 +103,9 @@ class MathematicaGraphEnv(gym.Env):
     def _pad_graph(self, pyg_data):
         x = sanitize_numpy_features(pyg_data.x.numpy())
         edge_index = pyg_data.edge_index.numpy()
+        global_features = sanitize_numpy_features(
+            pyg_data.global_features.numpy().flatten()
+        )
 
         num_nodes = min(x.shape[0], self.max_nodes)
         num_edges = min(edge_index.shape[1], self.max_edges)
@@ -104,15 +116,24 @@ class MathematicaGraphEnv(gym.Env):
             num_nodes = 1
 
         padded_x = np.zeros((self.max_nodes, PADDED_NODE_FEATURE_COUNT), dtype=np.float32)
-        node_width = min(x.shape[1], PADDED_NODE_FEATURE_COUNT)
+        node_width = min(x.shape[1], NATIVE_NODE_FEATURE_COUNT, PADDED_NODE_FEATURE_COUNT)
         padded_x[:num_nodes, :node_width] = x[:num_nodes, :node_width]
 
         padded_edge_index = np.zeros((2, self.max_edges), dtype=np.int64)
         padded_edge_index[:, :num_edges] = edge_index[:, :num_edges]
 
+        padded_global = np.zeros((PADDED_GLOBAL_FEATURE_COUNT,), dtype=np.float32)
+        global_width = min(
+            global_features.shape[0],
+            NATIVE_GLOBAL_FEATURE_COUNT,
+            PADDED_GLOBAL_FEATURE_COUNT,
+        )
+        padded_global[:global_width] = global_features[:global_width]
+
         return {
             "x": padded_x,
             "edge_index": padded_edge_index,
+            "global_features": padded_global,
             "num_nodes": np.array([num_nodes], dtype=np.int64),
             "num_edges": np.array([num_edges], dtype=np.int64),
         }

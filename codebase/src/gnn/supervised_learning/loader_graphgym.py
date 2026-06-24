@@ -262,9 +262,14 @@ class ExpressionClassifierNetwork(torch.nn.Module):
         super().__init__()
         validate_layer_type(cfg.gnn.layer_type)
         names = list(getattr(cfg.expression_graph, "active_feature_names", []) or [])
+        scalar_names = list(getattr(cfg.expression_graph, "scalar_feature_names", []) or [])
+        use_scalars = bool(getattr(cfg.expression_graph, "use_scalar_features", False))
+        global_dim = len(scalar_names) if use_scalars else 0
         self.net = ExpressionGNN(
             input_dim=(len(names) or dim_in),
             hidden_dim=cfg.gnn.dim_inner,
+            global_dim=global_dim,
+            global_hidden_dim=int(getattr(cfg.gnn, "global_hidden_dim", 8)),
             output_dim=dim_out,
             activation=cfg.gnn.act,
             num_layers=cfg.gnn.layers_mp,
@@ -278,6 +283,7 @@ class ExpressionClassifierNetwork(torch.nn.Module):
             batch.x,
             batch.edge_index,
             batch.batch,
+            global_features=getattr(batch, "global_features", None),
         )
         if logits.size(-1) == 1:  # match the stock single-logit BCE path
             logits = logits.view(-1)
@@ -381,6 +387,15 @@ def set_custom_cfg(cfg):
     # ExpressionClassifierNetwork (built later by create_model) can locate categorical
     # columns BY NAME. Empty => fall back to the full node schema.
     cfg.expression_graph.active_feature_names = []
+    # Per-problem scalar values (default: x0, y_target, f(x0), f'(x0), f''(x0)) encoded by a
+    # small global MLP and fused with the pooled graph embedding AFTER message passing
+    # (separation of concerns: structure via the GNN, problem conditions via the scalar MLP).
+    # Off by default => behaviour identical to a pure structural GNN. scalar_features is a CSV
+    # list of DataFrame columns; scalar_feature_names is the resolved list stashed by the loader.
+    cfg.expression_graph.use_scalar_features = False
+    cfg.expression_graph.scalar_features = "x0,y_target,fx,d1x,d2x"
+    cfg.expression_graph.scalar_feature_names = []
+    cfg.gnn.global_hidden_dim = 8  # width of the small scalar encoder (tunable in grid.yaml)
     # Structural / pooling axes for the ExpressionClassifierNetwork backbone. Declared here
     # so YACS accepts grid.yaml overrides; ignored when cfg.model.type == "gnn".
     cfg.train.mode = "custom"
@@ -466,6 +481,22 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
     # columns BY NAME. Empty list => the network falls back to the full node schema.
     cfg.expression_graph.active_feature_names = list(active_features) if active_features else []
 
+    # Resolve per-problem scalar feature columns for the global encoder (off by default).
+    # ExpressionClassifierNetwork (built later by create_model) reads scalar_feature_names
+    # to size the global encoder; the dataset attaches data.global_features with the same set.
+    use_scalar_features = getattr(cfg.expression_graph, "use_scalar_features", False)
+    scalar_csv = getattr(cfg.expression_graph, "scalar_features", "")
+    scalar_features = (
+        [c.strip() for c in scalar_csv.split(",") if c.strip()] if use_scalar_features else None
+    )
+    if use_scalar_features and not scalar_features:
+        raise ValueError(
+            "cfg.expression_graph.use_scalar_features is True but cfg.expression_graph.scalar_features "
+            "is empty. Set scalar_features to a comma-separated column list "
+            "(e.g. 'x0,y_target,fx,d1x,d2x') or disable use_scalar_features."
+        )
+    cfg.expression_graph.scalar_feature_names = list(scalar_features) if scalar_features else []
+
     if "/" in dataset_name:
         run_key, _ = dataset_name.split("/", 1)
     else:
@@ -518,6 +549,7 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
         seed=seed,
         mode=mode,
         active_features=active_features,
+        scalar_features=scalar_features,
         synthetic=synthetic,
         synthetic_dataset_name=synthetic_dataset,
         add_kappa=add_kappa,

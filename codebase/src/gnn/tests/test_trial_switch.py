@@ -43,9 +43,11 @@ def _build_preprocessor():
     pyg_data = SimpleNamespace(
         x=MagicMock(),
         edge_index=MagicMock(),
+        global_features=MagicMock(),
     )
     pyg_data.x.numpy.return_value = np.zeros((1, 24), dtype=np.float32)
     pyg_data.edge_index.numpy.return_value = np.zeros((2, 0), dtype=np.int64)
+    pyg_data.global_features.numpy.return_value = np.zeros((8,), dtype=np.float32)
     preprocessor = MagicMock()
     preprocessor.process.return_value = (pyg_data, None)
     return preprocessor
