@@ -33,41 +33,11 @@ class RewardCalculator:
         self.abs_time_eps = abs_time_eps
 
     @staticmethod
-    def _float_eq(a, b) -> bool:
-        try:
-            return float(a) == float(b)
-        except (TypeError, ValueError):
-            return False
-
-    @staticmethod
     def _to_float(val, default: float = 0.0) -> float:
         try:
             return float(val)
         except (TypeError, ValueError):
             return default
-
-    @staticmethod
-    def _benchmark_abs_time(reward_state: dict) -> float:
-        for key in (
-            "BenchmarkabsTime",
-            "BenchmarkAbsTime",
-            "benchmarkAbsTime",
-        ):
-            if key in reward_state and reward_state[key] is not None:
-                try:
-                    return float(reward_state[key])
-                except (TypeError, ValueError):
-                    continue
-        return 0.0
-
-    def _terminal_time_scale(
-        self, reward_state: dict
-    ) -> float:
-        bench = self._benchmark_abs_time(reward_state)
-        terminal_abs = self._to_float(reward_state.get("absTime"), 0.0)
-        if bench <= 0 or terminal_abs <= 0:
-            return 1.0
-        return bench / max(terminal_abs, self.abs_time_eps)
 
     def _raw_time_score(
         self, delta_time: float, time_benchmark: float

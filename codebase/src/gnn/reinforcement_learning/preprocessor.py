@@ -71,10 +71,6 @@ class Preprocessor:
     def known_problem_ids(self) -> FrozenSet[str]:
         return self._known_problem_ids
 
-    @property
-    def cached_problem_ids(self) -> FrozenSet[str]:
-        return frozenset(self._pyg_template_cache)
-
     def _store_template(self, cache_key: str, data: Data) -> None:
         self._pyg_template_cache[cache_key] = data.clone()
         self._pyg_template_cache.move_to_end(cache_key)
@@ -105,8 +101,6 @@ class Preprocessor:
         data = self._graph_template_for_problem_id(graph_id)
 
         data.uuid = message.get("uuid")
-        data.state_id = message.get("stateId")
-        data.network_job_id = message.get("networkJobId")
 
         if self.active_features is not None and data.x is not None:
             from gnn.shared.utils.graph_utils import slice_active_features

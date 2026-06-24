@@ -60,10 +60,6 @@ class EpisodeReplayBuffer:
         return uuid in self._buffer
 
     @property
-    def active_episodes(self) -> int:
-        return len(self._buffer)
-
-    @property
     def completed_episodes(self) -> Optional[Dict[str, List[Dict]]]:
         if self._keep_completed:
             return self._completed
