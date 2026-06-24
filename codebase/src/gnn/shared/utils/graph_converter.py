@@ -24,25 +24,6 @@ from gnn.shared.utils.feature_extraction import (
 logger = logging.getLogger(__name__)
 
 
-
-def get_relation_type(parent_label: str, etype: str, child_index: float) -> str:
-    is_reverse = etype.endswith("_reverse")
-    base_etype = etype[:-8] if is_reverse else etype
-
-    if base_etype == "child_of":
-        if parent_label in ("Plus", "Times", "GLOBAL"):
-            return "child_of_reverse" if is_reverse else "child_of"
-        else:
-            if child_index == 0.0:
-                return "left_operand_reverse" if is_reverse else "left_operand"
-            elif child_index == 1.0:
-                return "right_operand_reverse" if is_reverse else "right_operand"
-            else:
-                return "left_operand_reverse" if is_reverse else "left_operand"
-    else:
-        return etype
-
-
 def _find_global_node_id(raw: dict) -> str | None:
     for node in raw.get("nodes", []):
         if node.get("type") == "global":

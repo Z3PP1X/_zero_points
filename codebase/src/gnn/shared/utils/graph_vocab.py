@@ -76,7 +76,6 @@ HISTOGRAM_FEATURES: tuple[str, ...] = (
     "hist_constants",
 )
 
-NUM_NODE_TYPES: int = 6  # codes 0=global,1=operator,2=root,5=supernode
 # node_type integer code → one-hot index (3 distinct codes; supernode omitted — always 0 when add_virtual_supernode=False)
 NODE_TYPE_ONEHOT: dict[int, int] = {0: 0, 1: 1, 2: 2}
 NODE_TYPE_ONEHOT_DIM: int = 3

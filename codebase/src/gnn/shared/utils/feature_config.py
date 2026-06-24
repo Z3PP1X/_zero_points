@@ -54,8 +54,6 @@ POSITIONAL_ENCODING_FEATURES: dict[str, tuple[str, ...]] = {
     name: (name,) for name in POSITIONAL_ENCODING_CHOICES
 }
 
-NODE_CATEGORICAL_REGISTRY: dict[str, tuple[int, int]] = {}
-
 
 def full_node_schema() -> list[str]:
     return list(NODE_FEATURE_SCHEMA)
@@ -113,12 +111,6 @@ def validate_positional_encodings(encodings: Iterable[str]) -> list[str]:
             f"expected subset of {list(POSITIONAL_ENCODING_CHOICES)}"
         )
     return encodings_list
-
-CATEGORY_MEMBERS: dict[str, tuple[str, ...]] = {
-    "node": NODE_FEATURES,
-    "topology": TOPOLOGY_FEATURES,
-    "positional": POSITIONAL_ENCODING_CHOICES,
-}
 
 
 def _validate_members(
@@ -214,10 +206,6 @@ class FeatureSelection:
         if active is None:
             return "all node features"
         return f"{len(active)} node features: {active}"
-
-
-def default_feature_selection() -> FeatureSelection:
-    return FeatureSelection()
 
 
 class PositionalSupernodeConflictError(ValueError):
