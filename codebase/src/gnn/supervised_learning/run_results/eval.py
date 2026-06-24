@@ -947,83 +947,6 @@ class GNNResultEvaluator:
         )
         print(f"    Saved split comparison plot: {output_path}")
 
-    def generate_generalization_gap(self, output_path: Path):
-        """Line chart of pr_auc across splits, grouped by architecture."""
-        split_files = {
-            "Train": "train_bestepoch",
-            "Val Synthetic": "val_bestepoch",
-            "Val Curated": "test_bestepoch",
-        }
-
-        frames = []
-        for split_label, filename in split_files.items():
-            try:
-                df = self.load_data(filename)
-            except FileNotFoundError:
-                continue
-            if "pr_auc" not in df.columns:
-                continue
-            chunk = df.copy()
-            chunk["split"] = split_label
-            frames.append(chunk)
-
-        if not frames:
-            return
-
-        combined = pd.concat(frames, ignore_index=True)
-        group_col = (
-            "layer_type"
-            if "layer_type" in combined.columns
-            and combined["layer_type"].nunique() > 1
-            else None
-        )
-
-        fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
-        split_order = ["Train", "Val Synthetic", "Val Curated"]
-        x = np.arange(len(split_order))
-
-        if group_col:
-            for i, (name, group) in enumerate(combined.groupby(group_col)):
-                means = []
-                for split in split_order:
-                    subset = group[group["split"] == split]["pr_auc"]
-                    means.append(subset.mean() if len(subset) else np.nan)
-                color = self.PREMIUM_PALETTE[i % len(self.PREMIUM_PALETTE)]
-                ax.plot(x, means, marker="o", linewidth=2, label=name, color=color)
-                for xi, val in zip(x, means):
-                    if not np.isnan(val):
-                        ax.annotate(f"{val:.3f}", (xi, val), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
-        else:
-            means = [
-                combined[combined["split"] == s]["pr_auc"].mean() for s in split_order
-            ]
-            ax.plot(x, means, marker="o", linewidth=2, color=self.PREMIUM_PALETTE[0])
-            for xi, val in zip(x, means):
-                if not np.isnan(val):
-                    ax.annotate(f"{val:.3f}", (xi, val), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(split_order)
-        ax.set_ylim(0, 1.05)
-        ax.set_ylabel("PR-AUC", fontsize=11, fontweight="bold")
-        ax.set_xlabel("Data Split", fontsize=11, fontweight="bold")
-        ax.set_title("Generalization Gap (Best Epoch)", fontsize=14, fontweight="bold")
-        ax.grid(axis="y", linestyle="--", alpha=0.5)
-        if group_col:
-            ax.legend(title="Architecture", frameon=False)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-
-        footnote_df = combined if not combined.empty else None
-        self._save_figure(
-            fig,
-            output_path,
-            f"Generalization Gap — {self.naming_var}",
-            subtitle_y=0.90,
-            footnote_df=footnote_df,
-        )
-        print(f"    Saved generalization gap plot: {output_path}")
-
     def generate_leaderboard(self, output_dir: Path):
         """Rank top configs by val_bestepoch pr_auc; save CSV and table PNG."""
         try:
@@ -1135,124 +1058,6 @@ class GNNResultEvaluator:
         )
         print(f"    Saved leaderboard PNG: {output_dir / 'leaderboard.png'}")
 
-    def _pareto_front(self, points: np.ndarray) -> np.ndarray:
-        """Boolean mask of non-dominated points (both axes maximize).
-
-        Point i is on the front when no other point is >= on both axes and
-        strictly greater on at least one.
-        """
-        n = len(points)
-        on_front = np.ones(n, dtype=bool)
-        for i in range(n):
-            if not on_front[i]:
-                continue
-            for j in range(n):
-                if i == j:
-                    continue
-                dominates = (
-                    points[j, 0] >= points[i, 0]
-                    and points[j, 1] >= points[i, 1]
-                    and (points[j, 0] > points[i, 0] or points[j, 1] > points[i, 1])
-                )
-                if dominates:
-                    on_front[i] = False
-                    break
-        return on_front
-
-    def _plot_pareto_panel(self, ax, df, x_col, y_col, x_label, y_label, maximize_x):
-        """Scatter configs and outline the Pareto-optimal trade-off frontier."""
-        sub = df[[x_col, y_col]].apply(pd.to_numeric, errors="coerce").dropna()
-        if sub.empty:
-            ax.set_visible(False)
-            return False
-
-        x_raw = sub[x_col].to_numpy(dtype=float)
-        y = sub[y_col].to_numpy(dtype=float)
-        # Internally both axes maximize; flip x when smaller-is-better (params, brier_score).
-        x_obj = x_raw if maximize_x else -x_raw
-        mask = self._pareto_front(np.column_stack([x_obj, y]))
-
-        ax.scatter(
-            x_raw[~mask], y[~mask], s=35, color="#B0B0B0",
-            alpha=0.7, label="Dominated", zorder=2,
-        )
-        ax.scatter(
-            x_raw[mask], y[mask], s=70, color="#E76F51",
-            edgecolor="#264653", linewidth=1.2, label="Pareto front", zorder=3,
-        )
-        order = np.argsort(x_raw[mask])
-        ax.plot(
-            x_raw[mask][order], y[mask][order],
-            color="#E76F51", linewidth=1.5, alpha=0.6, zorder=1,
-        )
-        ax.set_xlabel(x_label, fontsize=11, fontweight="bold")
-        ax.set_ylabel(y_label, fontsize=11, fontweight="bold")
-        ax.grid(linestyle="--", alpha=0.4)
-        ax.legend(frameon=False, fontsize=9)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-        return True
-
-    def generate_pareto(self, output_path: Path):
-        """Multi-metric Pareto fronts over val-synthetic best-epoch configs.
-
-        Left: PR-AUC vs model size (params, smaller better). Right: PR-AUC vs
-        brier_score (lower better) as the single uncalibrated signal.
-        """
-        try:
-            df = self.load_data("val_bestepoch")
-        except FileNotFoundError:
-            print("    Skipping Pareto (val_bestepoch.csv not found)")
-            return
-        if "pr_auc" not in df.columns:
-            print("    Skipping Pareto (pr_auc column missing)")
-            return
-
-        panels = []
-        has_params = (
-            "params" in df.columns
-            and pd.to_numeric(df["params"], errors="coerce").gt(0).any()
-        )
-        if has_params:
-            panels.append(("params", "pr_auc", "Params", "PR-AUC", False))
-        # ECE removed (needs post-training calibration); brier_score kept as
-        # the single uncalibrated signal for the Pareto trade-off view.
-        if "brier_score" in df.columns and "pr_auc" in df.columns:
-            panels.append(
-                ("brier_score", "pr_auc", "Brier Score (↓ better)", "PR-AUC", False)
-            )
-        if not panels:
-            # Fall back to a PR-AUC vs MP-layers trade-off when no cost axis available.
-            if "layers_mp" in df.columns:
-                panels.append(("layers_mp", "pr_auc", "MP Layers", "PR-AUC", False))
-            else:
-                print("    Skipping Pareto (no cost axis available)")
-                return
-
-        fig, axes = plt.subplots(
-            1, len(panels), figsize=(7 * len(panels), 5.5), dpi=150
-        )
-        axes = np.atleast_1d(axes)
-        plotted = False
-        for ax, (x_col, y_col, x_label, y_label, max_x) in zip(axes, panels):
-            plotted |= self._plot_pareto_panel(
-                ax, df, x_col, y_col, x_label, y_label, max_x
-            )
-
-        if not plotted:
-            plt.close(fig)
-            print("    Skipping Pareto (no plottable panels)")
-            return
-
-        self._save_figure(
-            fig,
-            output_path,
-            f"Pareto Fronts (Val Synthetic, Best Epoch) — {self.naming_var}",
-            subtitle_y=0.92,
-            footnote_df=df,
-        )
-        print(f"    Saved Pareto plot: {output_path}")
-
     def _evaluate_run_slices(self, run: str, df: pd.DataFrame):
         label = self.run_labels.get(run, run)
         run_out_dir = self.output_dir / run
@@ -1352,9 +1157,7 @@ class GNNResultEvaluator:
 
         print("  Generating global summary plots...")
         self.generate_summary_comparison(self.output_dir / "split_comparison.png")
-        self.generate_generalization_gap(self.output_dir / "generalization_gap.png")
         self.generate_leaderboard(self.output_dir)
-        self.generate_pareto(self.output_dir / "pareto.png")
 
         print(f"Evaluation complete! Plots saved to {self.output_dir}")
 

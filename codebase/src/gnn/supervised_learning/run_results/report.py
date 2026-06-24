@@ -60,8 +60,6 @@ SPLIT_LABELS = {
 LINKED_PLOTS = {
     "Leaderboard": "leaderboard.png",
     "Split comparison": "split_comparison.png",
-    "Generalization gap": "generalization_gap.png",
-    "Pareto front": "pareto.png",
 }
 
 
@@ -160,38 +158,6 @@ def _leaderboard_section(agg_dir: Path, eval_dir: Path, top_k: int) -> tuple[str
     return _md_table(headers, rows), json_rows
 
 
-def _generalization_section(agg_dir: Path) -> tuple[str, list]:
-    val = _read_csv(agg_dir, "val_bestepoch")
-    cur = _read_csv(agg_dir, "test_bestepoch")
-    if val is None or cur is None or "pr_auc" not in val.columns:
-        return "_Generalization gap unavailable (missing splits)._", []
-    if "layer_type" not in val.columns:
-        return "_Generalization gap unavailable (no layer_type column)._", []
-
-    val_g = val.groupby("layer_type")["pr_auc"].mean()
-    cur_g = (
-        cur.groupby("layer_type")["pr_auc"].mean()
-        if "pr_auc" in cur.columns and "layer_type" in cur.columns
-        else pd.Series(dtype=float)
-    )
-    rows, records = [], []
-    for arch in val_g.index:
-        syn = float(val_g.loc[arch])
-        curated = float(cur_g.loc[arch]) if arch in cur_g.index else float("nan")
-        delta = curated - syn if pd.notna(curated) else float("nan")
-        rows.append([
-            str(arch), _fmt(syn), _fmt(curated), _fmt(delta),
-        ])
-        records.append({
-            "layer_type": str(arch),
-            "val_synthetic_pr_auc": syn,
-            "val_curated_pr_auc": None if pd.isna(curated) else curated,
-            "delta": None if pd.isna(delta) else delta,
-        })
-    headers = ["Architecture", "Val Synth PR-AUC", "Val Curated PR-AUC", "Δ"]
-    return _md_table(headers, rows), records
-
-
 def _calibration_section(agg_dir: Path) -> tuple[str, dict]:
     records: dict = {}
     rows = []
@@ -213,6 +179,37 @@ def _calibration_section(agg_dir: Path) -> tuple[str, dict]:
         return "_No calibration metrics logged (ece / brier_score absent)._", {}
     headers = ["Split"] + [m.upper() for m in CALIBRATION_METRICS]
     return _md_table(headers, rows), records
+
+
+CLASS_BALANCE_LABELS = {
+    "validation_synthetic": "Validation Synthetic",
+    "validation_curated": "Validation Curated",
+}
+
+
+def _class_distribution_section(agg_dir: Path) -> tuple[str, dict]:
+    """Per-split class counts (Newton=0 vs gMGF=1) from ``agg/class_balance.json``."""
+    balance = baselines_mod.load_class_balance(agg_dir)
+    if not balance:
+        return "_No class distribution (class_balance.json absent)._", {}
+    rows, record = [], {}
+    for key, counts in balance.items():
+        n0 = int(counts.get("0", 0))
+        n1 = int(counts.get("1", 0))
+        total = int(counts.get("total", n0 + n1)) or (n0 + n1)
+        pos_frac = (n1 / total) if total else None
+        rows.append([
+            CLASS_BALANCE_LABELS.get(key, key), str(n0), str(n1), str(total),
+            _fmt(pos_frac) if pos_frac is not None else "—",
+        ])
+        record[key] = {
+            "newton_0": n0,
+            "gmgf_1": n1,
+            "total": total,
+            "positive_fraction": pos_frac,
+        }
+    headers = ["Split", "Newton (0)", "gMGF (1)", "Total", "Positive frac (1)"]
+    return _md_table(headers, rows), record
 
 
 def _baseline_section(
@@ -301,8 +298,8 @@ def _significance_section(eval_dir: Path) -> tuple[str, dict]:
 def _provenance_section(results_dir: Path) -> tuple[str, dict]:
     """Pull reproducibility provenance from run_manifest.json (written by run_all.py).
 
-    Surfaces in the eval artifact the context the leaderboard alone hides: seed, git
-    commit, dataset/feature schema, and key fixed training knobs. Without the manifest
+    Surfaces in the eval artifact the context the leaderboard alone hides: seed,
+    dataset/feature schema, and key fixed training knobs. Without the manifest
     (older experiments) the section degrades to a note rather than failing.
     """
     manifest_path = results_dir / "run_manifest.json"
@@ -321,13 +318,10 @@ def _provenance_section(results_dir: Path) -> tuple[str, dict]:
     expr = base.get("expression_graph", {}) or {}
     dataset = base.get("dataset", {}) or {}
     train = base.get("train", {}) or {}
-    git = manifest.get("git", {}) or {}
 
     record = {
         "manifest": "../run_manifest.json",
         "seed": manifest.get("seed"),
-        "git_commit": git.get("commit"),
-        "git_dirty": git.get("dirty"),
         "dataset": dataset.get("name"),
         "synthetic_dataset": expr.get("synthetic_dataset"),
         "mode": expr.get("mode"),
@@ -341,13 +335,8 @@ def _provenance_section(results_dir: Path) -> tuple[str, dict]:
         "versions": manifest.get("versions"),
     }
 
-    commit = git.get("commit")
-    commit_str = (commit[:10] if isinstance(commit, str) else "—") + (
-        " (dirty)" if git.get("dirty") else ""
-    )
     rows = [
         ["Seed", _fmt(record["seed"])],
-        ["Git commit", commit_str],
         ["Dataset", _fmt(record["dataset"])],
         ["Synthetic dataset", _fmt(record["synthetic_dataset"])],
         ["Graph mode", _fmt(record["mode"])],
@@ -417,7 +406,7 @@ def generate_report(
         best_block = "_No val_bestepoch.csv found — cannot pick a best config._"
 
     leaderboard_md, leaderboard_json = _leaderboard_section(agg_dir, eval_dir, top_k)
-    gap_md, gap_json = _generalization_section(agg_dir)
+    classdist_md, classdist_json = _class_distribution_section(agg_dir)
     calib_md, calib_json = _calibration_section(agg_dir)
     baseline_md, baseline_json = _baseline_section(agg_dir, best_row)
     sig_md, sig_json = _significance_section(eval_dir)
@@ -426,7 +415,7 @@ def generate_report(
 
     summary["provenance"] = provenance_json
     summary["leaderboard"] = leaderboard_json
-    summary["generalization_gap"] = gap_json
+    summary["class_distribution"] = classdist_json
     summary["calibration"] = calib_json
     summary["baselines"] = baseline_json
     summary["significance"] = sig_json
@@ -444,12 +433,12 @@ def generate_report(
 
 {leaderboard_md}
 
-## Generalization gap (synthetic → curated)
+## Class distribution
 
-Δ is curated minus synthetic PR-AUC per architecture; large negative Δ means the
-architecture overfits the synthetic holdout.
+Class counts per evaluation split (Newton=0 vs gMGF=1) and the positive-class
+fraction (gMGF), which sets the no-skill PR-AUC baseline.
 
-{gap_md}
+{classdist_md}
 
 ## Calibration
 

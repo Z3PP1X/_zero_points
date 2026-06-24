@@ -18,30 +18,6 @@ from pathlib import Path
 import yaml
 
 
-def _git_provenance(repo_dir: Path) -> dict:
-    """Best-effort git commit + dirty flag; never raises (returns nulls on failure)."""
-
-    def _git(*args) -> str | None:
-        try:
-            out = subprocess.run(
-                ["git", *args],
-                cwd=repo_dir,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return out.stdout.strip()
-        except (subprocess.CalledProcessError, OSError):
-            return None
-
-    commit = _git("rev-parse", "HEAD")
-    status = _git("status", "--porcelain")
-    return {
-        "commit": commit,
-        "dirty": None if status is None else bool(status),
-    }
-
-
 def _package_versions() -> dict:
     """Versions of the libraries that affect numerics, for the manifest."""
     import platform
@@ -62,14 +38,13 @@ def write_run_manifest(
     grid_path: Path,
     config_files: list[Path],
     timestamp: str,
-    repo_dir: Path,
 ) -> Path:
     """Write a single self-contained provenance file for the whole grid run.
 
     Combines the resolved base config and the grid (the "settings.json" pairing), plus
-    the seed, git commit/dirty flag, package versions, and the expanded config list — so
-    any experiment folder answers "what produced this?" without the transient configs/
-    dir or the source tree at HEAD. Read back by report.py into summary.json.
+    the seed, package versions, and the expanded config list — so any experiment folder
+    answers "what produced this?" without the transient configs/ dir. Read back by
+    report.py into summary.json.
     """
     base_cfg = yaml.safe_load(config_base.read_text(encoding="utf-8")) or {}
     grid_cfg = yaml.safe_load(grid_path.read_text(encoding="utf-8")) or {}
@@ -78,7 +53,6 @@ def write_run_manifest(
         "experiment": experiment_name,
         "timestamp": timestamp,
         "seed": base_cfg.get("seed"),
-        "git": _git_provenance(repo_dir),
         "versions": _package_versions(),
         "num_configs": len(config_files),
         "config_files": [p.name for p in config_files],
@@ -376,7 +350,6 @@ def main():
         grid_path=grid_path,
         config_files=config_files,
         timestamp=timestamp,
-        repo_dir=script_dir,
     )
     print(f"[Orchestrator] Wrote run manifest: {manifest_path}")
 
