@@ -18,3 +18,12 @@ pythonpath = [
     "codebase/src/gnn/supervised_learning",
 ]
 addopts = "-q"
+
+[tool.vulture]
+# Dead-code gate. The whitelist holds verified false positives (framework
+# hooks, GraphGym registry, eval/dynamic refs, mock attrs, pytest fixtures).
+# A bare ``vulture`` run from the repo root reports only un-triaged findings.
+paths = ["codebase/src/gnn", "vulture_whitelist.py"]
+min_confidence = 60
+exclude = [".claude/worktrees/", "*/__pycache__/*"]
+sort_by_size = true
