@@ -389,6 +389,7 @@ def set_custom_cfg(cfg):
     cfg.train.restart_period = 20      # period (epochs) for cosine_with_restarts
     cfg.train.curated_eval_period = 5
     cfg.train.curated_eval_on_test_highscore = True
+    cfg.train.curated_eval_warmup = 0  # skip curated holdout eval for the first N epochs (OOD transient guard); 0 disables
     cfg.train.num_workers = 0
     # Early stopping (opt-in). Validation runs every epoch in this custom Lightning
     # path, so patience is counted in epochs. Monitored metric must be one always
@@ -398,7 +399,7 @@ def set_custom_cfg(cfg):
     cfg.train.early_stopping = False          # master switch
     cfg.train.early_stopping_monitor = "val_pr_auc"  # val_pr_auc | val_loss
     cfg.train.early_stopping_patience = 10    # epochs without improvement before stopping
-    cfg.train.early_stopping_min_delta = 0.0  # min change that counts as an improvement
+    cfg.train.early_stopping_min_delta = 0.002  # min change that counts as an improvement (rounding noise below this is ignored)
     cfg.params = 0
     # set_run_dir() writes cfg.run_dir at runtime and dump_cfg persists it to config.yaml.
     # Pre-register the key here so load_cfg can merge saved configs without a YACS

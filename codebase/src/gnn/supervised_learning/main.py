@@ -395,6 +395,7 @@ def main(
                 "synthetic_dataset": synthetic_dataset,
                 "curated_eval_period": curated_schedule.period,
                 "curated_eval_on_test_highscore": curated_schedule.on_test_highscore,
+                "curated_eval_warmup": curated_schedule.warmup,
             }
         )
 

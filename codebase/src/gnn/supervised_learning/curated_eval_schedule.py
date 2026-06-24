@@ -12,10 +12,13 @@ class CuratedEvalSchedule:
 
     period: int = 5
     on_test_highscore: bool = True
+    warmup: int = 0
 
     def __post_init__(self) -> None:
         if self.period < 0:
             raise ValueError(f"curated_eval_period must be >= 0, got {self.period}")
+        if self.warmup < 0:
+            raise ValueError(f"curated_eval_warmup must be >= 0, got {self.warmup}")
 
 
 def plain_train_mapping(train_cfg: Any) -> dict[str, Any]:
@@ -33,7 +36,10 @@ def parse_curated_eval_schedule(train_cfg: Any) -> CuratedEvalSchedule:
     mapping = plain_train_mapping(train_cfg)
     period = int(mapping.get("curated_eval_period", 5))
     on_test_highscore = bool(mapping.get("curated_eval_on_test_highscore", True))
-    return CuratedEvalSchedule(period=period, on_test_highscore=on_test_highscore)
+    warmup = int(mapping.get("curated_eval_warmup", 0))
+    return CuratedEvalSchedule(
+        period=period, on_test_highscore=on_test_highscore, warmup=warmup
+    )
 
 
 def should_evaluate_curated(
@@ -48,6 +54,13 @@ def should_evaluate_curated(
     ``epoch`` is 0-based (training loop index). Periodic checks use 1-based
     epoch numbers (5th, 10th, …).
     """
+    # Warmup gate: suppress curated holdout eval for the first ``warmup`` epochs.
+    # Early in training an underfit model on the out-of-distribution curated set can
+    # produce anomalous — even inverted — metrics that would mislead diagnostics.
+    # Mirrors _WarmupAwareEarlyStopping's ``current_epoch < warmup_epochs`` (0-based).
+    if epoch < schedule.warmup:
+        return False, None
+
     reasons: list[str] = []
     epoch_number = epoch + 1
 

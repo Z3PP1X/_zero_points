@@ -47,11 +47,12 @@ train:
   # Curated real-world holdout: not every epoch — periodic and/or on synthetic-test highscore
   curated_eval_period: 5          # run every Nth epoch (5, 10, 15, …); 0 disables periodic runs
   curated_eval_on_test_highscore: true  # also run when unseen synthetic val PR-AUC improves
+  curated_eval_warmup: 5          # skip curated holdout eval for the first N epochs (OOD transient guard); 0 disables
   # Early stopping (opt-in). Validation runs every epoch, so patience is in epochs.
   early_stopping: false           # stop when the monitored metric stagnates/declines
   early_stopping_monitor: val_pr_auc  # val_pr_auc (max) | val_loss (min)
   early_stopping_patience: 10     # epochs without improvement before stopping
-  early_stopping_min_delta: 0.0   # min change that counts as an improvement
+  early_stopping_min_delta: 0.002 # min change that counts as an improvement (rounding noise below this is ignored)
 
 # --- Model Structure ---
 model:
