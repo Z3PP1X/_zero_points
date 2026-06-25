@@ -107,11 +107,17 @@ class ExpressionGNN(nn.Module):
     """GNN backbone for supervised learning (classify=True) and RL (classify=False).
 
     Architecture:
+        feature dropout: per-graph column-wise dropout on the raw input features
+            (training only) — driven by the `dropout` arg; see _drop_feature_columns
         node_encoder: LayerNorm → Linear(input_dim, hidden_dim) → activation
         convs: num_layers × GINConv (2-layer MLP inside each conv, no edge features)
         global encoder: LayerNorm(global_dim) → Linear(global_dim, global_hidden_dim) → act
-        tail: Linear(hidden_dim + global_hidden_dim, hidden_dim) → LayerNorm → act → Dropout
+        tail: Linear(hidden_dim + global_hidden_dim, hidden_dim) → LayerNorm → act
         head (classify=True only): Linear(hidden_dim, output_dim)
+
+    Note: `dropout` controls input feature-column dropout (whole features zeroed for a
+    graph), NOT the classic post-pooling tail dropout. This forces the model to make
+    predictions even when arbitrary subsets of features are missing.
 
     Separation of concerns: structural information flows through the message-passing
     stack into the pooled graph embedding, while per-problem scalar values (e.g.
@@ -144,6 +150,10 @@ class ExpressionGNN(nn.Module):
         self.global_dim = global_dim
         self.pool_fn = resolve_global_pool(graph_pooling)
 
+        # `dropout` drives per-graph column-wise dropout on the input features
+        # (see _drop_feature_columns), applied at the top of forward in training mode.
+        self.feature_dropout_p = float(dropout)
+
         self.node_encoder = nn.Sequential(
             nn.LayerNorm(input_dim),
             nn.Linear(input_dim, hidden_dim),
@@ -171,12 +181,28 @@ class ExpressionGNN(nn.Module):
             nn.Linear(hidden_dim + _g_enc_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             make_activation(activation),
-            nn.Dropout(dropout),
         )
 
         self.head = nn.Linear(hidden_dim, output_dim) if classify else None
 
+    def _drop_feature_columns(self, x, batch):
+        """Per-graph column-wise dropout on raw input features (training only).
+
+        For every graph in the batch an independent Bernoulli mask over the feature
+        columns is drawn, so a dropped feature is zeroed for *all* nodes of that graph
+        (the graph loses that feature entirely). The mask is resampled on every forward
+        pass, so different batches/graphs see different missing features. Inverted-dropout
+        scaling (1/(1-p)) preserves the expected activation, so eval needs no rescaling.
+        """
+        p = self.feature_dropout_p
+        if not self.training or p <= 0.0:
+            return x
+        num_graphs = int(batch.max().item()) + 1 if batch.numel() > 0 else 1
+        keep = x.new_empty(num_graphs, x.size(1)).bernoulli_(1.0 - p) / (1.0 - p)
+        return x * keep[batch]
+
     def forward(self, x, edge_index, batch, global_features=None, edge_attr=None):
+        x = self._drop_feature_columns(x, batch)
         x = self.node_encoder(x)
         for i, conv in enumerate(self.convs):
             x = self.layer_activations[i](conv(x, edge_index))
