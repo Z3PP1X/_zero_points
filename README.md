@@ -50,7 +50,7 @@ cd /home/zapp1x/GitHub/_bachelor/_zero_points/codebase/src/gnn
 
 ## 📊 1. Supervised Learning Workflow
 
-Das Ziel des Supervised Learnings ist die Klassifizierung, welcher Solver (Newton: `0` oder gMGF: `1`) bei einem gegebenen Graphen und Start-/Zielwert schneller konvergiert.
+Das Ziel des Supervised Learnings ist die Klassifizierung, welcher Solver (gMGF: `0` oder Newton: `1`) bei einem gegebenen Graphen und Start-/Zielwert schneller konvergiert.
 
 ### A. Klassisches GNN-Training (`supervised_learning/main.py`)
 Dieses Skript liest Graphen aus CSV/GraphML-Verzeichnissen ein, teilt sie in Train/Val-Splits auf und trainiert ein GNN-Modell (GATv2-Klassifikator).

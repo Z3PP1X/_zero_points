@@ -200,7 +200,7 @@ CLASS_BALANCE_LABELS = {
 
 
 def _class_distribution_section(agg_dir: Path) -> tuple[str, dict]:
-    """Per-split class counts (Newton=0 vs gMGF=1) from ``agg/class_balance.json``."""
+    """Per-split class counts (gMGF=0 vs Newton=1) from ``agg/class_balance.json``."""
     balance = baselines_mod.load_class_balance(agg_dir)
     if not balance:
         return "_No class distribution (class_balance.json absent)._", {}
@@ -215,12 +215,12 @@ def _class_distribution_section(agg_dir: Path) -> tuple[str, dict]:
             _fmt(pos_frac) if pos_frac is not None else "—",
         ])
         record[key] = {
-            "newton_0": n0,
-            "gmgf_1": n1,
+            "gmgf_0": n0,
+            "newton_1": n1,
             "total": total,
             "positive_fraction": pos_frac,
         }
-    headers = ["Split", "Newton (0)", "gMGF (1)", "Total", "Positive frac (1)"]
+    headers = ["Split", "gMGF (0)", "Newton (1)", "Total", "Positive frac (1)"]
     return _md_table(headers, rows), record
 
 
@@ -450,8 +450,8 @@ def generate_report(
 
 ## Class distribution
 
-Class counts per evaluation split (Newton=0 vs gMGF=1) and the positive-class
-fraction (gMGF), which sets the no-skill PR-AUC baseline.
+Class counts per evaluation split (gMGF=0 vs Newton=1) and the positive-class
+fraction (Newton), which sets the no-skill PR-AUC baseline.
 
 {classdist_md}
 

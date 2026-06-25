@@ -1,11 +1,11 @@
 ---
 name: supervised-gnn-training
-description: Run, extend, or debug the supervised GNN solver-classifier workflow in codebase/src/gnn/supervised_learning/ — predicting which Mathematica solver (Newton=0 vs gMGF=1) converges faster. Covers main.py custom training, the GraphGym grid (main_graphgym.py / run_all.py / grid.yaml), aggregation, and the eval/plot artifacts. Use when training a model, sweeping hyperparameters, adding an architecture, or interpreting run_results output.
+description: Run, extend, or debug the supervised GNN solver-classifier workflow in codebase/src/gnn/supervised_learning/ — predicting which Mathematica solver (gMGF=0 vs Newton=1) converges faster. Covers main.py custom training, the GraphGym grid (main_graphgym.py / run_all.py / grid.yaml), aggregation, and the eval/plot artifacts. Use when training a model, sweeping hyperparameters, adding an architecture, or interpreting run_results output.
 ---
 
 # Supervised GNN training workflow
 
-Goal: binary classification — given an expression graph + start/target values, predict the faster solver (Newton `0` vs gMGF `1`).
+Goal: binary classification — given an expression graph + start/target values, predict the faster solver (gMGF `0` vs Newton `1`).
 
 **First:** `conda activate pytorch` and `cd codebase/src/gnn/supervised_learning`. See the `gnn-dev-workflow` skill for environment/PYTHONPATH details. The shared graph/feature layer is documented in the `graph-data-pipeline` skill — `--mode`, `--edge-direction`, `--feature-groups`, `--positional-encoding`, `--active-features`, `--enrich` all behave identically here and in RL.
 
