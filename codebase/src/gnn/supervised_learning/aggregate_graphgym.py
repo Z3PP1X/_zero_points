@@ -20,7 +20,7 @@ import torch_geometric.graphgym.utils.agg_runs as agg_runs_mod
 def custom_is_split(s):
     return s in ['train', 'val', 'test']
 
-BEST_METRIC = 'pr_auc'
+BEST_METRIC = 'auc'
 KEYS_TO_STRIP = ['eta', 'eta_std', 'params_std']
 
 from gnn.supervised_learning.run_results.eval_metrics import select_best_epoch
@@ -28,10 +28,10 @@ from gnn.supervised_learning.run_results.eval_metrics import select_best_epoch
 
 def _resolve_best_metric(metric_best, stats_list):
     if metric_best == 'auto':
-        if 'pr_auc' in stats_list[0]:
-            return 'pr_auc'
         if 'auc' in stats_list[0]:
             return 'auc'
+        if 'pr_auc' in stats_list[0]:
+            return 'pr_auc'
         return 'accuracy'
     return metric_best
 
@@ -113,7 +113,7 @@ def custom_agg_runs(dir, metric_best='auto'):
         dict_to_json(value, fname)
 
 def custom_agg_batch(dir, metric_best='auto'):
-    """Batch aggregation aligned with checkpoint selection (pr_auc) and full logging."""
+    """Batch aggregation aligned with checkpoint selection (auc / ROC-AUC) and full logging."""
     import numpy as np
     import pandas as pd
     from torch_geometric.graphgym.utils.agg_runs import (
@@ -196,7 +196,7 @@ def custom_agg_batch(dir, metric_best='auto'):
                 )
         results[key].to_csv(osp.join(dir_out, f'{key}.csv'), index=False)
 
-    # stats.json → *_bestepoch.csv (best epoch by pr_auc on synthetic val split)
+    # stats.json → *_bestepoch.csv (best epoch by auc / ROC-AUC on synthetic val split)
     results = {'train': [], 'val': [], 'test': []}
     for run in os.listdir(dir):
         if run == 'agg':

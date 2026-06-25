@@ -79,7 +79,7 @@ train:
   curated_eval_on_test_highscore: true
   curated_eval_warmup: 5          # skip curated holdout eval for the first N epochs (OOD transient guard); 0 disables
   early_stopping: true
-  early_stopping_monitor: val_pr_auc
+  early_stopping_monitor: val_auc
   early_stopping_patience: 20
   early_stopping_min_delta: 0.002  # min change that counts as an improvement (rounding noise below this is ignored)
 

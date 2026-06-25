@@ -184,9 +184,8 @@ def save_supervised_training_curves(history, output_path: Path):
     import matplotlib.pyplot as plt
     import numpy as np
 
-    metrics_to_plot = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "ece", "dirichlet_energy"]
+    metrics_to_plot = ["auc", "loss", "f1", "mean_confidence", "ece", "dirichlet_energy"]
     key_mapping = {
-        "pr_auc": "PR_AUC/val",
         "auc": "AUC/val",
         "loss": "Loss/val",
         "f1": "F1",
@@ -416,7 +415,7 @@ def main(
             }
         )
 
-        best_val_pr_auc = float("-inf")
+        best_val_auc = float("-inf")
         history = {
             "epoch": [],
             "Loss/train": [],
@@ -485,12 +484,12 @@ def main(
                 f"Recall: {metrics['recall']:.4f}"
             )
 
-            is_new_highscore = metrics["pr_auc"] > best_val_pr_auc
+            is_new_highscore = metrics["auc"] > best_val_auc
             if is_new_highscore:
-                best_val_pr_auc = metrics["pr_auc"]
+                best_val_auc = metrics["auc"]
                 torch.save(model.state_dict(), str(save_path))
-                mlflow.log_metric("best_val_pr_auc", best_val_pr_auc, step=epoch)
-                print(f"  ↳ Saved best model (val_pr_auc={metrics['pr_auc']:.4f})")
+                mlflow.log_metric("best_val_auc", best_val_auc, step=epoch)
+                print(f"  ↳ Saved best model (val_auc={metrics['auc']:.4f})")
 
             if synthetic and curated_loader is not None:
                 should_run_curated, curated_reason = should_evaluate_curated(

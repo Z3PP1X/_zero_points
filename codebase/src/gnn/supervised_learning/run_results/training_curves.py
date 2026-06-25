@@ -55,7 +55,9 @@ SPLIT_LABELS = {
 }
 # mean_margin excluded: requires calibration to be meaningful; brier_score kept
 # as the single uncalibrated signal.
-CURVE_METRICS = ["pr_auc", "auc", "loss", "f1", "mean_confidence", "brier_score"]
+# pr_auc is recorded in the agg CSVs but no longer plotted as a curve panel —
+# treated as a recorded scalar (like dirichlet_energy); auc (ROC-AUC) is the headline.
+CURVE_METRICS = ["auc", "loss", "f1", "mean_confidence", "brier_score"]
 
 _CONFIG_COLS = {
     "layer_type", "layers_mp", "dim_inner", "dropout", "graph_pooling",
@@ -135,10 +137,10 @@ class TrainingCurvePlotter:
 
     def _best_val_epoch(self, series: dict) -> int | None:
         val_df = series.get("val")
-        if val_df is None or val_df.empty or "pr_auc" not in val_df.columns:
+        if val_df is None or val_df.empty or "auc" not in val_df.columns:
             return None
         val_df = filter_warmup_epochs_df(val_df, warmup_epochs=EVAL_WARMUP_EPOCHS)
-        idx = val_df["pr_auc"].idxmax()
+        idx = val_df["auc"].idxmax()
         return int(val_df.loc[idx, "epoch"])
 
     def _plot_series(
@@ -185,7 +187,7 @@ class TrainingCurvePlotter:
                     linestyle="--",
                     linewidth=1.5,
                     alpha=0.8,
-                    label="Best val PR-AUC epoch" if metric == available_metrics[0] else None,
+                    label="Best val ROC-AUC epoch" if metric == available_metrics[0] else None,
                 )
             ax.set_title(metric.upper(), fontsize=11, fontweight="bold")
             ax.set_xlabel("Epoch")

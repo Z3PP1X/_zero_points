@@ -40,7 +40,7 @@ METRIC_COLS = {
 # ece excluded from leaderboard: requires post-training calibration; brier_score
 # kept as the single uncalibrated signal alongside mean_confidence.
 LEADERBOARD_METRICS = (
-    "pr_auc", "auc", "f1", "recall", "precision", "accuracy", "loss",
+    "auc", "pr_auc", "f1", "recall", "precision", "accuracy", "loss",
     "mean_confidence", "brier_score",
 )
 CALIBRATION_METRICS = ("ece", "brier_score", "mean_confidence", "mean_entropy")
@@ -116,9 +116,9 @@ def _md_table(headers: list[str], rows: list[list[str]]) -> str:
 
 def _best_config(val_df: pd.DataFrame) -> tuple[pd.Series | None, list[str]]:
     config_cols = _config_columns(val_df)
-    if "pr_auc" not in val_df.columns:
+    if "auc" not in val_df.columns:
         return None, config_cols
-    numeric = pd.to_numeric(val_df["pr_auc"], errors="coerce")
+    numeric = pd.to_numeric(val_df["auc"], errors="coerce")
     if numeric.dropna().empty:
         return None, config_cols
     return val_df.loc[numeric.idxmax()], config_cols
@@ -134,8 +134,8 @@ def _leaderboard_section(agg_dir: Path, eval_dir: Path, top_k: int) -> tuple[str
             df = None
     if df is None:
         df = _read_csv(agg_dir, "val_bestepoch")
-        if df is not None and "pr_auc" in df.columns:
-            df = df.sort_values("pr_auc", ascending=False).head(top_k)
+        if df is not None and "auc" in df.columns:
+            df = df.sort_values("auc", ascending=False).head(top_k)
     if df is None or df.empty:
         return "_No leaderboard available._", []
 
@@ -263,10 +263,10 @@ def _significance_section(eval_dir: Path) -> tuple[str, dict]:
         return "_Prediction dump unreadable._", {}
 
     ci = sig_mod.bootstrap_metric_ci(
-        best["y_true"], best["probs_pos"], metric="pr_auc"
+        best["y_true"], best["probs_pos"], metric="auc"
     )
     lines.append(
-        f"- **{best_name}** PR-AUC = {ci['point']:.4f} "
+        f"- **{best_name}** ROC-AUC = {ci['point']:.4f} "
         f"(95% CI [{ci['lo']:.4f}, {ci['hi']:.4f}], n={ci['n']}, "
         f"{ci['n_boot']} bootstraps)"
     )
@@ -281,11 +281,11 @@ def _significance_section(eval_dir: Path) -> tuple[str, dict]:
                 best["y_true"][:n],
                 best["probs_pos"][:n],
                 second["probs_pos"][:n],
-                metric="pr_auc",
+                metric="auc",
             )
             verdict = "significant" if diff["significant"] else "not significant"
             lines.append(
-                f"- **{best_name} vs {second_name}**: ΔPR-AUC = {diff['diff']:.4f} "
+                f"- **{best_name} vs {second_name}**: ΔROC-AUC = {diff['diff']:.4f} "
                 f"(95% CI [{diff['lo']:.4f}, {diff['hi']:.4f}], "
                 f"p={diff['p_value']:.3f}, {verdict})"
             )
@@ -386,6 +386,7 @@ def generate_report(
     summary: dict = {"experiment": experiment}
 
     if best_row is not None:
+        best_auc = _to_float(best_row.get("auc"))
         best_pr = _to_float(best_row.get("pr_auc"))
         best_label = _config_label(best_row, config_cols)
         summary["best_config"] = {
@@ -394,11 +395,13 @@ def generate_report(
                 c: (None if pd.isna(best_row.get(c)) else best_row.get(c))
                 for c in config_cols
             },
+            "val_synthetic_roc_auc": best_auc,
             "val_synthetic_pr_auc": best_pr,
         }
         n_configs = len(val_df) if val_df is not None else 0
         best_block = (
-            f"**Best config (Val Synthetic PR-AUC):** `{best_label}`  \n"
+            f"**Best config (Val Synthetic ROC-AUC):** `{best_label}`  \n"
+            f"**Val Synthetic ROC-AUC:** {_fmt(best_auc)}  \n"
             f"**Val Synthetic PR-AUC:** {_fmt(best_pr)}  \n"
             f"**Configurations evaluated:** {n_configs}"
         )

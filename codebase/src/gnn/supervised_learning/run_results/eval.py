@@ -30,11 +30,11 @@ class GNNResultEvaluator:
 
     In synthetic mode:
       - train_*: Training on synthetic data
-      - val_*:   Unseen synthetic holdout (model selection via pr_auc)
+      - val_*:   Unseen synthetic holdout (model selection via auc / ROC-AUC)
       - test_*:  Curated real-world holdout (generalisation only, no training effect)
 
-    MAX heatmaps: per heatmap cell, pick the configuration with the highest pr_auc,
-    then plot auc / pr_auc / loss / precision / f1 / recall from that same epoch row.
+    MAX heatmaps: per heatmap cell, pick the configuration with the highest auc
+    (ROC-AUC), then plot auc / loss / recall / f1 / precision from that same epoch row.
     MEAN heatmaps: average metrics across configurations in each cell.
     """
 
@@ -71,9 +71,10 @@ class GNNResultEvaluator:
     }
     # mean_margin, mean_entropy, ece require post-training calibration and are
     # excluded from plots. brier_score is kept as the single uncalibrated signal.
+    # pr_auc is recorded (kept in agg CSVs + leaderboard table) but no longer plotted
+    # as a headline panel — treated as a recorded scalar, like dirichlet_energy.
     HEATMAP_METRICS = [
         "auc",
-        "pr_auc",
         "loss",
         "recall",
         "f1",
@@ -83,7 +84,6 @@ class GNNResultEvaluator:
     ]
     BOUNDED_METRICS = [
         "auc",
-        "pr_auc",
         "accuracy",
         "precision",
         "recall",
@@ -426,11 +426,11 @@ class GNNResultEvaluator:
                 return a, b
         return varying[0], varying[1]
 
-    def _best_pr_auc_rows(self, df: pd.DataFrame, group_cols: list) -> pd.DataFrame:
-        """Keep one row per group: the configuration with the highest pr_auc."""
-        if "pr_auc" not in df.columns or not group_cols:
+    def _best_auc_rows(self, df: pd.DataFrame, group_cols: list) -> pd.DataFrame:
+        """Keep one row per group: the configuration with the highest auc (ROC-AUC)."""
+        if "auc" not in df.columns or not group_cols:
             return df
-        idx = df.groupby(group_cols, dropna=False)["pr_auc"].idxmax().dropna()
+        idx = df.groupby(group_cols, dropna=False)["auc"].idxmax().dropna()
         return df.loc[idx]
 
     def _format_axis_label(self, col: str) -> str:
@@ -542,11 +542,11 @@ class GNNResultEvaluator:
         ax.set_yticklabels(pivot_grid.index)
         ax.set_xlabel(self._format_axis_label(column_col), fontsize=9, fontweight="bold")
         ax.set_ylabel(self._format_axis_label(index_col), fontsize=9, fontweight="bold")
-        # In "max" mode every metric in a cell is read from the single best-pr_auc
+        # In "max" mode every metric in a cell is read from the single best-auc (ROC-AUC)
         # configuration's row (one coherent row, NOT an independent per-metric max),
         # so label it as such to avoid that misreading.
         metric_title = (
-            f"{metric.upper()} @ BEST PR-AUC" if agg == "max" else f"{metric.upper()} (MEAN)"
+            f"{metric.upper()} @ BEST ROC-AUC" if agg == "max" else f"{metric.upper()} (MEAN)"
         )
         ax.set_title(metric_title, fontsize=11, fontweight="bold", pad=8)
         ax.tick_params(left=False, bottom=False)
@@ -591,8 +591,8 @@ class GNNResultEvaluator:
 
         group_cols = [index_col, column_col]
         plot_df = (
-            self._best_pr_auc_rows(df, group_cols)
-            if agg == "max" and "pr_auc" in df.columns
+            self._best_auc_rows(df, group_cols)
+            if agg == "max" and "auc" in df.columns
             else df
         )
 
@@ -635,7 +635,7 @@ class GNNResultEvaluator:
             f"{self._format_axis_label(column_col)}"
         )
         agg_note = (
-            "best-pr_auc configuration per cell (all metrics from that one row)"
+            "best-auc (ROC-AUC) configuration per cell (all metrics from that one row)"
             if agg == "max"
             else "mean across configurations per cell"
         )
@@ -948,15 +948,15 @@ class GNNResultEvaluator:
         print(f"    Saved split comparison plot: {output_path}")
 
     def generate_leaderboard(self, output_dir: Path):
-        """Rank top configs by val_bestepoch pr_auc; save CSV and table PNG."""
+        """Rank top configs by val_bestepoch auc (ROC-AUC); save CSV and table PNG."""
         try:
             val_df = self.load_data("val_bestepoch")
         except FileNotFoundError:
             print("    Skipping leaderboard (val_bestepoch.csv not found)")
             return
 
-        if "pr_auc" not in val_df.columns:
-            print("    Skipping leaderboard (pr_auc column missing)")
+        if "auc" not in val_df.columns:
+            print("    Skipping leaderboard (auc column missing)")
             return
 
         before_quality = len(val_df)
@@ -975,11 +975,12 @@ class GNNResultEvaluator:
 
         config_cols = self._config_columns(val_df)
         # mean_margin, mean_entropy, ece excluded: require calibration, not primary metrics.
+        # auc (ROC-AUC) leads as the ranking metric; pr_auc is kept as a recorded column.
         metric_cols = [
             m
             for m in [
-                "pr_auc",
                 "auc",
+                "pr_auc",
                 "f1",
                 "recall",
                 "precision",
@@ -992,7 +993,7 @@ class GNNResultEvaluator:
         ]
         display_cols = config_cols + metric_cols + (["epoch"] if "epoch" in val_df.columns else [])
 
-        ranked = val_df.sort_values("pr_auc", ascending=False).head(self.top_k)
+        ranked = val_df.sort_values("auc", ascending=False).head(self.top_k)
         ranked = ranked[[c for c in display_cols if c in ranked.columns]]
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1052,7 +1053,7 @@ class GNNResultEvaluator:
         self._save_figure(
             fig,
             output_dir / "leaderboard.png",
-            f"Top {len(ranked)} Configurations by Val Synthetic PR-AUC — {self.naming_var}",
+            f"Top {len(ranked)} Configurations by Val Synthetic ROC-AUC — {self.naming_var}",
             subtitle_y=0.02,
             footnote_df=ranked,
         )

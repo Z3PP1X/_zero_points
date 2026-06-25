@@ -111,7 +111,7 @@ class CuratedEvalCallback(pl.callbacks.Callback):
         super().__init__()
         self.curated_loader = curated_loader
         self.schedule = schedule
-        self._best_val_pr_auc = float("-inf")
+        self._best_val_auc = float("-inf")
 
     def on_validation_epoch_end(self, trainer, pl_module):
         if self.curated_loader is None:
@@ -119,13 +119,13 @@ class CuratedEvalCallback(pl.callbacks.Callback):
         if getattr(trainer, "sanity_checking", False):
             return
 
-        val_pr_auc_tensor = trainer.callback_metrics.get("val_pr_auc")
-        if val_pr_auc_tensor is None:
+        val_auc_tensor = trainer.callback_metrics.get("val_auc")
+        if val_auc_tensor is None:
             return
-        val_pr_auc = float(val_pr_auc_tensor)
-        is_new_highscore = val_pr_auc > self._best_val_pr_auc
+        val_auc = float(val_auc_tensor)
+        is_new_highscore = val_auc > self._best_val_auc
         if is_new_highscore:
-            self._best_val_pr_auc = val_pr_auc
+            self._best_val_auc = val_auc
 
         should_run, reason = should_evaluate_curated(
             trainer.current_epoch,
@@ -412,7 +412,7 @@ class ValMetricLogger(pl.callbacks.Callback):
 # Validation metrics ValMetricLogger logs every epoch, with the direction that counts
 # as "better". Only these are safe to monitor for early stopping; the curated-holdout
 # metrics are logged on a schedule and would intermittently vanish from callback_metrics.
-_EARLY_STOPPING_MONITORS = {"val_pr_auc": "max", "val_loss": "min"}
+_EARLY_STOPPING_MONITORS = {"val_auc": "max", "val_pr_auc": "max", "val_loss": "min"}
 
 
 class _WarmupAwareEarlyStopping(pl.callbacks.EarlyStopping):
@@ -437,7 +437,7 @@ class _WarmupAwareEarlyStopping(pl.callbacks.EarlyStopping):
 
 def _build_early_stopping_callback() -> "_WarmupAwareEarlyStopping":
     """Construct the EarlyStopping callback from cfg.train.early_stopping_* settings."""
-    monitor = str(getattr(cfg.train, "early_stopping_monitor", "val_pr_auc"))
+    monitor = str(getattr(cfg.train, "early_stopping_monitor", "val_auc"))
     if monitor not in _EARLY_STOPPING_MONITORS:
         raise ValueError(
             f"cfg.train.early_stopping_monitor must be one of "
@@ -467,8 +467,8 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     """
     Custom training function that replaces PyG's built-in train().
     
-    Key difference: Uses ModelCheckpoint with monitor='val_pr_auc' (mode='max')
-    so the best model (by validation PR-AUC on unseen synthetic data) is saved.
+    Key difference: Uses ModelCheckpoint with monitor='val_auc' (mode='max')
+    so the best model (by validation ROC-AUC on unseen synthetic data) is saved.
     After training, the final test (on curated real-world data) uses this
     best checkpoint — NOT the last epoch.
     """
@@ -485,11 +485,11 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     if cfg.train.enable_ckpt:
         ckpt_cbk = pl.callbacks.ModelCheckpoint(
             dirpath=get_ckpt_dir(),
-            monitor='val_pr_auc',
+            monitor='val_auc',
             mode='max',
             save_top_k=1,
             save_last=True,
-            filename='best-{epoch}-{val_pr_auc:.4f}',
+            filename='best-{epoch}-{val_auc:.4f}',
             verbose=True,
         )
         callbacks.append(ckpt_cbk)
@@ -503,13 +503,13 @@ def train_with_best_ckpt(model, datamodule, logger=True):
         # F-04: synthetic mode requires train+val+curated(test) loaders. GraphGym's
         # set_dataset_info recomputes cfg.share.num_splits from the dataset's
         # val/test_graph_index, so 3 loaders are normally guaranteed — but fail loudly
-        # rather than silently skip curated-holdout eval AND val_pr_auc checkpoint
+        # rather than silently skip curated-holdout eval AND val_auc checkpoint
         # selection if that ever does not hold.
         if len(datamodule.loaders) < 3:
             raise RuntimeError(
                 f"synthetic=True but only {len(datamodule.loaders)} data loader(s) were "
                 "created (expected 3: train / val-synthetic / curated). Curated-holdout "
-                "evaluation and val_pr_auc checkpoint selection would be silently skipped. "
+                "evaluation and val_auc checkpoint selection would be silently skipped. "
                 "Check that the dataset exposes val_graph_index and test_graph_index."
             )
         curated_loader = datamodule.loaders[2]
@@ -534,7 +534,7 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     # ModelCheckpoint/EarlyStopping callbacks consume those per-epoch val metrics).
     trainer.fit(model, datamodule=datamodule)
     
-    # Test using the BEST checkpoint (by val_pr_auc), not the last epoch
+    # Test using the BEST checkpoint (by val_auc), not the last epoch
     best_path = (
         ckpt_cbk.best_model_path
         if ckpt_cbk is not None and ckpt_cbk.best_model_path
@@ -543,7 +543,7 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     
     if best_path:
         print(f"\n[GraphGym] Loading BEST checkpoint for final test: {best_path}")
-        print(f"[GraphGym] Best val_pr_auc: {ckpt_cbk.best_model_score:.4f}")
+        print(f"[GraphGym] Best val_auc: {ckpt_cbk.best_model_score:.4f}")
         trainer.test(model, datamodule=datamodule, ckpt_path=best_path)
     else:
         print("\n[GraphGym] No best checkpoint found, testing with last model weights.")
@@ -620,7 +620,7 @@ def main():
     print("\n[GraphGym Command Center] Launching training run...")
     print(f"[GraphGym] Architecture layer_type={layer_type} (from config YAML)")
     print(f"[GraphGym] Random seed: {cfg.seed} (seeded weight init / shuffling / split)")
-    print(f"[GraphGym] Best-model selection: monitor=val_pr_auc, mode=max")
+    print(f"[GraphGym] Best-model selection: monitor=val_auc, mode=max")
     print(f"[GraphGym] Final test (curated real data) will use the BEST saved checkpoint.\n")
     datamodule = GraphGymDataModule()
     model = create_model()
