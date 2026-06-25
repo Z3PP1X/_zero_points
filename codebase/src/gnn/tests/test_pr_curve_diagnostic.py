@@ -35,6 +35,21 @@ def test_pr_curve_renders_a_figure(tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_diagnostics_loader_does_not_call_broken_setup():
+    """Regression: GraphGymDataModule builds self.loaders in __init__; the inherited
+    LightningDataModule.setup(stage) requires a positional `stage`, so calling
+    datamodule.setup() raised "missing 1 required positional argument: 'stage'" and
+    crashed every top_configs diagnostics run (no ROC/PR curves ever produced)."""
+    import inspect
+
+    from gnn.supervised_learning.run_results.diagnostics import DiagnosticPlotter
+
+    src = inspect.getsource(DiagnosticPlotter._load_model_and_loaders)
+    # Strip comments so the explanatory note mentioning setup() doesn't trip the check.
+    code = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
+    assert ".setup()" not in code
+
+
 def test_render_split_diagnostics_is_a_reuse_point():
     # main_graphgym's single-run path and run_top_configs both call this method, so it
     # must stay a public method on the plotter (not inlined back into the grid loop).

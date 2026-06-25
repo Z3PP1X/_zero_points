@@ -152,8 +152,18 @@ class DiagnosticPlotter:
         from gnn.supervised_learning.supervised_config import resolve_edge_dim
         cfg.dataset.edge_dim = resolve_edge_dim()
 
+        # create_model() runs model.to(torch.device(cfg.accelerator)). The grid snapshot may
+        # leave accelerator unresolved ("auto", which torch.device() rejects) or name a device
+        # this host lacks. Pin it to the plotter's own device — the same one batches and the
+        # model are moved to below — so the rebuilt model lands consistently.
+        cfg.accelerator = self.device
+
+        # GraphGymDataModule.__init__ already builds self.loaders via create_loader().
+        # Do NOT call datamodule.setup(): it inherits LightningDataModule.setup(stage),
+        # whose `stage` arg is required — calling it without one raised
+        # "DataHooks.setup() missing 1 required positional argument: 'stage'" and crashed
+        # every top_configs diagnostics run (no ROC/PR curves were ever produced).
         datamodule = GraphGymDataModule()
-        datamodule.setup()
 
         model = create_model()
         return model, datamodule, get_pos_label, _hard_predictions, _positive_class_scores
