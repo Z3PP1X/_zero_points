@@ -624,6 +624,12 @@ def main():
     print(f"[GraphGym] Final test (curated real data) will use the BEST saved checkpoint.\n")
     datamodule = GraphGymDataModule()
     model = create_model()
+    # GraphGym's logger writes `cfg.params` into every stats.json (train/val/test) but
+    # never populates it in this Lightning pipeline, so it defaults to 0. Set it here so
+    # the real parameter count is persisted per run and flows into the aggregated CSVs /
+    # leaderboard. Model size (MB) is derived downstream as params * 4 bytes / 1e6 (fp32).
+    cfg.params = sum(p.numel() for p in model.parameters())
+    print(f"[GraphGym] Trainable params: {cfg.params:,} (~{cfg.params * 4 / 1e6:.3f} MB, fp32)")
     train_with_best_ckpt(model, datamodule, logger=True)
 
 

@@ -997,7 +997,10 @@ class GNNResultEvaluator:
             ]
             if m in val_df.columns
         ]
-        display_cols = config_cols + metric_cols + (["epoch"] if "epoch" in val_df.columns else [])
+        # params (model size) is recorded per run; carry it through to the CSV so the
+        # report can surface the parameter count + derived fp32 footprint (MB).
+        extra_cols = [c for c in ("params",) if c in val_df.columns]
+        display_cols = config_cols + metric_cols + extra_cols + (["epoch"] if "epoch" in val_df.columns else [])
 
         ranked = val_df.sort_values("auc", ascending=False).head(self.top_k)
         ranked = ranked[[c for c in display_cols if c in ranked.columns]]

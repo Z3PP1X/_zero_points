@@ -141,7 +141,10 @@ def _leaderboard_section(agg_dir: Path, eval_dir: Path, top_k: int) -> tuple[str
 
     config_cols = [c for c in _config_columns(df) if c in df.columns]
     metric_cols = [m for m in LEADERBOARD_METRICS if m in df.columns]
+    has_params = "params" in df.columns
     headers = ["#"] + config_cols + [m.upper() for m in metric_cols]
+    if has_params:
+        headers += ["PARAMS", "SIZE_MB"]
     rows, json_rows = [], []
     for rank, (_, row) in enumerate(df.head(top_k).iterrows(), start=1):
         cells = [str(rank)]
@@ -153,6 +156,15 @@ def _leaderboard_section(agg_dir: Path, eval_dir: Path, top_k: int) -> tuple[str
             val = pd.to_numeric(pd.Series([row.get(m)]), errors="coerce").iloc[0]
             cells.append(_fmt(float(val) if pd.notna(val) else None))
             record[m] = None if pd.isna(val) else float(val)
+        if has_params:
+            # Parameter count is constant per config; fp32 footprint = params * 4 bytes.
+            pv = pd.to_numeric(pd.Series([row.get("params")]), errors="coerce").iloc[0]
+            n_params = int(pv) if pd.notna(pv) and pv > 0 else None
+            size_mb = round(n_params * 4 / 1e6, 4) if n_params else None
+            cells.append(f"{n_params:,}" if n_params else "—")
+            cells.append(f"{size_mb:.4f}" if size_mb is not None else "—")
+            record["params"] = n_params
+            record["params_size_mb"] = size_mb
         rows.append(cells)
         json_rows.append(record)
     return _md_table(headers, rows), json_rows
