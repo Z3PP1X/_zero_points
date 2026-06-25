@@ -33,3 +33,38 @@ def test_pr_curve_renders_a_figure(tmp_path):
         plotter, torch.tensor(y), y_score, "PR Curve — test", out, pos_label=1
     )
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_render_split_diagnostics_is_a_reuse_point():
+    # main_graphgym's single-run path and run_top_configs both call this method, so it
+    # must stay a public method on the plotter (not inlined back into the grid loop).
+    assert hasattr(DiagnosticPlotter, "render_split_diagnostics")
+
+
+def test_run_top_configs_never_silently_empty(tmp_path):
+    """When every top-K config is unresolvable, run_top_configs must still create
+    top_configs/ and write SKIPPED.txt with a reason — never leave no folder at all
+    (the original failure mode that hid diagnostics breakage)."""
+    import pandas as pd
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    leaderboard = tmp_path / "val_bestepoch.csv"
+    # Rows whose run dirs do not exist on disk → all resolve to None and get skipped.
+    pd.DataFrame(
+        {"run_name": ["grid-missing-a", "grid-missing-b"], "layer_type": ["gcnconv", "ginconv"], "auc": [0.91, 0.88]}
+    ).to_csv(leaderboard, index=False)
+
+    plotter = DiagnosticPlotter.__new__(DiagnosticPlotter)
+    plotter.results_dir = results_dir
+    plotter.output_dir = tmp_path / "eval_plots"
+    plotter.configs_dir = None
+    plotter.top_k = 5
+
+    plotter.run_top_configs(leaderboard_csv=leaderboard)
+
+    top_root = plotter.output_dir / "top_configs"
+    assert top_root.is_dir(), "top_configs/ must exist even when all configs are skipped"
+    skipped = top_root / "SKIPPED.txt"
+    assert skipped.exists(), "a SKIPPED.txt must explain why no rank_* folders were produced"
+    assert "run directory not found" in skipped.read_text()

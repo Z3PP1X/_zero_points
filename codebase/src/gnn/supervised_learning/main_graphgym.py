@@ -582,6 +582,48 @@ def train_with_best_ckpt(model, datamodule, logger=True):
     except Exception as exc:
         print(f"[GraphGym] Failed to generate training curves for configuration: {exc}")
 
+    # Single-run diagnostics: confusion / ROC / PR / reliability for THIS model, written
+    # into <run_dir>/diagnostics. The grid's post-eval only plots the top-K configs across
+    # an experiment, so a one-off `main_graphgym.py --cfg ...` run would otherwise produce
+    # no PR/ROC curve at all. Reuses the exact DiagnosticPlotter code path the grid uses.
+    try:
+        from gnn.supervised_learning.run_results.diagnostics import DiagnosticPlotter
+        from gnn.supervised_learning.loader_graphgym import (
+            _hard_predictions,
+            get_pos_label,
+        )
+
+        run_dir = Path(cfg.out_dir)
+        model_device = next(model.parameters()).device
+        # Reload the BEST checkpoint so these plots reflect the selected epoch, matching the
+        # grid's top-config diagnostics (which always reload the best ckpt, not last weights).
+        if best_path:
+            ckpt = torch.load(best_path, map_location=model_device)
+            model.load_state_dict(ckpt.get("state_dict", ckpt), strict=False)
+        diag = DiagnosticPlotter(
+            results_dir=run_dir,
+            output_dir=run_dir,
+            experiment_name=run_dir.name,
+            device=str(model_device),
+        )
+        rendered = diag.render_split_diagnostics(
+            model,
+            datamodule,
+            run_dir / "diagnostics",
+            get_pos_label,
+            _hard_predictions,
+            log_prefix="[GraphGym]",
+        )
+        if rendered:
+            print(
+                f"[GraphGym] Saved single-run diagnostics ({', '.join(rendered)}) to "
+                f"{run_dir / 'diagnostics'}"
+            )
+        else:
+            print("[GraphGym] No usable validation split — skipped single-run diagnostics.")
+    except Exception as exc:
+        print(f"[GraphGym] Failed to generate single-run diagnostics: {exc}")
+
     return best_path
 
 

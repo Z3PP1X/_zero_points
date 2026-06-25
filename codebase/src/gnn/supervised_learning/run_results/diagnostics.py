@@ -375,6 +375,103 @@ class DiagnosticPlotter:
         save_figure(output_path)
         plt.close(fig)
 
+    def render_split_diagnostics(
+        self, model, datamodule, out_dir, get_pos_label, hard_pred_fn, log_prefix=""
+    ):
+        """Emit confusion / ROC / PR / reliability plots (+ prediction dumps) for every
+        validation split of an already-loaded model into ``out_dir``.
+
+        Shared by ``run_top_configs`` (per top-K checkpoint) and the single-run training
+        path in ``main_graphgym``, so one trained model and the grid agree on exactly how
+        diagnostics are produced. Returns the list of split prefixes actually rendered
+        (empty if no usable split) so callers can report a real skip instead of a silent
+        no-op.
+        """
+        out_dir = Path(out_dir)
+        train_pos_label = get_pos_label()
+        data_cfg = getattr(model.cfg, "data", None)
+        loaders = datamodule.loaders
+        synthetic = bool(getattr(model.cfg.expression_graph, "synthetic", False))
+        split_loaders = []
+        if synthetic and len(loaders) >= 3:
+            split_loaders = [
+                ("val", loaders[1], "Validation Synthetic"),
+                ("test", loaders[2], "Validation Curated"),
+            ]
+        elif len(loaders) >= 2:
+            split_loaders = [("val", loaders[1], "Validation")]
+
+        rendered = []
+        for split_key, loader, split_title in split_loaders:
+            y_true, y_score, pids = self._collect_predictions(model, loader, split_key)
+            if y_true is None:
+                continue
+            # F-03: use THIS split's minority class as positive (matches baselines.py
+            # and the curated CSV metric) instead of the single training pos_label —
+            # otherwise the curated plots use the synthetic minority and disagree with
+            # the reported baselines. Training default kept only for transparency.
+            pos_label = _split_pos_label(y_true)
+            n_graphs = len(set(pids)) if pids else None
+            dataset_label = _dataset_label_for_split(split_title, data_cfg)
+            provenance = _provenance_subtitle(y_true, pos_label, dataset_label, n_graphs)
+            if pos_label != train_pos_label and log_prefix:
+                print(
+                    f"{log_prefix} {split_title}: per-split pos_label={pos_label} "
+                    f"(training default was {train_pos_label})"
+                )
+            y_pred = hard_pred_fn(y_score, pos_label, getattr(model.cfg.model, "thresh", 0.5))
+            prefix = split_title.lower().replace(" ", "_")
+            self._plot_confusion_matrix(
+                y_true.numpy(),
+                y_pred.numpy(),
+                f"Confusion Matrix — {split_title}",
+                out_dir / f"confusion_{prefix}.png",
+                pos_label,
+                provenance,
+            )
+            self._plot_roc_curve(
+                y_true,
+                y_score,
+                f"ROC Curve — {split_title}",
+                out_dir / f"roc_{prefix}.png",
+                pos_label,
+                provenance,
+            )
+            # PR curve is a per-model threshold-selection diagnostic (where to set
+            # the decision cutoff), distinct from PR-AUC as a leaderboard metric.
+            self._plot_pr_curve(
+                y_true,
+                y_score,
+                f"PR Curve — {split_title}",
+                out_dir / f"pr_{prefix}.png",
+                pos_label,
+                provenance,
+            )
+            self._plot_reliability(
+                y_true,
+                y_score,
+                f"Reliability — {split_title}",
+                out_dir / f"reliability_{prefix}.png",
+                pos_label,
+                provenance=provenance,
+            )
+            # Dump per-prediction positive-class probabilities so the
+            # report can bootstrap CIs / paired tests without reloading.
+            probs_pos = (
+                prediction_probabilities(y_score)[:, int(pos_label)]
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            save_predictions(
+                out_dir / f"predictions_{prefix}.npz",
+                y_true.numpy() if hasattr(y_true, "numpy") else y_true,
+                probs_pos,
+                pos_label=pos_label,
+            )
+            rendered.append(prefix)
+        return rendered
+
     def run_top_configs(self, leaderboard_csv: Path | None = None):
         csv_path = leaderboard_csv or (self.results_dir / "agg" / "val_bestepoch.csv")
         if not csv_path.exists():
@@ -412,24 +509,38 @@ class DiagnosticPlotter:
             ]
 
         print(f"  Running diagnostics for top {len(ranked)} configs...")
+        # Create the parent up front so a fully-skipped run still leaves an (empty)
+        # top_configs/ plus a SKIPPED.txt explaining why — never a silent "no folder
+        # at all" that looks like the diagnostics step never ran.
+        top_root = self.output_dir / "top_configs"
+        top_root.mkdir(parents=True, exist_ok=True)
+
+        rendered_total = 0
+        skipped: list[str] = []
         for rank, (_, row) in enumerate(ranked.iterrows(), start=1):
+            slug = _config_slug(row, config_cols)
             run_dir = self._resolve_run_dir(row, config_cols)
             if run_dir is None:
-                print(f"    [{rank}] Run directory not found for config row")
+                msg = f"rank {rank} ({slug}): run directory not found"
+                print(f"    [{rank}] {msg}")
+                skipped.append(msg)
                 continue
 
             config_path = _find_config_for_run(run_dir, self.configs_dir)
             if config_path is None:
-                print(f"    [{rank}] Config YAML not found for {run_dir.name}")
+                msg = f"rank {rank} ({slug}): config YAML not found under {run_dir.name}"
+                print(f"    [{rank}] {msg}")
+                skipped.append(msg)
                 continue
 
             ckpt_path = _find_best_checkpoint(run_dir)
             if ckpt_path is None:
-                print(f"    [{rank}] Checkpoint not found under {run_dir}")
+                msg = f"rank {rank} ({slug}): checkpoint not found under {run_dir.name}"
+                print(f"    [{rank}] {msg}")
+                skipped.append(msg)
                 continue
 
-            slug = _config_slug(row, config_cols)
-            out_dir = self.output_dir / "top_configs" / f"rank_{rank}_{slug}"
+            out_dir = top_root / f"rank_{rank}_{slug}"
             print(f"    [{rank}] {slug} — ckpt: {ckpt_path.name}")
 
             try:
@@ -441,89 +552,30 @@ class DiagnosticPlotter:
                 model.load_state_dict(state_dict, strict=False)
                 model.to(self.device)
 
-                train_pos_label = get_pos_label()
-                data_cfg = getattr(model.cfg, "data", None)
-                loaders = datamodule.loaders
-                synthetic = bool(getattr(model.cfg.expression_graph, "synthetic", False))
-                split_loaders = []
-                if synthetic and len(loaders) >= 3:
-                    split_loaders = [
-                        ("val", loaders[1], "Validation Synthetic"),
-                        ("test", loaders[2], "Validation Curated"),
-                    ]
-                elif len(loaders) >= 2:
-                    split_loaders = [("val", loaders[1], "Validation")]
-
-                for split_key, loader, split_title in split_loaders:
-                    y_true, y_score, pids = self._collect_predictions(model, loader, split_key)
-                    if y_true is None:
-                        continue
-                    # F-03: use THIS split's minority class as positive (matches baselines.py
-                    # and the curated CSV metric) instead of the single training pos_label —
-                    # otherwise the curated plots use the synthetic minority and disagree with
-                    # the reported baselines. Training default kept only for transparency.
-                    pos_label = _split_pos_label(y_true)
-                    n_graphs = len(set(pids)) if pids else None
-                    dataset_label = _dataset_label_for_split(split_title, data_cfg)
-                    provenance = _provenance_subtitle(y_true, pos_label, dataset_label, n_graphs)
-                    if pos_label != train_pos_label:
-                        print(
-                            f"    [{rank}] {split_title}: per-split pos_label={pos_label} "
-                            f"(training default was {train_pos_label})"
-                        )
-                    y_pred = hard_pred_fn(y_score, pos_label, getattr(model.cfg.model, "thresh", 0.5))
-                    prefix = split_title.lower().replace(" ", "_")
-                    self._plot_confusion_matrix(
-                        y_true.numpy(),
-                        y_pred.numpy(),
-                        f"Confusion Matrix — {split_title}",
-                        out_dir / f"confusion_{prefix}.png",
-                        pos_label,
-                        provenance,
-                    )
-                    self._plot_roc_curve(
-                        y_true,
-                        y_score,
-                        f"ROC Curve — {split_title}",
-                        out_dir / f"roc_{prefix}.png",
-                        pos_label,
-                        provenance,
-                    )
-                    # PR curve is a per-model threshold-selection diagnostic (where to set
-                    # the decision cutoff), distinct from PR-AUC as a leaderboard metric.
-                    self._plot_pr_curve(
-                        y_true,
-                        y_score,
-                        f"PR Curve — {split_title}",
-                        out_dir / f"pr_{prefix}.png",
-                        pos_label,
-                        provenance,
-                    )
-                    self._plot_reliability(
-                        y_true,
-                        y_score,
-                        f"Reliability — {split_title}",
-                        out_dir / f"reliability_{prefix}.png",
-                        pos_label,
-                        provenance=provenance,
-                    )
-                    # Dump per-prediction positive-class probabilities so the
-                    # report can bootstrap CIs / paired tests without reloading.
-                    probs_pos = (
-                        prediction_probabilities(y_score)[:, int(pos_label)]
-                        .detach()
-                        .cpu()
-                        .numpy()
-                    )
-                    save_predictions(
-                        out_dir / f"predictions_{prefix}.npz",
-                        y_true.numpy() if hasattr(y_true, "numpy") else y_true,
-                        probs_pos,
-                        pos_label=pos_label,
-                    )
-                print(f"    [{rank}] Saved diagnostics to {out_dir}")
+                rendered = self.render_split_diagnostics(
+                    model, datamodule, out_dir, get_pos_label, hard_pred_fn,
+                    log_prefix=f"    [{rank}]",
+                )
+                if rendered:
+                    rendered_total += 1
+                    print(f"    [{rank}] Saved diagnostics ({', '.join(rendered)}) to {out_dir}")
+                else:
+                    msg = f"rank {rank} ({slug}): no usable validation split to plot"
+                    print(f"    [{rank}] {msg}")
+                    skipped.append(msg)
             except Exception as exc:
-                print(f"    [{rank}] Diagnostics failed: {exc}")
+                msg = f"rank {rank} ({slug}): diagnostics failed: {exc}"
+                print(f"    [{rank}] {msg}")
+                skipped.append(msg)
+
+        print(
+            f"  Diagnostics complete: {rendered_total}/{len(ranked)} configs rendered"
+            + (f", {len(skipped)} skipped" if skipped else "")
+        )
+        if skipped:
+            # Persist the reasons next to the (possibly empty) top_configs/ so a missing
+            # rank_* folder is always explainable without re-reading the console log.
+            (top_root / "SKIPPED.txt").write_text("\n".join(skipped) + "\n")
 
 
 CLASS_NAMES = {0: "gMGF", 1: "Newton"}
