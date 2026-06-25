@@ -260,7 +260,10 @@ class GNNResultEvaluator:
 
                 # Explicit file paths are preferred (stage configs use data.* and a
                 # placeholder dataset.name; legacy name-based resolution would fail there).
-                repo_root = Path(__file__).resolve().parents[4]
+                # data.* paths are repo-root-relative; this file is in run_results/ (one level
+                # deeper than loader_graphgym.py), so the repo root is parents[5] — parents[4]
+                # is .../codebase, which made the fallback look for codebase/datasets/ and fail.
+                repo_root = Path(__file__).resolve().parents[5]
                 curated_csv = data_cfg.get("curated_csv")
                 synthetic_csv = data_cfg.get("synthetic_csv")
                 graphs_dir = data_cfg.get("graphs_dir")
