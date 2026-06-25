@@ -46,6 +46,7 @@ def run_post_evaluation(
     full_runs: bool = False,
     skip_slices: bool = False,
     top_k: int = 5,
+    min_quality: float | None = None,
     skip_diagnostics: bool = False,
     skip_training_curves: bool = False,
     skip_aggregation: bool = False,
@@ -77,6 +78,7 @@ def run_post_evaluation(
         aggregate_results(results_dir)
 
     from gnn.supervised_learning.run_results.eval import GNNResultEvaluator
+    from gnn.supervised_learning.run_results.eval_metrics import MIN_CLASSIFICATION_METRIC
 
     runs = (
         GNNResultEvaluator.ALL_RUNS if full_runs else GNNResultEvaluator.DEFAULT_RUNS
@@ -87,6 +89,7 @@ def run_post_evaluation(
         runs=runs,
         skip_slices=skip_slices,
         top_k=top_k,
+        min_quality=(MIN_CLASSIFICATION_METRIC if min_quality is None else min_quality),
     )
     evaluator.output_dir = eval_output_dir
     evaluator.run_all()
@@ -168,6 +171,13 @@ def main(argv=None):
     )
     parser.add_argument("--top-k", type=int, default=5, help="Top configs for diagnostics")
     parser.add_argument(
+        "--min-quality",
+        type=float,
+        default=None,
+        help="Min recall/f1/precision a config must clear for the leaderboard "
+        "(default 0.25; 0 disables the floor). Ranking is by ROC-AUC regardless.",
+    )
+    parser.add_argument(
         "--skip-diagnostics",
         action="store_true",
         help="Skip confusion matrix / ROC / PR inference plots",
@@ -198,6 +208,7 @@ def main(argv=None):
         full_runs=args.full,
         skip_slices=args.skip_slices,
         top_k=args.top_k,
+        min_quality=args.min_quality,
         skip_diagnostics=args.skip_diagnostics,
         skip_training_curves=args.skip_training_curves,
         skip_report=args.skip_report,

@@ -120,6 +120,7 @@ class GNNResultEvaluator:
         runs: list = None,
         skip_slices: bool = False,
         top_k: int = 10,
+        min_quality: float = MIN_CLASSIFICATION_METRIC,
     ):
         """Initialize the GNNResultEvaluator."""
         self.naming_var = naming_var
@@ -129,6 +130,11 @@ class GNNResultEvaluator:
         self.runs = runs if runs is not None else list(self.DEFAULT_RUNS)
         self.skip_slices = skip_slices
         self.top_k = top_k
+        # Minimum recall/f1/precision a config must clear to appear on the leaderboard.
+        # Self-selectable (0.0 disables the floor): ROC-AUC ranking is threshold-independent,
+        # so high-AUC / low-precision configs (e.g. imbalanced classes) can be surfaced by
+        # lowering this from the default.
+        self.min_quality = min_quality
 
         self.run_labels = {
             "train": "Training (Synthetic)",
@@ -960,11 +966,11 @@ class GNNResultEvaluator:
             return
 
         before_quality = len(val_df)
-        val_df = passes_quality_threshold(val_df)
+        val_df = passes_quality_threshold(val_df, min_metric=self.min_quality)
         if val_df.empty:
             print(
                 "    Skipping leaderboard (no configs meet recall/f1/precision "
-                f"threshold >= {MIN_CLASSIFICATION_METRIC})"
+                f"threshold >= {self.min_quality}; lower --min-quality to include them)"
             )
             return
         if len(val_df) < before_quality:

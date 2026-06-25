@@ -269,6 +269,13 @@ def main():
         help="Top configs for diagnostics plots",
     )
     parser.add_argument(
+        "--min-quality",
+        type=float,
+        default=None,
+        help="Min recall/f1/precision a config must clear for the leaderboard "
+        "(default 0.25; 0 disables the floor). Ranking is by ROC-AUC regardless.",
+    )
+    parser.add_argument(
         "--skip-report",
         action="store_true",
         help="Skip the auto summary report (summary.md / summary.json)",
@@ -381,6 +388,7 @@ def main():
             full_runs=args.full_eval,
             skip_slices=args.skip_slices,
             top_k=args.top_k,
+            min_quality=args.min_quality,
             skip_report=args.skip_report,
         )
 

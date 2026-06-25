@@ -14,6 +14,10 @@ from gnn.supervised_learning.aggregate_graphgym import (
     _resolve_best_metric,
 )
 from gnn.supervised_learning.run_results.eval import GNNResultEvaluator
+from gnn.supervised_learning.run_results.eval_metrics import (
+    MIN_CLASSIFICATION_METRIC,
+    passes_quality_threshold,
+)
 from gnn.supervised_learning.run_results.report import LEADERBOARD_METRICS, _best_config
 from gnn.supervised_learning.run_results.training_curves import CURVE_METRICS
 
@@ -59,3 +63,28 @@ def test_best_config_ranks_by_roc_auc_not_pr_auc():
     assert best_row is not None
     assert best_row["auc"] == 0.85
     assert best_row["layers_mp"] == 3
+
+
+def test_quality_floor_is_self_selectable():
+    # High-AUC but low-precision configs (imbalanced classes) are dropped by the
+    # default 0.25 floor, but a lower floor surfaces them for the ROC-AUC ranking.
+    df = pd.DataFrame(
+        [
+            {"auc": 0.87, "recall": 0.16, "f1": 0.14, "precision": 0.12},
+            {"auc": 0.80, "recall": 0.30, "f1": 0.28, "precision": 0.27},
+        ]
+    )
+    # Default floor drops the high-AUC low-precision row (and here both, since
+    # precision 0.12 < 0.25); the strict row survives.
+    kept_default = passes_quality_threshold(df, min_metric=MIN_CLASSIFICATION_METRIC)
+    assert (kept_default["auc"] == 0.87).sum() == 0
+    # Floor of 0.0 disables filtering -> every config is available for ranking.
+    kept_open = passes_quality_threshold(df, min_metric=0.0)
+    assert len(kept_open) == 2
+
+
+def test_evaluator_accepts_min_quality():
+    ev = GNNResultEvaluator(naming_var="x", min_quality=0.0)
+    assert ev.min_quality == 0.0
+    ev_default = GNNResultEvaluator(naming_var="x")
+    assert ev_default.min_quality == MIN_CLASSIFICATION_METRIC

@@ -11,7 +11,9 @@ import pandas as pd
 import torch
 import yaml
 from sklearn.metrics import (
+    auc,
     confusion_matrix,
+    precision_recall_curve,
     roc_auc_score,
     roc_curve,
 )
@@ -247,6 +249,71 @@ class DiagnosticPlotter:
         save_figure(output_path)
         plt.close(fig)
 
+    def _plot_pr_curve(
+        self, y_true, y_score, title: str, output_path: Path, pos_label: int, provenance: str = ""
+    ):
+        """Precision-recall curve for picking the decision threshold.
+
+        Marks the default 0.5 operating point and the F1-optimal point (with its
+        threshold), so the curve answers "what cutoff should this model use?" — useful
+        when high ROC-AUC coexists with weak precision/recall at the default 0.5.
+        """
+        scores = _positive_class_probs(y_score, pos_label)
+        y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
+        y_bin = (y_np == int(pos_label)).astype(int)
+        precision, recall, thresholds = precision_recall_curve(y_bin, scores)
+        pr_auc = auc(recall, precision)
+        prevalence = float(y_bin.mean())
+
+        fig, ax = plt.subplots(figsize=(6, 5), dpi=150)
+        ax.plot(recall, precision, color="#E76F51", linewidth=2, label=f"PR-AUC = {pr_auc:.4f}")
+        # The PR no-skill baseline is the positive-class prevalence — draw it so the reader
+        # can see directly whether the model beats chance for this split (F-09/provenance).
+        ax.axhline(
+            prevalence, linestyle=":", color="#888888", linewidth=1.3,
+            label=f"no-skill (prevalence = {prevalence:.4f})",
+        )
+
+        # Operating point at the default 0.5 cutoff (computed directly from scores so it
+        # matches how the CSV precision/recall/f1 are produced).
+        pred_05 = scores >= 0.5
+        tp = float(((pred_05) & (y_bin == 1)).sum())
+        fp = float(((pred_05) & (y_bin == 0)).sum())
+        fn = float(((~pred_05) & (y_bin == 1)).sum())
+        prec_05 = tp / (tp + fp) if (tp + fp) else 0.0
+        rec_05 = tp / (tp + fn) if (tp + fn) else 0.0
+        ax.scatter(
+            [rec_05], [prec_05], color="#264653", marker="o", s=55, zorder=5,
+            label=f"threshold=0.50 (P={prec_05:.2f}, R={rec_05:.2f})",
+        )
+
+        # F1-optimal operating point across the sweep. precision_recall_curve aligns
+        # thresholds[i] with precision[i]/recall[i] for i < len(thresholds) (the final
+        # point recall=0 has no threshold), so restrict the search to that range.
+        if len(thresholds) > 0:
+            p = precision[: len(thresholds)]
+            r = recall[: len(thresholds)]
+            denom = p + r
+            f1 = np.divide(2 * p * r, denom, out=np.zeros_like(denom), where=denom > 0)
+            bi = int(np.argmax(f1))
+            ax.scatter(
+                [r[bi]], [p[bi]], color="#2A9D8F", marker="*", s=170, zorder=6,
+                label=f"max-F1 @ threshold={thresholds[bi]:.2f} (F1={f1[bi]:.2f})",
+            )
+
+        ax.set_xlabel("Recall")
+        ax.set_ylabel("Precision")
+        ax.set_xlim(0.0, 1.02)
+        ax.set_ylim(0.0, 1.02)
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(linestyle="--", alpha=0.4)
+        fig.suptitle(title, fontsize=12, fontweight="bold")
+        if provenance:
+            ax.set_title(provenance, fontsize=7.5, color="#555555")
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
+        save_figure(output_path)
+        plt.close(fig)
+
     def _plot_reliability(
         self,
         y_true,
@@ -422,8 +489,16 @@ class DiagnosticPlotter:
                         pos_label,
                         provenance,
                     )
-                    # PR curve intentionally not plotted: PR-AUC is kept only as a
-                    # recorded scalar (like dirichlet_energy); ROC is the headline.
+                    # PR curve is a per-model threshold-selection diagnostic (where to set
+                    # the decision cutoff), distinct from PR-AUC as a leaderboard metric.
+                    self._plot_pr_curve(
+                        y_true,
+                        y_score,
+                        f"PR Curve — {split_title}",
+                        out_dir / f"pr_{prefix}.png",
+                        pos_label,
+                        provenance,
+                    )
                     self._plot_reliability(
                         y_true,
                         y_score,
