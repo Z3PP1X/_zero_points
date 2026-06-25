@@ -119,7 +119,7 @@ def test_expression_graph_converter_with_container_format():
     converter = ExpressionGraphConverter()
     
     # 1. Test "graph" mode: global + f_1/f_2/f_3 + d1_1 + d2_1 = 6 nodes (no aggregators)
-    data_graph = converter.convert(raw_container, mode="graph")
+    data_graph = converter.convert(raw_container, mode="tree_derivatives")
     assert data_graph.num_nodes == 6
     assert "global" in data_graph.node_ids
     assert "f_1" in data_graph.node_ids

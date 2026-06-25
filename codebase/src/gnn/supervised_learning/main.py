@@ -239,7 +239,7 @@ def save_supervised_training_curves(history, output_path: Path):
 def main(
     config_path: Path,
     dataset_name: str,
-    mode: str = "graph",
+    mode: str = "tree_derivatives",
     active_features: list[str] | None = None,
     feature_groups: list[str] | None = None,
     node_features: list[str] | None = None,
@@ -633,7 +633,7 @@ if __name__ == "__main__":
         "--mode",
         type=str,
         default=None,
-        choices=["graph", "tree", "tree_derivatives"],
+        choices=["tree", "tree_derivatives"],
         help="Override GNN experiment mode from config.",
     )
     parser.add_argument(

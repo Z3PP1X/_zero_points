@@ -11,8 +11,8 @@ Examples
     # All three modes, default dataset, no kappa augmentation
     python main.py
 
-    # Only the graph mode, with kappa (h-function) subgraphs merged in
-    python main.py --mode graph --add-kappa
+    # Only the tree-derivative mode, with kappa (h-function) subgraphs merged in
+    python main.py --mode tree_derivatives --add-kappa
 
     # Tree + tree-derivative, custom dataset and more sample drawings
     python main.py --mode tree tree_derivatives --dataset run_key/name --sample-graphs 8
@@ -44,9 +44,8 @@ from gnn.weisfeiler_lehman.wl_runner import (  # noqa: E402
 )
 
 # Internal graph-mode name -> human/results subdirectory name.
-MODE_CHOICES: tuple[str, ...] = ("graph", "tree", "tree_derivatives")
+MODE_CHOICES: tuple[str, ...] = ("tree", "tree_derivatives")
 MODE_TO_SUBDIR: dict[str, str] = {
-    "graph": "graph",
     "tree": "tree",
     "tree_derivatives": "tree-derivative",
 }

@@ -32,7 +32,7 @@ class Preprocessor:
         loader: GraphDataLoader | None = None,
         graphs_dir: str | None = None,
         graph_cache_max: int = 128,
-        mode: str = "graph",
+        mode: str = "tree_derivatives",
         active_features: list[str] | None = None,
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,

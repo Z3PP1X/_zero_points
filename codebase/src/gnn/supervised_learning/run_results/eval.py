@@ -290,7 +290,7 @@ class GNNResultEvaluator:
                 pipeline = GraphPipeline(
                     dataset_name=dataset_name or "expression_graph_data",
                     seed=seed,
-                    mode="graph",
+                    mode="tree_derivatives",
                     synthetic=synthetic,
                     synthetic_dataset_name=synthetic_dataset_name,
                     add_kappa=add_kappa,

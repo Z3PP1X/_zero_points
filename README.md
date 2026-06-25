@@ -66,10 +66,10 @@ python main.py --dry-run
 # 2. Spezifisches Dataset laden (Dry-Run oder Training):
 python main.py --dataset run_20260408_160456/dataset_4 --dry-run
 
-# 3. Standard GNN-Lauf im Graph-Modus (mit augmentierten graph-bildenden Kanten):
-python main.py --config config_supervised.yaml --mode graph
+# 3. Standard GNN-Lauf (f, f', f'' über den global-Knoten verknüpft):
+python main.py --config config_supervised.yaml --mode tree_derivatives
 
-# 4. GNN-Lauf im Tree-Modus (reiner Funktionstree f, ohne augmentierte Kanten):
+# 4. GNN-Lauf im Tree-Modus (reiner Funktionstree f, ohne Ableitungen):
 python main.py --config config_supervised.yaml --mode tree
 
 # 5. Bottom-up Message Passing auf AST-Kanten:
@@ -94,7 +94,7 @@ python main.py --config config_supervised.yaml --add-kappa
 | `--config` | `config_supervised.yaml` | String | GraphGym-YAML mit Architektur-, Feature- und Graph-Einstellungen. |
 | `--dataset` | aus Config | String | Pfad zum Dataset (z. B. `run_key/dataset_name`). |
 | `--dry-run` | *aus* | Flag | Lädt den Datensatz kurz, um die Struktur zu validieren (ohne volles Training). |
-| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` | Bestimmt, welche Teilgraphen kompiliert werden und ob die augmentierten (graph-bildenden) Kanten hinzugefügt werden:<br>• `graph`: f, f' und f'' verbunden über den `global`-Knoten + Aggregator-Knoten, **plus** augmentierte Kanten (`NextUse`, `OuterToInner`/`InnerToOuter`), die aus dem Tree einen Graphen machen.<br>• `tree`: Nur der Funktionstree f (keine Ableitungen), reiner Tree ohne augmentierte Kanten.<br>• `tree_derivatives`: f, f' und f'' verbunden über `global` + Aggregatoren, reine (Multi-)Tree-Struktur **ohne** augmentierte Kanten. |
+| `--mode` | `tree_derivatives` | `tree`, `tree_derivatives` | Bestimmt, welche Teilgraphen kompiliert werden:<br>• `tree`: Nur der Funktionstree f (keine Ableitungen).<br>• `tree_derivatives`: f, f' und f'' geladen und über den `global`-Knoten verknüpft (jede Teilbaum-Wurzel wird per `root_color` als f/d1/d2 markiert). |
 | `--edge-direction` | `top_down` | `top_down`, `bottom_up`, `bidirectional` | AST-Message-Passing-Richtung (parent→child, child→parent oder beides). |
 | `--add-kappa` | *aus* | Flag | Fügt Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` über `GlobalToKappa`/`KappaToGlobal`-Kanten in jeden Graphen ein. Standardmäßig deaktiviert (Opt-in). |
 | `--feature-groups` | alle (aus Config) | Liste | Aktiviert nur bestimmte Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
@@ -313,7 +313,7 @@ python main.py --config config_rl.yaml --experiment kein_inv --continue-study --
 | :--- | :--- | :--- |
 | `--config` | `config_rl.yaml` | Zentrale YAML mit allen RL-Defaults (Experiment, Optuna, Gateway, train_best). |
 | `--experiment` | aus Config | Graph-Ordner: `nur_f`, `f_fp_roh`, `kein_inv`. |
-| `--mode` | `graph` | `graph`, `tree`, `tree_derivatives` (augmentierte Kanten nur im `graph`-Modus). |
+| `--mode` | `tree_derivatives` | `tree`, `tree_derivatives` (welche Teilgraphen über den `global`-Knoten verknüpft werden). |
 | `--edge-direction` | `top_down` | AST-Kantenrichtung (parent→child, child→parent oder beides). |
 | `--add-kappa` | *aus* | Flag: Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` einbinden (Opt-in). |
 | `--feature-groups` | alle | Feature-Klassen: `node`, `topology`, `positional`, `edge`. |
@@ -380,8 +380,7 @@ Beim Einlesen wird das Python-Modul `create_virtual_global_node` aufgerufen:
 
 ### Graphen-Kompilierung basierend auf `--mode`
 Welche Teilgraphen geladen und wie sie strukturiert werden, hängt direkt vom `--mode` Argument ab (gilt gleichermaßen für Supervised Learning und Reinforcement Learning):
-* **`tree`**: Es wird ausschließlich der Funktionstree $f$ (`graphml_f`) geladen. Ableitungsgraphen werden ignoriert; reine Tree-Struktur ohne augmentierte Kanten.
-* **`tree_derivatives`**: Es werden alle drei mathematischen Trees ($f$, $f'$, $f''$) geladen und über den `global`-Knoten (plus Aggregator-Knoten `f_root`/`d1_root`/`d2_root`) verknüpft. Reine (Multi-)Tree-Struktur **ohne** augmentierte Kanten.
-* **`graph`**: Wie `tree_derivatives`, **zusätzlich** werden die augmentierten, graph-bildenden Kanten erzeugt: Variablen-Datenfluss (`NextUse`/`NextUseBackward`) und positionsbewusste Funktionsverschachtelung (`OuterToInner_Arg{i}`/`InnerToOuter_Arg{i}`). Diese verwandeln den Tree in einen echten Graphen.
+* **`tree`**: Es wird ausschließlich der Funktionstree $f$ (`graphml_f`) geladen. Ableitungsgraphen werden ignoriert.
+* **`tree_derivatives`**: Es werden alle drei mathematischen Trees ($f$, $f'$, $f''$) geladen und über den `global`-Knoten verknüpft; jede Teilbaum-Wurzel wird per `root_color` als f/d1/d2 markiert (keine separaten Aggregator-Knoten).
 
 > **Kappa-Augmentierung (`--add-kappa`)** ist orthogonal zum `--mode`: Ist sie aktiviert, werden zusätzlich Kappa- (h-Funktions-) Subgraphen aus `datasets/kappas/` über `GlobalToKappa`/`KappaToGlobal`-Kanten an den `global`-Knoten angebunden. Standardmäßig deaktiviert.

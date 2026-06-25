@@ -12,8 +12,7 @@ independent, toggleable augmentations, all of which this tool can render:
 
 Modes (``--mode``)
     tree                only f
-    tree_derivatives    f, f', f'' (no augmented edges)
-    graph               f, f', f'' (function-nesting edges)
+    tree_derivatives    f, f', f'' joined through a global node
 
 Augmentations
     --supernode         inject a fully-connected ``virtual_supernode``
@@ -69,7 +68,7 @@ _COLOR_TO_NAME = {int(v): k for k, v in ROOT_COLOR_VOCAB.items()}
 _STRUCTURAL_FORWARD = {"child_of", "left_operand", "right_operand"}
 
 # Canonical graph modes accepted by the converter.
-ALL_MODES = ["tree", "tree_derivatives", "graph"]
+ALL_MODES = ["tree", "tree_derivatives"]
 ALL_DIRECTIONS = ["top_down", "bottom_up", "bidirectional"]
 
 # Colour palette (group -> fill colour).
@@ -96,8 +95,6 @@ def _normalize_mode(mode: str) -> str:
         return "tree_derivatives"
     if m in ("tree", "f"):
         return "tree"
-    if m in ("graph", "full"):
-        return "graph"
     raise ValueError(f"Unknown mode {mode!r}; expected one of {ALL_MODES}")
 
 
@@ -113,7 +110,7 @@ def _build_raw_for_mode(raw_dict: dict, mode: str) -> dict:
     if "graphml_f" in raw:
         nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
 
-        if mode in ("tree_derivatives", "graph"):
+        if mode == "tree_derivatives":
             nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
             nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
         else:
@@ -611,7 +608,7 @@ def main():
                         help="ID of the problem graph to visualize")
 
     parser.add_argument("--mode", "-m", type=str, default=None,
-                        help="Graph mode: tree | tree_derivatives (tree-derivative) | graph. "
+                        help="Graph mode: tree | tree_derivatives (tree-derivative). "
                              "Omit to render all modes.")
     parser.add_argument("--edge-direction", "-e", type=str, default=None,
                         choices=ALL_DIRECTIONS,
@@ -646,7 +643,7 @@ def main():
     # path and the kappas directory. Conversion happens here in the visualizer.
     loader = GraphDataLoader(
         name=args.dataset_name,
-        mode=mode_arg or "graph",
+        mode=mode_arg or "tree_derivatives",
         is_synthetic=args.is_synthetic or "synthetic" in args.dataset_name,
     )
 

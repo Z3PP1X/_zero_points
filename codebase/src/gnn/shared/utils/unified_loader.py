@@ -22,7 +22,7 @@ class UnifiedDataLoader:
         cls,
         dataset_name: str,
         run_key: Optional[str] = None,
-        mode: str = "graph",
+        mode: str = "tree_derivatives",
         add_traces: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,

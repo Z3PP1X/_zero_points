@@ -9,12 +9,12 @@ def test_unified_data_loader_multiton_behavior():
     # Get instance for configuration A
     loader_a1 = UnifiedDataLoader.get_instance(
         dataset_name="run_20260408_160456/dataset_4",
-        mode="graph",
+        mode="tree_derivatives",
     )
     # Get instance for identical configuration A again
     loader_a2 = UnifiedDataLoader.get_instance(
         dataset_name="run_20260408_160456/dataset_4",
-        mode="graph",
+        mode="tree_derivatives",
     )
     # Must be the exact same object
     assert loader_a1 is loader_a2
@@ -22,7 +22,7 @@ def test_unified_data_loader_multiton_behavior():
     # Get instance for configuration B (different dataset)
     loader_b = UnifiedDataLoader.get_instance(
         dataset_name="run_20260408_160456/dataset_5",
-        mode="graph",
+        mode="tree_derivatives",
     )
     assert loader_a1 is not loader_b
 
@@ -37,7 +37,7 @@ def test_unified_data_loader_multiton_behavior():
     UnifiedDataLoader.clear_instances()
     loader_a3 = UnifiedDataLoader.get_instance(
         dataset_name="run_20260408_160456/dataset_4",
-        mode="graph",
+        mode="tree_derivatives",
     )
     assert loader_a1 is not loader_a3
 
@@ -57,7 +57,7 @@ def test_unified_data_loader_forwards_methods(MockGraphDataLoader, MockDatasetLo
     loader = UnifiedDataLoader.get_instance(
         dataset_name="test_dataset",
         run_key="test_run",
-        mode="graph",
+        mode="tree_derivatives",
     )
     
     # Test forwarding data property
@@ -120,7 +120,7 @@ def test_unified_data_loader_auto_enrichment():
         loader = UnifiedDataLoader.get_instance(
             dataset_name="test_dataset",
             run_key="test_run",
-            mode="graph",
+            mode="tree_derivatives",
         )
         
         # Check that x0 was enriched correctly

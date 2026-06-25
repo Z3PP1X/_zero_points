@@ -373,7 +373,7 @@ class ExpressionGraphConverter:
     def convert(
         self,
         source: Union[str, Path, dict, nx.DiGraph],
-        mode: str = "graph",
+        mode: str = "tree_derivatives",
         edge_direction: str = "top_down",
         add_virtual_supernode: bool = False,
     ) -> Data:
@@ -499,7 +499,7 @@ class ExpressionGraphConverter:
     def _merge_graphml_sources(raw: dict, mode: str) -> None:
         """Merge f/f'/f'' GraphML sources into raw['nodes'] and raw['edges'] in-place."""
         nodes_f, edges_f = parse_graphml_to_nodes_and_edges(raw.get("graphml_f", ""), "f")
-        if mode in ["tree_derivatives", "graph"]:
+        if mode == "tree_derivatives":
             nodes_d1, edges_d1 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative1", ""), "d1")
             nodes_d2, edges_d2 = parse_graphml_to_nodes_and_edges(raw.get("graphml_derivative2", ""), "d2")
         else:

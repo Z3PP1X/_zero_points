@@ -198,7 +198,7 @@ def test_ast_edge_direction_respected_for_belongs_to_edges():
         ],
     }
     data = ExpressionGraphConverter().convert(
-        raw,  mode="graph", edge_direction="top_down"
+        raw,  mode="tree_derivatives", edge_direction="top_down"
     )
     assert "virtual_current_x" not in data.node_ids
     x1_idx = data.node_ids.index("x1")

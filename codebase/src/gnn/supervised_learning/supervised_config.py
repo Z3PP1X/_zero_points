@@ -152,7 +152,7 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "dataset_name": dataset_cfg.get("name"),
-        "mode": expression_graph.get("mode", "graph"),
+        "mode": expression_graph.get("mode", "tree_derivatives"),
         "edge_direction": validate_edge_direction(
             expression_graph.get("edge_direction", "top_down")
         ),

@@ -134,7 +134,7 @@ def test_add_kappa_true_without_kappa_column_raises():
             UnifiedDataLoader.get_instance(
                 dataset_name="test_kappa_missing",
                 run_key="test",
-                mode="graph",
+                mode="tree_derivatives",
                 add_kappa=True,
             )
     UnifiedDataLoader.clear_instances()

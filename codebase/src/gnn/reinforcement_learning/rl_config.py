@@ -18,7 +18,7 @@ from gnn.shared.utils.feature_config import (
 from gnn.shared.utils.graph_utils import validate_edge_direction
 
 RL_EXPERIMENT_CHOICES = ("nur_f", "f_fp_roh", "kein_inv")
-RL_MODE_CHOICES = ("graph", "tree", "tree_derivatives")
+RL_MODE_CHOICES = ("tree", "tree_derivatives")
 RL_EDGE_DIRECTION_CHOICES = ("top_down", "bottom_up", "bidirectional")
 
 
@@ -38,7 +38,7 @@ def read_rl_settings(config: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "experiment": experiment.get("name", "nur_f"),
-        "mode": experiment.get("mode", "graph"),
+        "mode": experiment.get("mode", "tree_derivatives"),
         "edge_direction": validate_edge_direction(
             experiment.get("edge_direction", "top_down")
         ),
@@ -113,7 +113,7 @@ def add_shared_graph_args(parser: argparse.ArgumentParser) -> None:
         type=str,
         default=None,
         choices=list(RL_MODE_CHOICES),
-        help="GNN graph mode (graph, tree, tree_derivatives).",
+        help="GNN graph mode (tree, tree_derivatives).",
     )
     parser.add_argument(
         "--edge-direction",

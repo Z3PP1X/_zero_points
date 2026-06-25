@@ -362,7 +362,7 @@ def set_custom_cfg(cfg):
     """
     print("--- Executing set_custom_cfg ---")
     cfg.expression_graph = CN()
-    cfg.expression_graph.mode = "graph"  # "graph", "tree", or "tree_derivatives"
+    cfg.expression_graph.mode = "tree_derivatives"  # "tree" or "tree_derivatives"
     cfg.expression_graph.features = CN()
     # Uniform flat per-category form: each leaf defaults to None ("all members").
     # YAML may override with a bool (true/false) or a list subset, e.g.
@@ -437,8 +437,8 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
     - cfg.seed: injects the split seed (set explicitly in config_supervised.yaml;
         GraphGym's own unset default is 0, so the 42001 getattr fallback below only
         fires if the cfg node itself lacks the key, which it never does in practice)
-    - cfg.expression_graph.mode: injects GNN mode ("graph", "tree",
-        or "tree_derivatives")
+    - cfg.expression_graph.mode: injects GNN mode ("tree" or
+        "tree_derivatives")
     - cfg.expression_graph.features: grouped node/edge feature toggles
     - cfg.expression_graph.active_features: optional explicit feature override list
     - cfg.expression_graph.synthetic: injects synthetic mode (True or False)
@@ -451,7 +451,7 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
     batch_size = cfg.train.batch_size
     seed = getattr(cfg, "seed", 42001)
 
-    mode = getattr(cfg.expression_graph, "mode", "graph")
+    mode = getattr(cfg.expression_graph, "mode", "tree_derivatives")
     layer_type = validate_layer_type(cfg.gnn.layer_type)
     cfg.dataset.edge_dim = resolve_edge_dim()
     from gnn.supervised_learning.supervised_config import resolve_expression_graph_features

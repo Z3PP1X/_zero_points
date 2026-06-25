@@ -61,8 +61,6 @@ STRUCTURES: list[dict] = [
     dict(id=4, label="tree-deriv",             mode="tree_derivatives", edge_direction="top_down",      add_kappa=False, add_virtual_supernode=False),
     dict(id=5, label="tree-deriv + supernode", mode="tree_derivatives", edge_direction="top_down",      add_kappa=False, add_virtual_supernode=True),
     dict(id=6, label="tree-deriv + kappa",     mode="tree_derivatives", edge_direction="top_down",      add_kappa=True,  add_virtual_supernode=False),
-    dict(id=7, label="graph",                  mode="graph",            edge_direction="top_down",      add_kappa=False, add_virtual_supernode=False),
-    dict(id=8, label="graph + kappa",          mode="graph",            edge_direction="top_down",      add_kappa=True,  add_virtual_supernode=False),
 ]
 
 
@@ -215,7 +213,7 @@ def _build_base_sizes(
     """Load all graphs in their base form (top_down, no kappa, no supernode)
     and record |V|+|E|.  Keyed by (mode_synth_tag, graph_id)."""
     base_sizes: dict[tuple[str, str], int] = {}
-    for mode in ("tree", "tree_derivatives", "graph"):
+    for mode in ("tree", "tree_derivatives"):
         for is_synth in (False, True):
             tag = f"{mode}_synth" if is_synth else mode
             try:
@@ -495,7 +493,7 @@ def run_param_benchmark(args: argparse.Namespace, output_dir: Path) -> list[dict
     real_kappa_map, _ = _build_kappa_maps()
     loader = _make_loader(
         is_synthetic=False,
-        mode="graph",
+        mode="tree_derivatives",
         edge_direction="top_down",
         add_kappa=True,
         add_virtual_supernode=False,

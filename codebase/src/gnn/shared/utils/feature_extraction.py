@@ -187,8 +187,8 @@ def inject_virtual_supernode(
     message can travel between any two nodes in at most two hops, shrinking the
     effective graph diameter and boosting long-range message passing.
 
-    It is injected *after* the AST topology / positional features and the augmented
-    function-nesting edges have been computed, so adding it does not perturb
+    It is injected *after* the AST topology / positional features and any kappa
+    augmentation have been computed, so adding it does not perturb
     those structural node features. The supernode carries its own node_type code
     (``SUPERNODE_NODE_TYPE``); the model treats it as an ordinary message-passing node.
 

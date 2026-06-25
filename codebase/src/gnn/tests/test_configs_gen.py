@@ -20,7 +20,7 @@ def _write_base(path):
                     "layers_mp": 3,
                     "dim_inner": 128,
                 },
-                "expression_graph": {"mode": "graph", "edge_direction": "top_down"},
+                "expression_graph": {"mode": "tree_derivatives", "edge_direction": "top_down"},
             }
         ),
         encoding="utf-8",
@@ -99,7 +99,7 @@ def test_generate_configs_skips_supernode_positional(tmp_path):
                 "out_dir": "results",
                 "gnn": {"layer_type": "ginconv"},
                 "expression_graph": {
-                    "mode": "graph",
+                    "mode": "tree_derivatives",
                     "add_virtual_supernode": False,
                     "features": {"positional": False},
                 },
@@ -125,7 +125,7 @@ def test_generate_configs_skips_supernode_positional(tmp_path):
 
 
 def test_validate_grid_keys_rejects_unknown_axis():
-    base = {"gnn": {"layer_type": "ginconv"}, "expression_graph": {"mode": "graph"}}
+    base = {"gnn": {"layer_type": "ginconv"}, "expression_graph": {"mode": "tree_derivatives"}}
     # This is exactly the typo that crashed yacs at train time.
     grid = {"expression_graph.graph": ["graph"]}
     with pytest.raises(ValueError) as exc:

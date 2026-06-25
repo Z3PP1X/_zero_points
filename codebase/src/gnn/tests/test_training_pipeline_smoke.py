@@ -66,7 +66,7 @@ def test_pipeline_builds_dataloaders(tmp_path):
     pipeline = GraphPipeline(
         dataset_name="smoke",
         seed=42,
-        mode="graph",
+        mode="tree_derivatives",
         curated_csv_path=csv_path,
         curated_graphs_path=graphs_path,
     )
@@ -98,7 +98,7 @@ def test_pipeline_active_features_slice(tmp_path):
     pipeline = GraphPipeline(
         dataset_name="smoke",
         seed=42,
-        mode="graph",
+        mode="tree_derivatives",
         active_features=active,
         curated_csv_path=csv_path,
         curated_graphs_path=graphs_path,
@@ -124,7 +124,7 @@ def test_forward_and_backward_pass(tmp_path):
     pipeline = GraphPipeline(
         dataset_name="smoke",
         seed=42,
-        mode="graph",
+        mode="tree_derivatives",
         curated_csv_path=csv_path,
         curated_graphs_path=graphs_path,
     )
@@ -171,7 +171,7 @@ def test_two_epoch_training_all_losses_finite(tmp_path):
     pipeline = GraphPipeline(
         dataset_name="smoke",
         seed=42,
-        mode="graph",
+        mode="tree_derivatives",
         curated_csv_path=csv_path,
         curated_graphs_path=graphs_path,
     )

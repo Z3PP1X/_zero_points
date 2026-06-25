@@ -34,7 +34,7 @@ def test_node_counts_and_task_features_on_aggregator():
     }
 
     converter = ExpressionGraphConverter()
-    data = converter.convert(raw, mode="graph")
+    data = converter.convert(raw, mode="tree_derivatives")
 
     # 4 nodes: global + f1 + f2 + f3 (no aggregator nodes)
     assert data.num_nodes == 4
@@ -62,7 +62,7 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
     meta_path = tmp_path / "P-dynamic_meta.json"
     meta_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    preprocessor_graph = Preprocessor(graphs_dir=str(tmp_path), mode="graph")
+    preprocessor_graph = Preprocessor(graphs_dir=str(tmp_path), mode="tree_derivatives")
 
     message = {
         "id": "P-dynamic",
@@ -99,7 +99,7 @@ def test_supervised_learning_preprocessor_static_initialization():
 
     converter = ExpressionGraphConverter()
 
-    base_graph_graph = converter.convert(raw, mode="graph")
+    base_graph_graph = converter.convert(raw, mode="tree_derivatives")
     base_graphs_graph = {"P-supervised": base_graph_graph}
 
     assert "f_root" not in base_graph_graph.node_ids
@@ -115,7 +115,7 @@ def test_supervised_learning_preprocessor_static_initialization():
         "faster_algorithm": 1
     }])
 
-    dataset_no_fx_graph = ProblemRunDataset(df_no_fx, base_graphs_graph, mode="graph")
+    dataset_no_fx_graph = ProblemRunDataset(df_no_fx, base_graphs_graph, mode="tree_derivatives")
     data_no_fx_graph = dataset_no_fx_graph[0]
 
     assert data_no_fx_graph.x.shape == base_graph_graph.x.shape
@@ -132,7 +132,7 @@ def _single_node_base_graphs(pid: str):
         ],
         "edges": [],
     }
-    return {pid: ExpressionGraphConverter().convert(raw, mode="graph")}
+    return {pid: ExpressionGraphConverter().convert(raw, mode="tree_derivatives")}
 
 
 def test_supervised_scalar_features_attach_and_collate():
@@ -149,7 +149,7 @@ def test_supervised_scalar_features_attach_and_collate():
          "x0": 1.0, "y_target": 0.0, "fx": 9.0, "d1x": 0.5, "d2x": 7.0},
     ])
 
-    dataset = ProblemRunDataset(df, base_graphs, mode="graph", scalar_features=scalar_cols)
+    dataset = ProblemRunDataset(df, base_graphs, mode="tree_derivatives", scalar_features=scalar_cols)
     item = dataset[0]
     assert tuple(item.global_features.shape) == (1, len(scalar_cols))
     # Fraction string "1/2" -> 0.5 ; missing None -> 0.0.
@@ -171,7 +171,7 @@ def test_supervised_scalar_features_missing_column_raises():
     base_graphs = _single_node_base_graphs("P-missing")
     df = pd.DataFrame([{"problem_id": "P-missing", "faster_algorithm": 1, "x0": 1.0}])
     with pytest.raises(RuntimeError, match="scalar_features"):
-        ProblemRunDataset(df, base_graphs, mode="graph", scalar_features=["x0", "fx"])
+        ProblemRunDataset(df, base_graphs, mode="tree_derivatives", scalar_features=["x0", "fx"])
 
 
 def test_dynamic_feature_slicing_and_selection(tmp_path):
@@ -189,7 +189,7 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     # Use new one-hot column names
     active_feats = ["node_type_operator", "root_color_f", "subtree_size"]
 
-    data_full = converter.convert(raw, mode="graph")
+    data_full = converter.convert(raw, mode="tree_derivatives")
     assert data_full.x.shape[1] == NATIVE_NODE_FEATURE_COUNT
 
     from graph_utils import slice_active_features
@@ -201,7 +201,7 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
     meta_path = tmp_path / "P-slice_meta.json"
     meta_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    preprocessor = Preprocessor(graphs_dir=str(tmp_path), mode="graph", active_features=active_feats)
+    preprocessor = Preprocessor(graphs_dir=str(tmp_path), mode="tree_derivatives", active_features=active_feats)
 
     message = {
         "id": "P-slice",

@@ -30,7 +30,7 @@ def _build_batch():
             {"source": "f3", "target": "f4", "type": "child_of"},
         ],
     }
-    data = ExpressionGraphConverter().convert(raw, mode="graph")
+    data = ExpressionGraphConverter().convert(raw, mode="tree_derivatives")
     data.y = torch.tensor([1], dtype=torch.long)
     return next(iter(DataLoader([data], batch_size=1)))
 

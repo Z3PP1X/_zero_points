@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -5,10 +6,18 @@ from typing import Union, Any, Set
 from torch_geometric.data import Data, HeteroData
 from gnn.shared.utils.graph_utils import (
     ExpressionGraphConverter,
+    NODE_FEATURE_SCHEMA,
     validate_edge_direction,
 )
 
 logger = logging.getLogger(__name__)
+
+# Short fingerprint of the active node-feature schema. Embedded in every disk
+# cache key so that a schema change (adding/removing/reordering a feature)
+# yields a fresh key instead of silently reusing a stale tensor of the wrong
+# feature dimension. Without this, a grown schema (e.g. 28 -> 32 columns) would
+# load old 28-column .pt files and crash at batch collation.
+SCHEMA_TAG = hashlib.md5(",".join(NODE_FEATURE_SCHEMA).encode("utf-8")).hexdigest()[:8]
 
 
 class GraphDataLoader:
@@ -24,7 +33,7 @@ class GraphDataLoader:
     def __init__(
         self,
         name: str,
-        mode: str = "graph",
+        mode: str = "tree_derivatives",
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
         edge_direction: str = "top_down",
@@ -216,7 +225,7 @@ class GraphDataLoader:
             suffix = f"{sn_marker}.pt"
         cache_file = self.cache_dir / (
             f"{clean_gid}_{self.mode}_"
-            f"{self.edge_direction}{suffix}"
+            f"{self.edge_direction}_{SCHEMA_TAG}{suffix}"
         )
 
         if cache_file.exists():

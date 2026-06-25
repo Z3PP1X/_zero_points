@@ -59,7 +59,7 @@ class GraphPipeline:
         self,
         dataset_name: str,
         seed: int = 42,
-        mode: str = "graph",
+        mode: str = "tree_derivatives",
         active_features: list[str] | None = None,
         scalar_features: list[str] | None = None,
         graph_loader: GraphDataLoader | None = None,
@@ -255,7 +255,7 @@ def _parse_scalar(value) -> float:
 
 
 class ProblemRunDataset(Dataset):
-    def __init__(self, df, base_graphs, mode: str = "graph", active_features: list[str] | None = None, scalar_features: list[str] | None = None):
+    def __init__(self, df, base_graphs, mode: str = "tree_derivatives", active_features: list[str] | None = None, scalar_features: list[str] | None = None):
         self.df = df.reset_index(drop=True)
         self.base_graphs = base_graphs
         self.mode = mode

@@ -3,12 +3,12 @@
 visualize_graphs.py
 
 Scientific visualization of AST expression graphs from graphs.json.
-Supports all graph modes (tree, tree_derivatives, graph), kappa augmentation,
+Supports all graph modes (tree, tree_derivatives), kappa augmentation,
 virtual supernode, and edge-type-aware coloring.
 
 Usage:
     python visualize_graphs.py --graphs-file datasets/graphs/graphs.json --graph-id P1
-    python visualize_graphs.py --mode graph --kappa-value -5.0 --graph-id P1 P2
+    python visualize_graphs.py --mode tree_derivatives --kappa-value -5.0 --graph-id P1 P2
     python visualize_graphs.py --mode tree --graph-id P1 --format svg
 """
 
@@ -128,7 +128,7 @@ def _node_color_key(node: str, attrs: dict) -> str:
         return _code_map.get(float(rc), "root")
     if ntype in NODE_TYPE_COLORS:
         return ntype
-    # Fallback: infer from node id prefix used in tree_derivatives/graph modes
+    # Fallback: infer from node id prefix used in the tree_derivatives mode
     sid = str(node)
     if sid == "global":
         return "global"
@@ -449,12 +449,12 @@ def main() -> None:
         help="One or more graph IDs to visualize (e.g. P1 P2). Default: all.",
     )
     parser.add_argument(
-        "--mode", default="graph",
-        choices=["tree", "tree_derivatives", "graph"],
+        "--mode", default="tree_derivatives",
+        choices=["tree", "tree_derivatives"],
         help=(
             "Graph structure mode. "
             "'tree': f only (no global). "
-            "'tree_derivatives'/'graph': f+f'+f'' merged via global."
+            "'tree_derivatives': f+f'+f'' merged via global."
         ),
     )
     parser.add_argument(

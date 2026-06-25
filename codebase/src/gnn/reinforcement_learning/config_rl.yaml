@@ -6,7 +6,7 @@
 # CLI: --experiment, --mode, --edge-direction, --add-kappa, --add-virtual-supernode, --feature-groups, --positional-encoding
 experiment:
   name: nur_f  # nur_f | f_fp_roh | kein_inv
-  mode: graph  # graph | tree | tree_derivatives
+  mode: tree_derivatives  # tree | tree_derivatives
   edge_direction: top_down  # top_down | bottom_up | bidirectional (virtual nodes always bidirectional)
   add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
   add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
