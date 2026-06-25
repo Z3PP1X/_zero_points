@@ -111,15 +111,48 @@ def test_load_from_directory_structure(tmp_path, sample_graph_data):
 def test_caching_and_cloning(tmp_path, sample_graph_data):
     file_path = tmp_path / "single_graph.json"
     file_path.write_text(json.dumps(sample_graph_data), encoding="utf-8")
-    
+
     loader = UnifiedDataLoader.get_instance(dataset_name="my_graph", base_dir=file_path, mode="tree").graph_loader
-    
+
     graph_1 = loader.get_graph("P-test-1")
     graph_2 = loader.get_graph("P-test-1")
-    
+
     # They should be separate object instances (cloned)
     assert graph_1 is not graph_2
-    
+
     # Modifying graph_1 should not affect graph_2
     graph_1.x[0, 0] = 999.0
     assert graph_2.x[0, 0] != 999.0
+
+
+def test_converted_feature_dim_matches_schema(tmp_path, sample_graph_data):
+    """Every converted graph must emit exactly len(NODE_FEATURE_SCHEMA) columns."""
+    from graph_loader import GraphDataLoader
+    from graph_utils import NODE_FEATURE_SCHEMA
+
+    file_path = tmp_path / "single_graph.json"
+    file_path.write_text(json.dumps(sample_graph_data), encoding="utf-8")
+
+    loader = UnifiedDataLoader.get_instance(
+        dataset_name="dim_check", base_dir=file_path, mode="tree_derivatives"
+    ).graph_loader
+    graph = loader.get_graph("P-test-1")
+    assert graph.x.size(1) == len(NODE_FEATURE_SCHEMA)
+
+
+def test_cache_filename_embeds_schema_tag(tmp_path, sample_graph_data):
+    """The disk cache key must carry the schema fingerprint so a schema change
+    invalidates stale tensors instead of silently reloading the wrong width."""
+    from graph_loader import GraphDataLoader, SCHEMA_TAG
+
+    file_path = tmp_path / "single_graph.json"
+    file_path.write_text(json.dumps(sample_graph_data), encoding="utf-8")
+
+    loader = UnifiedDataLoader.get_instance(
+        dataset_name="tag_check", base_dir=file_path, mode="tree_derivatives"
+    ).graph_loader
+    loader.get_graph("P-test-1")  # triggers a disk-cache write
+
+    cache_files = list(loader.cache_dir.glob("*.pt"))
+    assert cache_files, "expected at least one cached .pt file"
+    assert all(SCHEMA_TAG in f.name for f in cache_files)

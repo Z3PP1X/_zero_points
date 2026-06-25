@@ -242,7 +242,7 @@ def test_filter_active_kappa_nodes_edges(
         _tag_and_connect_kappa(mainGraph, globalNode, kappa_root_id, kv)
 
     # Convert to PyG homogeneous Data
-    from graph_utils import ExpressionGraphConverter, filter_active_kappa
+    from graph_utils import ExpressionGraphConverter, filter_active_kappa, NODE_FEATURE_SCHEMA
     converter = ExpressionGraphConverter()
     data = converter.convert(
         mainGraph,
@@ -255,6 +255,10 @@ def test_filter_active_kappa_nodes_edges(
     assert len(data.node_ids) == 8
     assert data.x.size(0) == 8
     assert len(data.node_kappas) == 8
+    # Regression: kappa-augmented graphs must emit the FULL node-feature schema
+    # width. A path that silently drops a feature group (e.g. histograms) would
+    # yield a narrower x and crash at batch collation against non-augmented graphs.
+    assert data.x.size(1) == len(NODE_FEATURE_SCHEMA)
     
     # We have two kappas: -15.5 and -25.0
     # Let's filter to activate -15.5
@@ -283,4 +287,8 @@ def test_filter_active_kappa_nodes_edges(
     assert data_none.x.size(0) == 4
     for nid in data_none.node_ids:
         assert not nid.startswith("kappa_")
+
+    # Filtering changes the node count but never the feature width.
+    for d in (data_15, data_25, data_none):
+        assert d.x.size(1) == len(NODE_FEATURE_SCHEMA)
 
