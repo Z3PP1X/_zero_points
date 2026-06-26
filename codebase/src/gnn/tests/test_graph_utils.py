@@ -77,7 +77,7 @@ def test_enriched_graph_features(tmp_path):
 
     converter = ExpressionGraphConverter()
     data = converter.convert(
-        raw,  mode="tree", edge_direction="bidirectional"
+        raw, mode="tree"
     )
 
     assert data.nodes == 3
@@ -148,10 +148,11 @@ def test_enriched_graph_features(tmp_path):
     assert child2_features[anc_trig] == 0.0
     assert child2_features[anc_exp]  == 0.0
 
-    assert data.edge_index.shape == (2, 4)
+    # AST edges are top-down only: 2 tree edges → 2 directed edge_index columns.
+    assert data.edge_index.shape == (2, 2)
 
 
-def test_edge_direction_top_down_has_parent_to_child_only():
+def test_ast_edges_are_top_down_parent_to_child():
     raw = {
         "id": "P-direction-test",
         "nodes": [
@@ -160,33 +161,15 @@ def test_edge_direction_top_down_has_parent_to_child_only():
         ],
         "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
     }
-    data = ExpressionGraphConverter().convert(
-        raw,  mode="tree", edge_direction="top_down"
-    )
+    data = ExpressionGraphConverter().convert(raw, mode="tree")
     assert data.edge_index.shape == (2, 1)
     src, dst = data.edge_index[:, 0].tolist()
     assert src == 0 and dst == 1
 
 
-def test_edge_direction_bottom_up_has_child_to_parent_only():
-    raw = {
-        "id": "P-direction-test",
-        "nodes": [
-            {"id": "root", "label": "Plus", "type": "operator", "value": None},
-            {"id": "leaf", "label": "x", "type": "variable", "value": None},
-        ],
-        "edges": [{"source": "root", "target": "leaf", "type": "child_of"}],
-    }
-    data = ExpressionGraphConverter().convert(
-        raw,  mode="tree", edge_direction="bottom_up"
-    )
-    assert data.edge_index.shape == (2, 1)
-    src, dst = data.edge_index[:, 0].tolist()
-    assert src == 1 and dst == 0
-
-
-def test_ast_edge_direction_respected_for_belongs_to_edges():
-    """With virtual task nodes removed, AST/aggregator edges follow edge_direction."""
+def test_global_to_root_ast_edge_present():
+    """With virtual task nodes removed, the global node links to each tree root
+    via a single top-down AST edge."""
     raw = {
         "id": "P-direction-aggregator-test",
         "nodes": [
@@ -198,7 +181,7 @@ def test_ast_edge_direction_respected_for_belongs_to_edges():
         ],
     }
     data = ExpressionGraphConverter().convert(
-        raw,  mode="tree_derivatives", edge_direction="top_down"
+        raw, mode="tree_derivatives"
     )
     assert "virtual_current_x" not in data.node_ids
     x1_idx = data.node_ids.index("x1")

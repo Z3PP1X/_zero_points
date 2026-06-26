@@ -26,7 +26,6 @@ class UnifiedDataLoader:
         add_traces: bool = False,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
-        edge_direction: str = "top_down",
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
         csv_path: Union[Path, str, None] = None,
@@ -48,7 +47,6 @@ class UnifiedDataLoader:
             add_traces,
             str(base_dir) if base_dir else None,
             is_synthetic,
-            edge_direction,
             add_kappa,
             add_virtual_supernode,
             str(csv_path) if csv_path else None,
@@ -62,7 +60,6 @@ class UnifiedDataLoader:
                 add_traces=add_traces,
                 base_dir=base_dir,
                 is_synthetic=is_synthetic,
-                edge_direction=edge_direction,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
                 csv_path=csv_path,
@@ -83,7 +80,6 @@ class UnifiedDataLoader:
         add_traces: bool,
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
-        edge_direction: str = "top_down",
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
         csv_path: Union[Path, str, None] = None,
@@ -95,7 +91,6 @@ class UnifiedDataLoader:
         self.add_traces = add_traces
         self.base_dir = base_dir
         self.is_synthetic = is_synthetic
-        self.edge_direction = edge_direction
         self.add_kappa = add_kappa
         self.add_virtual_supernode = add_virtual_supernode
 
@@ -135,7 +130,6 @@ class UnifiedDataLoader:
             mode=self.mode,
             base_dir=graphs_path if graphs_path is not None else self.base_dir,
             is_synthetic=self.is_synthetic,
-            edge_direction=self.edge_direction,
             add_kappa=self.add_kappa,
             add_virtual_supernode=self.add_virtual_supernode,
             kappa_map=kappa_map,

@@ -18,7 +18,6 @@ from gnn.shared.utils.feature_config import (
 )
 from gnn.shared.utils.graph_utils import (
     EDGE_FEATURE_SCHEMA,
-    validate_edge_direction,
 )
 
 SUPERVISED_LAYER_TYPES: tuple[str, ...] = ("ginconv",)
@@ -95,7 +94,6 @@ def apply_expression_graph_overrides(
     positional_encoding: list[str] | None = None,
     synthetic: bool | None = None,
     synthetic_dataset: str | None = None,
-    edge_direction: str | None = None,
     add_kappa: bool | None = None,
     add_virtual_supernode: bool | None = None,
 ) -> FeatureSelection:
@@ -120,8 +118,6 @@ def apply_expression_graph_overrides(
         cfg.expression_graph.synthetic = synthetic
     if synthetic_dataset is not None:
         cfg.expression_graph.synthetic_dataset = synthetic_dataset
-    if edge_direction is not None:
-        cfg.expression_graph.edge_direction = validate_edge_direction(edge_direction)
     if add_kappa is not None:
         cfg.expression_graph.add_kappa = add_kappa
     if add_virtual_supernode is not None:
@@ -153,9 +149,6 @@ def read_supervised_settings(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "dataset_name": dataset_cfg.get("name"),
         "mode": expression_graph.get("mode", "tree_derivatives"),
-        "edge_direction": validate_edge_direction(
-            expression_graph.get("edge_direction", "top_down")
-        ),
         "add_kappa": bool(expression_graph.get("add_kappa", False)),
         "add_virtual_supernode": bool(
             expression_graph.get("add_virtual_supernode", False)

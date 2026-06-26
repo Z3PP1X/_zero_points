@@ -226,8 +226,8 @@ def inject_virtual_supernode(
     G_directed.add_node(SUPERNODE_NODE_ID, **supernode_attrs)
 
     for nid in existing_nodes:
-        # Both directions are always added so the supernode shortcut stays bidirectional
-        # regardless of the AST edge_direction setting (mirrors virtual/task edges).
+        # Both directions are always added so the virtual supernode shortcut stays
+        # bidirectional (the AST itself is top-down).
         G_enriched.add_edge(
             SUPERNODE_NODE_ID,
             nid,

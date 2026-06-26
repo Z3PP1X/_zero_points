@@ -41,17 +41,16 @@ def sample_raw():
 def test_supernode_absent_by_default(sample_raw):
     """Without the flag the graph is unchanged (backward compatible)."""
     converter = ExpressionGraphConverter()
-    data = converter.convert(sample_raw, mode="tree_derivatives", edge_direction="top_down")
+    data = converter.convert(sample_raw, mode="tree_derivatives")
     assert SUPERNODE_NODE_ID not in data.node_ids
 
 
 def test_supernode_added_and_typed(sample_raw):
     converter = ExpressionGraphConverter()
-    base = converter.convert(sample_raw, mode="tree_derivatives", edge_direction="top_down")
+    base = converter.convert(sample_raw, mode="tree_derivatives")
     data = converter.convert(
         sample_raw,
         mode="tree_derivatives",
-        edge_direction="top_down",
         add_virtual_supernode=True,
     )
 
@@ -74,7 +73,6 @@ def test_supernode_bidirectionally_connected_to_all(sample_raw):
     data = converter.convert(
         sample_raw,
         mode="tree_derivatives",
-        edge_direction="top_down",
         add_virtual_supernode=True,
     )
     sn_idx = data.node_ids.index(SUPERNODE_NODE_ID)
@@ -92,6 +90,6 @@ def test_supernode_bidirectionally_connected_to_all(sample_raw):
 def test_supernode_works_in_all_modes(sample_raw, mode):
     converter = ExpressionGraphConverter()
     data = converter.convert(
-        sample_raw, mode=mode, edge_direction="top_down", add_virtual_supernode=True
+        sample_raw, mode=mode, add_virtual_supernode=True
     )
     assert SUPERNODE_NODE_ID in data.node_ids

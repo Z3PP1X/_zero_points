@@ -47,7 +47,6 @@ class GNNResultEvaluator:
         "act",
         "base_lr",
         "mode",
-        "edge_direction",
     )
     METRIC_COLS = {
         "epoch",
@@ -204,7 +203,7 @@ class GNNResultEvaluator:
             elif len(vals) > 1:
                 arch_parts.append(f"dim_inner: {int(vals[0])}–{int(vals[-1])}")
         for key, label in [
-            ("mode", "Mode"), ("edge_direction", "Edge"),
+            ("mode", "Mode"),
             ("bidirectional", "Bidirectional"), ("add_kappa", "Kappa"),
         ]:
             val = expr.get(key)

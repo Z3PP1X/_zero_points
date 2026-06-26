@@ -155,7 +155,6 @@ def benchmark_config(
     device: torch.device,
     warmup: int = 50,
     runs: int = 200,
-    edge_direction: str = "top_down",
 ) -> dict | None:
     stage_def = STAGE_DEFS[stage_id]
     active_features = stage_def["active_features"]
@@ -164,7 +163,7 @@ def benchmark_config(
     print(f"  {label}")
 
     try:
-        loader = GraphDataLoader(name=dataset_name, edge_direction=edge_direction)
+        loader = GraphDataLoader(name=dataset_name)
         graphs = loader.load_all()
     except Exception as exc:
         print(f"    [SKIP] Data load failed: {exc}")
@@ -228,7 +227,6 @@ def run_sweep(
     runs: int,
     out_dir: Path,
     use_mlflow: bool = False,
-    edge_direction: str = "top_down",
 ) -> pd.DataFrame:
     print(f"\n{'='*70}")
     print(f"INFERENCE BENCHMARK SWEEP  |  Device: {device.type.upper()}")
@@ -251,7 +249,6 @@ def run_sweep(
                 device=device,
                 warmup=warmup,
                 runs=runs,
-                edge_direction=edge_direction,
             )
             if result:
                 records.append(result)
@@ -414,8 +411,6 @@ Examples:
     parser.add_argument("--device", default="auto", choices=["cpu", "cuda", "auto"])
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--runs", type=int, default=200)
-    parser.add_argument("--edge-direction", default="top_down",
-                        choices=["top_down", "bottom_up", "bidirectional"])
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--sweep", action="store_true",
                         help="Run the full grid — all selected stages × dims × layers")
@@ -442,7 +437,6 @@ def main() -> None:
             runs=args.runs,
             out_dir=out_dir,
             use_mlflow=not args.no_mlflow,
-            edge_direction=args.edge_direction,
         )
     else:
         stage_id   = args.stages[0]
@@ -456,7 +450,6 @@ def main() -> None:
             device=device,
             warmup=args.warmup,
             runs=args.runs,
-            edge_direction=args.edge_direction,
         )
         if result:
             out_dir.mkdir(parents=True, exist_ok=True)

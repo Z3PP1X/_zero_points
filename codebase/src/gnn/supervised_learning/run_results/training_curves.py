@@ -61,7 +61,7 @@ CURVE_METRICS = ["auc", "loss", "f1", "mean_confidence", "brier_score"]
 
 _CONFIG_COLS = {
     "layer_type", "layers_mp", "dim_inner", "dropout", "graph_pooling",
-    "act", "base_lr", "mode", "edge_direction",
+    "act", "base_lr", "mode",
 }
 SPLIT_COLORS = {
     "train": "#2A9D8F",

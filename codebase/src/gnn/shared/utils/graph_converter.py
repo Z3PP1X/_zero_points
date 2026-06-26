@@ -13,7 +13,7 @@ from gnn.shared.utils.graph_vocab import (
     SUPERNODE_NODE_ID, SUPERNODE_NODE_TYPE,
     NODE_FEATURE_SCHEMA,
     LABEL_ONEHOT_NAMES,
-    encode_label, validate_edge_direction,
+    encode_label,
     node_type_onehot, root_color_onehot, label_onehot,
 )
 from gnn.shared.utils.feature_extraction import (
@@ -296,25 +296,15 @@ class ExpressionGraphConverter:
         child: str,
         child_idx: int,
         etype: str,
-        edge_direction: str,
     ) -> None:
-        effective = edge_direction
-        if effective in ("top_down", "bidirectional"):
-            G_enriched.add_edge(
-                parent,
-                child,
-                child_index=float(child_idx),
-                direction=0.0,
-                etype=etype,
-            )
-        if effective in ("bottom_up", "bidirectional"):
-            G_enriched.add_edge(
-                child,
-                parent,
-                child_index=float(child_idx),
-                direction=1.0 if effective == "bidirectional" else 0.0,
-                etype=etype + "_reverse",
-            )
+        # AST edges are always top-down (parent -> child); orientation lives in the
+        # edge_index topology and no edge attribute encodes it.
+        G_enriched.add_edge(
+            parent,
+            child,
+            child_index=float(child_idx),
+            etype=etype,
+        )
 
     @staticmethod
     def _enrich_nodes(
@@ -368,24 +358,33 @@ class ExpressionGraphConverter:
             for _i, _lname in enumerate(LABEL_ONEHOT_NAMES):
                 enriched_attrs[_lname] = lb_oh[_i]
 
+            # The merged `global` node (node_type code 0, present in tree /
+            # tree_derivatives mode) is a pure relay/aggregator: it carries the full
+            # feature dimensionality but must not inject any signal of its own. Force
+            # every schema column to zero. This matters most for the structural
+            # features (anchor PE, subtree_size, subtree_depth) which would otherwise
+            # leak a spurious "root-of-everything" magnitude into message passing. The
+            # node's identity stays recoverable downstream via data.node_type /
+            # data.root_color, which are built separately from G_directed.
+            if nt_code == ExpressionGraphConverter.NODE_TYPES["global"]:
+                for _feat in NODE_FEATURE_SCHEMA:
+                    enriched_attrs[_feat] = 0.0
+
             G_enriched.add_node(node, **enriched_attrs)
 
     def convert(
         self,
         source: Union[str, Path, dict, nx.DiGraph],
         mode: str = "tree_derivatives",
-        edge_direction: str = "top_down",
         add_virtual_supernode: bool = False,
     ) -> Data:
-        edge_direction = validate_edge_direction(edge_direction)
-
         if isinstance(source, nx.DiGraph):
             G_enriched, G_directed, node_ids, topo, raw = self._build_enriched_from_networkx(
-                source, edge_direction
+                source
             )
         else:
             G_enriched, G_directed, node_ids, topo, raw = self._build_enriched_from_raw(
-                source, mode, edge_direction
+                source, mode
             )
 
         if add_virtual_supernode:
@@ -417,7 +416,7 @@ class ExpressionGraphConverter:
         return data
 
     def _build_enriched_from_networkx(
-        self, source: nx.DiGraph, edge_direction: str
+        self, source: nx.DiGraph
     ) -> tuple:
         """Handle the nx.DiGraph fast-path (already-built graph passed directly)."""
         ast_nodes = [
@@ -438,18 +437,18 @@ class ExpressionGraphConverter:
 
         child_counters: dict = {}
         for u, v, attrs in source.edges(data=True):
-            if "child_index" in attrs or "direction" in attrs:
+            if "child_index" in attrs:
                 G_enriched.add_edge(u, v, **attrs)
                 continue
             etype = attrs.get("type") or attrs.get("etype") or "child_of"
             child_idx = child_counters.get(u, 0)
             child_counters[u] = child_idx + 1
-            self._add_ast_edges(G_enriched, u, v, child_idx, etype, edge_direction)
+            self._add_ast_edges(G_enriched, u, v, child_idx, etype)
 
         return G_enriched, G_directed, node_ids, topo, None
 
     def _build_enriched_from_raw(
-        self, source: Union[str, Path, dict], mode: str, edge_direction: str
+        self, source: Union[str, Path, dict], mode: str
     ) -> tuple:
         """Handle the raw dict/file path (JSON or GraphML) input."""
         raw = dict(self._load(source))
@@ -491,7 +490,7 @@ class ExpressionGraphConverter:
             child = edge["target"]
             child_idx = child_counters.get(parent, 0)
             child_counters[parent] = child_idx + 1
-            self._add_ast_edges(G_enriched, parent, child, child_idx, edge["type"], edge_direction)
+            self._add_ast_edges(G_enriched, parent, child, child_idx, edge["type"])
 
         return G_enriched, G_directed, node_ids, topo, raw
 

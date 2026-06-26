@@ -46,18 +46,15 @@ def main():
     dataset_name = cfg.dataset.name
     layer_type = cfg.gnn.layer_type
     mode = cfg.expression_graph.mode
-    edge_direction = cfg.expression_graph.edge_direction
     add_kappa = getattr(cfg.expression_graph, "add_kappa", False)
 
     print(f"Dataset: {dataset_name}")
-    print(f"Edge Direction: {edge_direction}")
     print(f"Add Kappa: {add_kappa}")
 
     # Load dataset pipeline
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=dataset_name,
         mode=mode,
-        edge_direction=edge_direction,
         add_kappa=add_kappa,
     )
 

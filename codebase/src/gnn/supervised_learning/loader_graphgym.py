@@ -379,7 +379,6 @@ def set_custom_cfg(cfg):
     cfg.data.curated_csv = ""    # e.g. datasets/run_20260604_154509/dataset_joined.csv
     cfg.data.synthetic_csv = ""  # e.g. datasets/run_20260604_154509/synthetic_dataset.csv
     cfg.data.graphs_dir = ""     # e.g. datasets/graphs  (contains graphs.json + synthetic_graphs.json)
-    cfg.expression_graph.edge_direction = "top_down"  # top_down | bottom_up | bidirectional
     cfg.expression_graph.add_kappa = False  # merge kappa (h-function) subgraphs from datasets/kappas/
     cfg.expression_graph.add_virtual_supernode = False  # add a fully-connected virtual supernode
     cfg.expression_graph.pos_label = 1  # Overwritten from training class counts at load time
@@ -443,10 +442,7 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
     - cfg.expression_graph.active_features: optional explicit feature override list
     - cfg.expression_graph.synthetic: injects synthetic mode (True or False)
     - cfg.expression_graph.synthetic_dataset: injects synthetic dataset name
-    - cfg.expression_graph.edge_direction: AST message-passing direction
     """
-    from gnn.shared.utils.graph_utils import validate_edge_direction
-
     dataset_name = cfg.dataset.name
     batch_size = cfg.train.batch_size
     seed = getattr(cfg, "seed", 42001)
@@ -458,9 +454,6 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
 
     synthetic = getattr(cfg.expression_graph, "synthetic", False)
     synthetic_dataset = getattr(cfg.expression_graph, "synthetic_dataset", "")
-    edge_direction = validate_edge_direction(
-        getattr(cfg.expression_graph, "edge_direction", "top_down")
-    )
     add_kappa = getattr(cfg.expression_graph, "add_kappa", False)
     add_virtual_supernode = getattr(
         cfg.expression_graph, "add_virtual_supernode", False
@@ -528,7 +521,6 @@ def load_custom_expression_graphs(format, name, _dataset_dir):
     print(f"  Injected Layer Type:     {layer_type}")
     print(f"  Injected Edge Dim:       {cfg.dataset.edge_dim}")
     print(f"  Injected Synthetic:      {synthetic}")
-    print(f"  Injected Edge Direction: {edge_direction}")
     if curated_csv_path:
         print(f"  Curated CSV:             {curated_csv_path}")
         print(f"  Curated Graphs:          {curated_graphs_path}")

@@ -60,7 +60,6 @@ def dump_summary_cfg(cfg, out_dir: Path) -> None:
         },
         "graph": {
             "mode": eg.mode,
-            "edge_direction": eg.edge_direction,
         },
         "features": {
             "active_feature_names": active,

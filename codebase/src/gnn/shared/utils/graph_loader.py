@@ -7,7 +7,6 @@ from torch_geometric.data import Data, HeteroData
 from gnn.shared.utils.graph_utils import (
     ExpressionGraphConverter,
     NODE_FEATURE_SCHEMA,
-    validate_edge_direction,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +35,6 @@ class GraphDataLoader:
         mode: str = "tree_derivatives",
         base_dir: Union[Path, str, None] = None,
         is_synthetic: bool = False,
-        edge_direction: str = "top_down",
         kappas_dir: Union[Path, str, None] = None,
         add_kappa: bool = False,
         add_virtual_supernode: bool = False,
@@ -45,7 +43,6 @@ class GraphDataLoader:
         self.name = name
         self.mode = mode
         self.is_synthetic = is_synthetic
-        self.edge_direction = validate_edge_direction(edge_direction)
         self.add_kappa = add_kappa
         self.add_virtual_supernode = add_virtual_supernode
         self.kappa_map: dict[str, float] = {str(k): float(v) for k, v in (kappa_map or {}).items()}
@@ -224,8 +221,7 @@ class GraphDataLoader:
         else:
             suffix = f"{sn_marker}.pt"
         cache_file = self.cache_dir / (
-            f"{clean_gid}_{self.mode}_"
-            f"{self.edge_direction}_{SCHEMA_TAG}{suffix}"
+            f"{clean_gid}_{self.mode}_{SCHEMA_TAG}{suffix}"
         )
 
         if cache_file.exists():
@@ -247,7 +243,6 @@ class GraphDataLoader:
             converted = self.converter.convert(
                 main_graph,
                 mode=self.mode,
-                edge_direction=self.edge_direction,
                 add_virtual_supernode=self.add_virtual_supernode,
             )
         else:
@@ -261,7 +256,6 @@ class GraphDataLoader:
             converted = self.converter.convert(
                 raw_dict,
                 mode=self.mode,
-                edge_direction=self.edge_direction,
                 add_virtual_supernode=self.add_virtual_supernode,
             )
 

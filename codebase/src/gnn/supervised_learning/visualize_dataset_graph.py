@@ -18,10 +18,8 @@ Augmentations
     --supernode         inject a fully-connected ``virtual_supernode``
     --kappa             merge the kappa (h-function) subgraph(s) via
                         LoadAugmentedFunctionGraph
-    --edge-direction    top_down | bottom_up | bidirectional (AST edges only;
-                        virtual / kappa edges stay bidirectional)
 
-When *no* augmentation/mode/direction flag is supplied, every sensible
+When *no* augmentation/mode flag is supplied, every sensible
 combination is rendered for the chosen problem graph, written into a nested
 sub-directory tree so the output stays organised.
 
@@ -54,7 +52,6 @@ from gnn.shared.utils.graph_utils import (
     parse_graphml_to_nodes_and_edges,
     find_roots,
     inject_virtual_supernode,
-    validate_edge_direction,
     LoadAugmentedFunctionGraph,
     _mark_function_roots,
     ROOT_COLOR_VOCAB,
@@ -69,7 +66,6 @@ _STRUCTURAL_FORWARD = {"child_of", "left_operand", "right_operand"}
 
 # Canonical graph modes accepted by the converter.
 ALL_MODES = ["tree", "tree_derivatives"]
-ALL_DIRECTIONS = ["top_down", "bottom_up", "bidirectional"]
 
 # Colour palette (group -> fill colour).
 GROUP_COLORS = {
@@ -151,7 +147,7 @@ def _build_raw_for_mode(raw_dict: dict, mode: str) -> dict:
     return raw
 
 
-def build_visual_graph(source, mode, edge_direction, add_supernode):
+def build_visual_graph(source, mode, add_supernode):
     """Build an enriched NetworkX graph for visualization.
 
     Mirrors the relevant parts of ``ExpressionGraphConverter.convert`` but stops
@@ -162,10 +158,9 @@ def build_visual_graph(source, mode, edge_direction, add_supernode):
     already merged with kappa subgraphs (kappa path).
 
     Returns ``(G_enriched, children_dict)`` where ``children_dict`` maps each
-    parent to its child_of children (independent of the drawn edge direction).
+    parent to its child_of children.
     """
     converter = ExpressionGraphConverter()
-    edge_direction = validate_edge_direction(edge_direction)
 
     G_enriched = nx.DiGraph()
     children_dict: dict[str, list] = {}
@@ -192,7 +187,7 @@ def build_visual_graph(source, mode, edge_direction, add_supernode):
 
             child_idx = child_counters.get(u, 0)
             child_counters[u] = child_idx + 1
-            converter._add_ast_edges(G_enriched, u, v, child_idx, etype, edge_direction)
+            converter._add_ast_edges(G_enriched, u, v, child_idx, etype)
     else:
         # --- Plain (no-kappa) path (source is a raw dict) ----------------------
         raw = _build_raw_for_mode(source, mode)
@@ -208,7 +203,7 @@ def build_visual_graph(source, mode, edge_direction, add_supernode):
                 children_dict.setdefault(u, []).append(v)
             child_idx = child_counters.get(u, 0)
             child_counters[u] = child_idx + 1
-            converter._add_ast_edges(G_enriched, u, v, child_idx, etype, edge_direction)
+            converter._add_ast_edges(G_enriched, u, v, child_idx, etype)
 
     # Optional fully-connected virtual supernode.
     if add_supernode:
@@ -441,7 +436,7 @@ def visualize_graph(G, children_dict, groups, output_path, fmt, meta, layout_nam
     )
 
     title = (
-        f"Graph {meta['graph_id']} | mode={meta['mode']} | dir={meta['edge_direction']}\n"
+        f"Graph {meta['graph_id']} | mode={meta['mode']}\n"
         f"supernode={meta['supernode']}  kappa={meta['kappa']}  "
         f"(nodes={G.number_of_nodes()}, edges={G.number_of_edges()})"
     )
@@ -549,7 +544,7 @@ def resolve_kappa_value(args, loader, dataset_name, graph_id, is_synthetic):
 # --------------------------------------------------------------------------- #
 # Rendering one combination                                                    #
 # --------------------------------------------------------------------------- #
-def render_combination(loader, graph_id, mode, edge_direction, supernode, kappa,
+def render_combination(loader, graph_id, mode, supernode, kappa,
                        formats, out_root, layout, kappa_value):
     """Build and render one full configuration. Returns True on success."""
     # inf is the "merge all kappas" sentinel; otherwise merge the single value.
@@ -564,7 +559,7 @@ def render_combination(loader, graph_id, mode, edge_direction, supernode, kappa,
         source = load_raw_dict(loader, graph_id)
 
     G, children_dict = build_visual_graph(
-        source, mode=mode, edge_direction=edge_direction, add_supernode=supernode,
+        source, mode=mode, add_supernode=supernode,
     )
     groups = compute_node_groups(G, children_dict)
 
@@ -575,15 +570,14 @@ def render_combination(loader, graph_id, mode, edge_direction, supernode, kappa,
     else:
         kappa_label = f"{merge_value:g}"
     meta = {
-        "graph_id": graph_id, "mode": mode, "edge_direction": edge_direction,
+        "graph_id": graph_id, "mode": mode,
         "supernode": supernode, "kappa": kappa_label,
     }
 
     # Nested sub-directories keep the (potentially dozens of) outputs organised.
-    out_dir = Path(out_root) / f"graph_{graph_id}" / mode / edge_direction
+    out_dir = Path(out_root) / f"graph_{graph_id}" / mode
     out_dir.mkdir(parents=True, exist_ok=True)
-    base = (f"{mode}_dir-{edge_direction}_sn-{int(supernode)}"
-            f"_kappa-{int(kappa)}")
+    base = f"{mode}_sn-{int(supernode)}_kappa-{int(kappa)}"
 
     for fmt in formats:
         filepath = out_dir / f"{base}.{fmt}"
@@ -610,9 +604,6 @@ def main():
     parser.add_argument("--mode", "-m", type=str, default=None,
                         help="Graph mode: tree | tree_derivatives (tree-derivative). "
                              "Omit to render all modes.")
-    parser.add_argument("--edge-direction", "-e", type=str, default=None,
-                        choices=ALL_DIRECTIONS,
-                        help="AST edge direction. Omit to render all directions.")
 
     parser.add_argument("--supernode", action=argparse.BooleanOptionalAction, default=None,
                         help="Inject a fully-connected virtual supernode. "
@@ -655,7 +646,6 @@ def main():
 
     # Expand each axis: a fixed value if supplied, else every option.
     modes = [mode_arg] if mode_arg else list(ALL_MODES)
-    directions = [args.edge_direction] if args.edge_direction else list(ALL_DIRECTIONS)
     supernodes = [args.supernode] if args.supernode is not None else [False, True]
     kappas = [args.kappa] if args.kappa is not None else [False, True]
     formats = [args.format] if args.format != "all" else ["pdf", "svg", "png", "gexf"]
@@ -668,23 +658,23 @@ def main():
             args.is_synthetic or "synthetic" in args.dataset_name,
         )
 
-    combos = list(itertools.product(modes, directions, supernodes, kappas))
+    combos = list(itertools.product(modes, supernodes, kappas))
 
     print(f"[Visualizer] Rendering {len(combos)} configuration(s) for graph "
           f"'{args.graph_id}' into '{args.output_dir}/graph_{args.graph_id}/' ...")
 
     rendered = skipped = 0
-    for mode, direction, supernode, kappa in combos:
+    for mode, supernode, kappa in combos:
         try:
             ok = render_combination(
-                loader, args.graph_id, mode, direction, supernode, kappa,
+                loader, args.graph_id, mode, supernode, kappa,
                 formats, args.output_dir, args.layout, resolved_kappa,
             )
             rendered += int(ok)
             skipped += int(not ok)
         except Exception as exc:  # keep going through the rest of the matrix
             skipped += 1
-            print(f"[Visualizer] FAILED mode={mode} dir={direction} sn={supernode} "
+            print(f"[Visualizer] FAILED mode={mode} sn={supernode} "
                   f"kappa={kappa}: {exc}")
 
     print(f"[Visualizer] Done. Rendered {rendered}, skipped {skipped}.")

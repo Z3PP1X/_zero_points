@@ -35,7 +35,6 @@ CONFIG_COLS = (
     "act",
     "base_lr",
     "mode",
-    "edge_direction",
 )
 def _setup_import_paths():
     script_dir = Path(__file__).resolve().parent

@@ -247,7 +247,6 @@ def main(
     synthetic: bool = False,
     synthetic_dataset: str | None = None,
     layer_type: str = "ginconv",
-    edge_direction: str = "top_down",
     add_kappa: bool = False,
     add_virtual_supernode: bool = False,
 ):
@@ -263,7 +262,6 @@ def main(
         positional_encoding=positional_encoding,
         synthetic=synthetic,
         synthetic_dataset=synthetic_dataset,
-        edge_direction=edge_direction,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )
@@ -308,7 +306,6 @@ def main(
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=dataset_name,
         mode=mode,
-        edge_direction=edge_direction,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )
@@ -635,13 +632,6 @@ if __name__ == "__main__":
         choices=["tree", "tree_derivatives"],
         help="Override GNN experiment mode from config.",
     )
-    parser.add_argument(
-        "--edge-direction",
-        type=str,
-        default=None,
-        choices=["top_down", "bottom_up", "bidirectional"],
-        help="AST message-passing direction (virtual-node edges stay bidirectional).",
-    )
     from gnn.shared.utils.feature_config import add_feature_cli_args
 
     add_feature_cli_args(parser)
@@ -680,7 +670,6 @@ if __name__ == "__main__":
         parser.error("Dataset name must be set in config (dataset.name) or via --dataset")
 
     mode = args.mode or settings["mode"]
-    edge_direction = args.edge_direction or settings["edge_direction"]
     layer_type = settings["layer_type"]
     synthetic = args.synthetic or settings["synthetic"]
     synthetic_dataset = args.synthetic_dataset or settings["synthetic_dataset"]
@@ -709,7 +698,6 @@ if __name__ == "__main__":
         loader = UnifiedDataLoader.get_instance(
             dataset_name=dataset_name,
             mode=mode,
-            edge_direction=edge_direction,
             add_kappa=add_kappa,
             add_virtual_supernode=add_virtual_supernode,
         )
@@ -724,7 +712,6 @@ if __name__ == "__main__":
             synth_loader = UnifiedDataLoader.get_instance(
                 dataset_name=synthetic_dataset,
                 mode=mode,
-                edge_direction=edge_direction,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
             )
@@ -750,7 +737,7 @@ if __name__ == "__main__":
             print(f"Positional encodings: {list(preview_selection.positional_encodings)}")
             print(f"Active node features: {preview_selection.summary()}")
             print(
-                f"Config: {config_path.name} | layer_type={layer_type} | edge_direction={edge_direction}"
+                f"Config: {config_path.name} | layer_type={layer_type}"
             )
             main(
                 config_path=config_path,
@@ -764,7 +751,6 @@ if __name__ == "__main__":
                 synthetic=synthetic,
                 synthetic_dataset=synthetic_dataset,
                 layer_type=layer_type,
-                edge_direction=edge_direction,
                 add_kappa=add_kappa,
                 add_virtual_supernode=add_virtual_supernode,
             )

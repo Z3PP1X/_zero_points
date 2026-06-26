@@ -15,11 +15,9 @@ from gnn.shared.utils.feature_config import (
     parse_feature_selection_from_mapping,
     resolve_active_node_features,
 )
-from gnn.shared.utils.graph_utils import validate_edge_direction
 
 RL_EXPERIMENT_CHOICES = ("nur_f", "f_fp_roh", "kein_inv")
 RL_MODE_CHOICES = ("tree", "tree_derivatives")
-RL_EDGE_DIRECTION_CHOICES = ("top_down", "bottom_up", "bidirectional")
 
 
 def load_yaml_config(path: Path | str) -> dict[str, Any]:
@@ -39,9 +37,6 @@ def read_rl_settings(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "experiment": experiment.get("name", "nur_f"),
         "mode": experiment.get("mode", "tree_derivatives"),
-        "edge_direction": validate_edge_direction(
-            experiment.get("edge_direction", "top_down")
-        ),
         "add_kappa": bool(experiment.get("add_kappa", False)),
         "add_virtual_supernode": bool(
             experiment.get("add_virtual_supernode", False)
@@ -114,13 +109,6 @@ def add_shared_graph_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         choices=list(RL_MODE_CHOICES),
         help="GNN graph mode (tree, tree_derivatives).",
-    )
-    parser.add_argument(
-        "--edge-direction",
-        type=str,
-        default=None,
-        choices=list(RL_EDGE_DIRECTION_CHOICES),
-        help="AST message-passing direction (virtual-node edges stay bidirectional).",
     )
     parser.add_argument(
         "--add-kappa",

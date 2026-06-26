@@ -247,7 +247,6 @@ def test_filter_active_kappa_nodes_edges(
     data = converter.convert(
         mainGraph,
         mode="tree_derivatives",
-        edge_direction="top_down",
     )
 
     # Initial checks:

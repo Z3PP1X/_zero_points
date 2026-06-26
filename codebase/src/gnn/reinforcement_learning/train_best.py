@@ -329,7 +329,6 @@ def main() -> None:
 
     experiment = resolve_rl_setting(args.experiment, settings["experiment"])
     mode = resolve_rl_setting(args.mode, settings["mode"])
-    edge_direction = resolve_rl_setting(args.edge_direction, settings["edge_direction"])
     add_kappa = resolve_rl_setting(
         None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
     )
@@ -396,7 +395,6 @@ def main() -> None:
     print(f"  Config:           {config_path.name}")
     print(f"  Experiment:       {experiment}")
     print(f"  Mode:             {mode}")
-    print(f"  Edge direction:   {edge_direction}")
     print(f"  Add kappa:        {add_kappa}")
     print(f"  Add supernode:    {add_virtual_supernode}")
     print(f"  GNN Activation:   {trial_config.policy.activation}")
@@ -435,7 +433,6 @@ def main() -> None:
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=experiment,
         mode=mode,
-        edge_direction=edge_direction,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )
@@ -530,7 +527,6 @@ def main() -> None:
             mlflow.log_param("n_envs", n_envs)
             mlflow.log_param("timesteps", timesteps)
             mlflow.log_param("mode", mode)
-            mlflow.log_param("edge_direction", edge_direction)
             mlflow.log_param("add_kappa", add_kappa)
             mlflow.log_param("add_virtual_supernode", add_virtual_supernode)
 

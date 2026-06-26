@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Benchmark: GINConv inference time vs. graph size across 8 structural variants.
+Benchmark: GINConv inference time vs. graph size across 5 structural variants.
 
 Measures median inference time for 107 graphs (7 real + 100 synthetic) under
 each structural variant.  Outputs:
@@ -55,12 +55,11 @@ except ImportError:
 # --- Structural variants -------------------------------------------------------
 
 STRUCTURES: list[dict] = [
-    dict(id=1, label="tree (top-down)",       mode="tree",             edge_direction="top_down",      add_kappa=False, add_virtual_supernode=False),
-    dict(id=2, label="tree (bidirectional)",   mode="tree",             edge_direction="bidirectional", add_kappa=False, add_virtual_supernode=False),
-    dict(id=3, label="tree + kappa",           mode="tree",             edge_direction="top_down",      add_kappa=True,  add_virtual_supernode=False),
-    dict(id=4, label="tree-deriv",             mode="tree_derivatives", edge_direction="top_down",      add_kappa=False, add_virtual_supernode=False),
-    dict(id=5, label="tree-deriv + supernode", mode="tree_derivatives", edge_direction="top_down",      add_kappa=False, add_virtual_supernode=True),
-    dict(id=6, label="tree-deriv + kappa",     mode="tree_derivatives", edge_direction="top_down",      add_kappa=True,  add_virtual_supernode=False),
+    dict(id=1, label="tree (top-down)",       mode="tree",             add_kappa=False, add_virtual_supernode=False),
+    dict(id=2, label="tree + kappa",           mode="tree",             add_kappa=True,  add_virtual_supernode=False),
+    dict(id=3, label="tree-deriv",             mode="tree_derivatives", add_kappa=False, add_virtual_supernode=False),
+    dict(id=4, label="tree-deriv + supernode", mode="tree_derivatives", add_kappa=False, add_virtual_supernode=True),
+    dict(id=5, label="tree-deriv + kappa",     mode="tree_derivatives", add_kappa=True,  add_virtual_supernode=False),
 ]
 
 
@@ -190,7 +189,6 @@ def _build_kappa_maps() -> tuple[dict[str, float], dict[str, float]]:
 def _make_loader(
     is_synthetic: bool,
     mode: str,
-    edge_direction: str,
     add_kappa: bool,
     add_virtual_supernode: bool,
     kappa_map: dict[str, float] | None = None,
@@ -198,7 +196,6 @@ def _make_loader(
     return GraphDataLoader(
         "graphs",
         mode=mode,
-        edge_direction=edge_direction,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
         is_synthetic=is_synthetic,
@@ -220,7 +217,6 @@ def _build_base_sizes(
                 loader = _make_loader(
                     is_synthetic=is_synth,
                     mode=mode,
-                    edge_direction="top_down",
                     add_kappa=False,
                     add_virtual_supernode=False,
                 )
@@ -278,7 +274,6 @@ def run_benchmark(args: argparse.Namespace) -> list[dict]:
                 loader = _make_loader(
                     is_synthetic=is_synth,
                     mode=mode,
-                    edge_direction=struct["edge_direction"],
                     add_kappa=struct["add_kappa"],
                     add_virtual_supernode=struct["add_virtual_supernode"],
                     kappa_map=kappa_map if struct["add_kappa"] else None,
@@ -494,7 +489,6 @@ def run_param_benchmark(args: argparse.Namespace, output_dir: Path) -> list[dict
     loader = _make_loader(
         is_synthetic=False,
         mode="tree_derivatives",
-        edge_direction="top_down",
         add_kappa=True,
         add_virtual_supernode=False,
         kappa_map=real_kappa_map,
@@ -681,7 +675,7 @@ def plot_param_benchmark(rows: list[dict], output_dir: Path) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark GINConv inference time vs. graph size (8 structural variants).",
+        description="Benchmark GINConv inference time vs. graph size (5 structural variants).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(

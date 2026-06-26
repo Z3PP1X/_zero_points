@@ -34,7 +34,6 @@ for _p in (str(_SRC_ROOT), str(_GNN_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from gnn.shared.utils.graph_utils import validate_edge_direction  # noqa: E402
 from gnn.weisfeiler_lehman import visualize  # noqa: E402
 from gnn.weisfeiler_lehman.wl_runner import (  # noqa: E402
     COLORING_SCHEMES,
@@ -73,7 +72,6 @@ def _default_dataset_name(synthetic: bool = False) -> str | None:
 def _load_graphs(
     dataset_name: str,
     mode: str,
-    edge_direction: str,
     add_kappa: bool,
     max_graphs: int | None,
     is_synthetic: bool = False,
@@ -85,7 +83,6 @@ def _load_graphs(
         loader = UnifiedDataLoader.get_instance(
             dataset_name=dataset_name,
             mode=mode,
-            edge_direction=edge_direction,
             add_kappa=add_kappa,
             is_synthetic=is_synthetic,
         )
@@ -100,7 +97,6 @@ def _load_graphs(
         loader = GraphDataLoader(
             name=dataset_name,
             mode=mode,
-            edge_direction=edge_direction,
             add_kappa=add_kappa,
             is_synthetic=is_synthetic,
         )
@@ -205,7 +201,6 @@ def _write_samples(
 def _run_mode(
     mode: str,
     dataset_name: str,
-    edge_direction: str,
     add_kappa: bool,
     args: argparse.Namespace,
     base_out: Path,
@@ -217,7 +212,6 @@ def _run_mode(
     graphs = _load_graphs(
         dataset_name,
         mode,
-        edge_direction,
         add_kappa,
         args.max_graphs,
         is_synthetic=args.synthetic,
@@ -258,7 +252,6 @@ def _run_mode(
         "add_kappa": add_kappa,
         "synthetic": args.synthetic,
         "dataset": dataset_name,
-        "edge_direction": edge_direction,
         "coloring": args.coloring,
         "symmetrized": not args.directed,
         "iterations": result.iterations,
@@ -341,13 +334,6 @@ def build_parser() -> argparse.ArgumentParser:
         "results go to synthetic-<mode> subdirs.",
     )
     parser.add_argument(
-        "--edge-direction",
-        type=str,
-        default="top_down",
-        choices=["top_down", "bottom_up", "bidirectional"],
-        help="AST edge direction used when loading graphs.",
-    )
-    parser.add_argument(
         "--coloring",
         type=str,
         default="label",
@@ -399,7 +385,6 @@ def main(argv: list[str] | None = None) -> int:
     if not dataset_name:
         print("[wl] No dataset given and none found in config_supervised.yaml.")
         return 2
-    edge_direction = validate_edge_direction(args.edge_direction)
 
     base_out = (
         Path(args.output_dir)
@@ -417,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     summaries: list[dict] = []
     for mode in args.mode:
         summary = _run_mode(
-            mode, dataset_name, edge_direction, args.add_kappa, args, base_out
+            mode, dataset_name, args.add_kappa, args, base_out
         )
         if summary is not None:
             summaries.append(summary)

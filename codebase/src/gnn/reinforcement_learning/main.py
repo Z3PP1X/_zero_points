@@ -81,7 +81,6 @@ def main() -> None:
 
     experiment = resolve_rl_setting(args.experiment, settings["experiment"])
     mode = resolve_rl_setting(args.mode, settings["mode"])
-    edge_direction = resolve_rl_setting(args.edge_direction, settings["edge_direction"])
     add_kappa = resolve_rl_setting(
         None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
     )
@@ -140,7 +139,7 @@ def main() -> None:
     )
     print(
         f"Optuna: {n_trials} trials × {timesteps} steps | "
-        f"Experiment: {experiment} | Mode: {mode} | Edge direction: {edge_direction} | "
+        f"Experiment: {experiment} | Mode: {mode} | "
         f"Add kappa: {add_kappa} | Add supernode: {add_virtual_supernode} | "
         f"Parallel envs: {n_envs} | Continue study: {continue_study} | Config: {config_path.name}"
     )
@@ -153,7 +152,6 @@ def main() -> None:
     unified_loader = UnifiedDataLoader.get_instance(
         dataset_name=experiment,
         mode=mode,
-        edge_direction=edge_direction,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
     )

@@ -20,7 +20,7 @@ def _write_base(path):
                     "layers_mp": 3,
                     "dim_inner": 128,
                 },
-                "expression_graph": {"mode": "tree_derivatives", "edge_direction": "top_down"},
+                "expression_graph": {"mode": "tree_derivatives"},
             }
         ),
         encoding="utf-8",

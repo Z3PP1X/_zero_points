@@ -11,10 +11,10 @@ from gnn.shared.utils.graph_vocab import (
     NODE_TYPE_ONEHOT, NODE_TYPE_ONEHOT_DIM,
     LABEL_ONEHOT_NAMES,
     SUPERNODE_NODE_TYPE, SUPERNODE_NODE_ID,
-    NODE_FEATURE_SCHEMA, EDGE_FEATURE_SCHEMA, EDGE_DIRECTIONS,
+    NODE_FEATURE_SCHEMA, EDGE_FEATURE_SCHEMA,
     _is_numeric_label, encode_label,
     node_type_onehot, root_color_onehot, label_onehot,
-    anchor_group_for_node, validate_edge_direction,
+    anchor_group_for_node,
 )
 from gnn.shared.utils.feature_extraction import (
     _compute_anchor_positional_encoding, _multi_source_bfs,

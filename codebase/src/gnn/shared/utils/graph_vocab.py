@@ -125,10 +125,9 @@ NODE_FEATURE_SCHEMA: list[str] = [
     "anchor_variable",
 ]
 
-# Edge attributes are not used; direction is encoded in edge_index topology only.
+# Edge attributes are not used; the AST is always encoded top-down (parent->child)
+# in edge_index topology only.
 EDGE_FEATURE_SCHEMA: list[str] = []
-
-EDGE_DIRECTIONS: tuple[str, ...] = ("top_down", "bottom_up", "bidirectional")
 
 
 def _is_numeric_label(label: str) -> bool:
@@ -181,12 +180,3 @@ def label_onehot(label: str) -> list[float]:
 
 def anchor_group_for_node(label: Any, node_type: Any) -> int | None:
     return ANCHOR_GROUP_BY_LABEL.get(label)
-
-
-def validate_edge_direction(edge_direction: str) -> str:
-    if edge_direction not in EDGE_DIRECTIONS:
-        raise ValueError(
-            f"Unsupported edge_direction {edge_direction!r}; "
-            f"expected one of {list(EDGE_DIRECTIONS)}"
-        )
-    return edge_direction

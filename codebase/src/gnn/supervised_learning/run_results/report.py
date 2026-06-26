@@ -30,7 +30,6 @@ CONFIG_COLS = (
     "act",
     "base_lr",
     "mode",
-    "edge_direction",
 )
 METRIC_COLS = {
     "epoch", "loss", "accuracy", "precision", "recall", "f1", "auc", "pr_auc",
@@ -337,7 +336,6 @@ def _provenance_section(results_dir: Path) -> tuple[str, dict]:
         "dataset": dataset.get("name"),
         "synthetic_dataset": expr.get("synthetic_dataset"),
         "mode": expr.get("mode"),
-        "edge_direction": expr.get("edge_direction"),
         "add_kappa": expr.get("add_kappa"),
         "add_virtual_supernode": expr.get("add_virtual_supernode"),
         "features": expr.get("features"),
@@ -352,7 +350,6 @@ def _provenance_section(results_dir: Path) -> tuple[str, dict]:
         ["Dataset", _fmt(record["dataset"])],
         ["Synthetic dataset", _fmt(record["synthetic_dataset"])],
         ["Graph mode", _fmt(record["mode"])],
-        ["Edge direction", _fmt(record["edge_direction"])],
         ["add_kappa", _fmt(record["add_kappa"])],
         ["add_virtual_supernode", _fmt(record["add_virtual_supernode"])],
         ["Epochs", _fmt(record["epochs"])],
