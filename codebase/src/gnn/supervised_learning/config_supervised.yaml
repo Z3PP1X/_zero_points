@@ -27,7 +27,6 @@ dataset:
 
 expression_graph:
   mode: tree_derivatives
-  edge_direction: top_down
   synthetic: True
   synthetic_dataset: run_20260604_154509/dataset_joined
   # Comma-separated list of NODE_FEATURE_SCHEMA column names to activate.

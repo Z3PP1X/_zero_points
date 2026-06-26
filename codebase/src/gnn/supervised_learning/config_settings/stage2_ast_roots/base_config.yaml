@@ -36,7 +36,6 @@ dataset:
 
 expression_graph:
   mode: tree_derivatives
-  edge_direction: top_down
   synthetic: True
   features:
     node: true       # node_type_* + root_color_* + label_*
