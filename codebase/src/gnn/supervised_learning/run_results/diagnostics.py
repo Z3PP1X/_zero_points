@@ -231,9 +231,13 @@ class DiagnosticPlotter:
         plt.close(fig)
 
     def _plot_roc_curve(
-        self, y_true, y_score, title: str, output_path: Path, pos_label: int, provenance: str = ""
+        self, y_true, y_score, title: str, output_path: Path, pos_label: int,
+        provenance: str = "", probs_pos=None,
     ):
-        scores = _positive_class_probs(y_score, pos_label)
+        # probs_pos lets a caller (calibration batch mode) inject Platt-calibrated
+        # positive-class probabilities; without it we derive them from the raw scores.
+        scores = (np.asarray(probs_pos, dtype=float)
+                  if probs_pos is not None else _positive_class_probs(y_score, pos_label))
         y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
         # Curve AND legend AUC use positive == pos_label with the SAME probability scores,
         # so the drawn curve can never disagree with its own AUC value (F-10).
@@ -259,15 +263,20 @@ class DiagnosticPlotter:
         plt.close(fig)
 
     def _plot_pr_curve(
-        self, y_true, y_score, title: str, output_path: Path, pos_label: int, provenance: str = ""
+        self, y_true, y_score, title: str, output_path: Path, pos_label: int,
+        provenance: str = "", probs_pos=None,
     ):
         """Precision-recall curve for picking the decision threshold.
 
         Marks the default 0.5 operating point and the F1-optimal point (with its
         threshold), so the curve answers "what cutoff should this model use?" — useful
         when high ROC-AUC coexists with weak precision/recall at the default 0.5.
+
+        ``probs_pos`` optionally injects Platt-calibrated positive-class probabilities
+        (calibration batch mode); otherwise they are derived from the raw scores.
         """
-        scores = _positive_class_probs(y_score, pos_label)
+        scores = (np.asarray(probs_pos, dtype=float)
+                  if probs_pos is not None else _positive_class_probs(y_score, pos_label))
         y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
         y_bin = (y_np == int(pos_label)).astype(int)
         precision, recall, thresholds = precision_recall_curve(y_bin, scores)
@@ -332,10 +341,18 @@ class DiagnosticPlotter:
         pos_label: int,
         n_bins: int = 10,
         provenance: str = "",
+        probs_pos=None,
     ):
-        """Reliability diagram: per-bin accuracy vs mean confidence (+ ECE)."""
-        probs = prediction_probabilities(y_score)
-        probs_pos = probs[:, int(pos_label)].detach().cpu().numpy()
+        """Reliability diagram: per-bin accuracy vs mean confidence (+ ECE).
+
+        ``probs_pos`` optionally injects Platt-calibrated positive-class probabilities
+        (calibration batch mode); otherwise they are derived from the raw scores.
+        """
+        if probs_pos is None:
+            probs = prediction_probabilities(y_score)
+            probs_pos = probs[:, int(pos_label)].detach().cpu().numpy()
+        else:
+            probs_pos = np.asarray(probs_pos, dtype=float)
         y_np = y_true.numpy() if hasattr(y_true, "numpy") else np.asarray(y_true)
         y_pos = (y_np == pos_label).astype(float)
 
