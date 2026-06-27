@@ -109,7 +109,7 @@ def test_finalize_drains_buffered_terminal_state_before_sampling_actions():
     workflow = PpoOptunaWorkflow(
         gateway=gateway,
         preprocessor=MagicMock(),
-        experiment_name="nur_f",
+        experiment_name="stage3_full_graph",
         timesteps_per_trial=100,
     )
 

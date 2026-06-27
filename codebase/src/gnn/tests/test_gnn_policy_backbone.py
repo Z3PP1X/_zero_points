@@ -2,7 +2,7 @@ import torch
 from feature_layout import GNN_ACTIVATION_CHOICES
 from gnn.shared.models.gnn_backbones import ExpressionGNN
 
-INPUT_DIM = 28   # NATIVE_NODE_FEATURE_COUNT
+INPUT_DIM = 28   # arbitrary node-feature width for the backbone smoke test
 
 
 def _make_batch(num_nodes=10, num_graphs=2, input_dim=INPUT_DIM):

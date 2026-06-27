@@ -12,27 +12,27 @@ A PPO policy learns to steer a Mathematica solver. The GNN backbone (shared with
 ## Two-phase design
 
 ### Phase 1 — Optuna hyperparameter tuning (`main.py`)
-Searches PPO structure, GNN backbone, and reward coefficients in parallel; results persist to a SQLite Optuna DB (`optuna_<experiment>_<...>.db`).
+Searches PPO structure, GNN backbone, and reward coefficients in parallel; results persist to a SQLite Optuna DB (`optuna_<stage>_<...>.db`).
 
 ```bash
-python main.py --config config_rl.yaml --experiment kein_inv --n_trials 50 --timesteps 16384 --n-envs 4
+python main.py --config config_rl.yaml --stage 3 --n_trials 50 --timesteps 16384 --n-envs 4
 python main.py --config config_rl.yaml --edge-direction bidirectional
-python main.py --config config_rl.yaml --experiment kein_inv --continue-study --n-envs 4   # resume
+python main.py --config config_rl.yaml --stage stage3_full_graph --continue-study --n-envs 4   # resume
 ```
-Experiments (graph folders): `nur_f`, `f_fp_roh`, `kein_inv`. Flags: `--timesteps` (PPO steps/trial), `--n_trials`, `--n-envs` (parallel Mathematica envs), `--continue-study`.
+**Dataset/graph structure comes from a supervised-learning stage** (`--stage <1-4|folder>`), reading the `data:` + `expression_graph:` blocks of `supervised_learning/config_settings/<stage>/base_config.yaml` — one shared source of truth across both pipelines. The legacy `--experiment nur_f|f_fp_roh|kein_inv` selector is **removed** (those names never mapped to real data; the graphs always came from `datasets/graphs/`). Flags: `--stage`, `--timesteps` (PPO steps/trial), `--n_trials`, `--n-envs` (parallel Mathematica envs), `--continue-study`, plus the shared `--mode/--add-kappa/--add-virtual-supernode/--feature-groups/--positional-encoding/--active-features` overrides on top of the stage.
 
 ### Phase 2 — final training of the best trial (`train_best.py`)
 Reads the best trial from the Optuna DB and trains long.
 
 ```bash
-python train_best.py --config config_rl.yaml --db optuna_kein_inv_n45g69_20260527_163125.db --dry-run
-python train_best.py --config config_rl.yaml --db optuna_kein_inv.db --timesteps 300000 --positional-encoding anchor_periodic --n-envs 4
+python train_best.py --config config_rl.yaml --db optuna_stage3_full_graph_n45g69_20260527_163125.db --dry-run
+python train_best.py --config config_rl.yaml --db optuna_stage3_full_graph.db --stage 3 --timesteps 300000 --positional-encoding anchor_periodic --n-envs 4
 ```
 `--db` is **required**. Other flags: `--timesteps` (default 250000 from yaml), `--save-dir`, `--model-name`, `--dry-run` (load hparams + init only), `--no-torch-compile`.
 
 ## Config resolution (config_rl.yaml → CLI override)
 
-`config_rl.yaml` is the single source of defaults, organized into `experiment:`, `optuna:`, `gateway:`, `train_best:` blocks. `rl_config.py` resolves it: `read_rl_settings()` flattens the YAML; explicit CLI flags override YAML via `resolve_rl_setting()`; shared graph args are added by `add_shared_graph_args()`. Always route edge-direction through `validate_edge_direction`. Choice tuples (`RL_EXPERIMENT_CHOICES`, `RL_MODE_CHOICES`, `RL_EDGE_DIRECTION_CHOICES`) live in `rl_config.py`.
+`config_rl.yaml` is the single source of runtime defaults, organized into a top-level `stage:` selector plus `optuna:`, `gateway:`, `train_best:` blocks. The dataset/graph definition lives in the SL stage config, not here. `rl_config.py` resolves it: `read_rl_settings()` flattens the YAML; `resolve_stage_dataset(stage)` reuses `supervised_learning.run_all._resolve_stage` to load the stage's `data:`+`expression_graph:` blocks into a `StageDataset` (label, mode, kappa, supernode, `graphs_path`, `curated_csv`, feature mapping); explicit CLI flags override via `resolve_rl_setting()`; shared graph args (incl. `--stage`) are added by `add_shared_graph_args()`. Always route edge-direction through `validate_edge_direction`. Choice tuples (`RL_MODE_CHOICES`, `RL_EDGE_DIRECTION_CHOICES`) live in `rl_config.py`.
 
 ## The Mathematica gateway & env (the moving parts)
 

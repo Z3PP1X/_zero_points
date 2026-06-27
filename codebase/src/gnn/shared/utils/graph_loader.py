@@ -202,8 +202,13 @@ class GraphDataLoader:
         if mem_key in self._converted_cache:
             return self._converted_cache[mem_key].clone()
 
+        # An explicit non-None kappa_value (the RL live-kappa path) enables augmentation
+        # regardless of self.add_kappa — it is the dynamic per-step mechanism, distinct
+        # from the static add_kappa ablation knob. Supervised never passes kappa_value, so
+        # `kappa_value is not None` is False there and the add_kappa-gated behaviour is
+        # unchanged. The is_temp/kappas_dir_explicit guard below is intentionally kept.
         use_augmented = False
-        if self.add_kappa and self.kappas_dir.exists() and any(self.kappas_dir.glob("**/*.json")):
+        if (self.add_kappa or kappa_value is not None) and self.kappas_dir.exists() and any(self.kappas_dir.glob("**/*.json")):
             source_str = str(self.source_path)
             is_temp = (
                 "/tmp" in source_str

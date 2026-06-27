@@ -69,6 +69,9 @@ def test_reinforcement_learning_preprocessor_dynamic_updates(tmp_path):
         "currentX": 1.5,
         "fx": -2.7,
         "yTarget": 0.0,
+        # kappa is now a required live-state key (drives per-step augmentation);
+        # 0 = no kappa subgraph, so the base graph is unchanged (num_nodes == 2).
+        "kappa": 0,
         "uuid": "test-uuid-123"
     }
 
@@ -208,6 +211,7 @@ def test_dynamic_feature_slicing_and_selection(tmp_path):
         "currentX": 3.14,
         "fx": -1.2,
         "yTarget": 0.5,
+        "kappa": 0,  # required live-state key; 0 = no kappa subgraph
         "uuid": "uuid-slice"
     }
 

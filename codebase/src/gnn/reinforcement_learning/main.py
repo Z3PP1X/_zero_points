@@ -11,12 +11,12 @@ from gnn.reinforcement_learning.ppo_optuna_workflow import PpoOptunaWorkflow
 from gnn.reinforcement_learning.preprocessor import Preprocessor
 from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.rl_config import (
-    RL_EXPERIMENT_CHOICES,
     add_shared_graph_args,
     load_yaml_config,
     read_rl_settings,
     resolve_rl_features,
     resolve_rl_setting,
+    resolve_stage_dataset,
 )
 
 RECEIVER_PORT = 5650
@@ -28,12 +28,6 @@ CONTROL_PORT = 6000
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Start GNN RL Pipeline with SB3 & Optuna")
     add_shared_graph_args(parser)
-    parser.add_argument(
-        "--experiment",
-        type=str,
-        default=None,
-        choices=list(RL_EXPERIMENT_CHOICES),
-    )
     parser.add_argument("--timesteps", type=int, default=None)
     parser.add_argument("--n_trials", type=int, default=None)
     parser.add_argument(
@@ -79,16 +73,14 @@ def main() -> None:
     config_path = script_dir / args.config
     settings = read_rl_settings(load_yaml_config(config_path))
 
-    experiment = resolve_rl_setting(args.experiment, settings["experiment"])
-    mode = resolve_rl_setting(args.mode, settings["mode"])
-    add_kappa = resolve_rl_setting(
-        None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
-    )
-    add_virtual_supernode = resolve_rl_setting(
-        None,
-        settings["add_virtual_supernode"],
-        is_flag=True,
-        flag_set=args.add_virtual_supernode,
+    stage = resolve_rl_setting(args.stage, settings["stage"])
+    stage_dataset = resolve_stage_dataset(stage)
+    experiment = stage_dataset.label
+
+    mode = resolve_rl_setting(args.mode, stage_dataset.mode)
+    add_kappa = bool(resolve_rl_setting(args.add_kappa, stage_dataset.add_kappa))
+    add_virtual_supernode = bool(
+        resolve_rl_setting(args.add_virtual_supernode, stage_dataset.add_virtual_supernode)
     )
     timesteps = int(resolve_rl_setting(args.timesteps, settings["timesteps"]))
     n_trials = int(resolve_rl_setting(args.n_trials, settings["n_trials"]))
@@ -110,7 +102,7 @@ def main() -> None:
     )
 
     feature_selection, active_features = resolve_rl_features(
-        load_yaml_config(config_path).get("experiment") or {},
+        stage_dataset.expression_graph,
         feature_groups=args.feature_groups,
         node_features=args.node_features,
         topology_features=args.topology_features,
@@ -139,10 +131,11 @@ def main() -> None:
     )
     print(
         f"Optuna: {n_trials} trials × {timesteps} steps | "
-        f"Experiment: {experiment} | Mode: {mode} | "
+        f"Stage: {stage_dataset.label} | Mode: {mode} | "
         f"Add kappa: {add_kappa} | Add supernode: {add_virtual_supernode} | "
         f"Parallel envs: {n_envs} | Continue study: {continue_study} | Config: {config_path.name}"
     )
+    print(f"Graphs: {stage_dataset.graphs_path} | Curated CSV: {stage_dataset.curated_csv}")
     print(f"Feature groups: {feature_selection.enabled_groups()}")
     print(f"Positional encodings: {list(feature_selection.positional_encodings)}")
     print(f"Active node features: {feature_selection.summary()}")
@@ -150,10 +143,12 @@ def main() -> None:
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
 
     unified_loader = UnifiedDataLoader.get_instance(
-        dataset_name=experiment,
+        dataset_name=stage_dataset.dataset_name,
         mode=mode,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
+        csv_path=stage_dataset.curated_csv,
+        graphs_path=stage_dataset.graphs_path,
     )
     loader = unified_loader.graph_loader
 

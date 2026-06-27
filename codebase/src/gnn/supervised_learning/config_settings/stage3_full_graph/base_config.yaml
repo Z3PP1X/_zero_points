@@ -50,7 +50,7 @@ expression_graph:
   #   add_kappa:             κ-Teilgraph einbetten — vergrößert den Graph erheblich
   # ---------------------------------------------------------------------------
   add_virtual_supernode: false
-  add_kappa: false
+  add_kappa: true
 
   # ---------------------------------------------------------------------------
   # OPTIONAL — Problembasierte Skalar-Features (default: aus)
@@ -62,7 +62,7 @@ expression_graph:
   #   klarem Fehler ab. Nutzbar mit dem Curated-Datensatz (synthetic: false) oder einem
   #   Synthetic-CSV, das diese Spalten enthält.
   # ---------------------------------------------------------------------------
-  use_scalar_features: false
+  use_scalar_features: true
   scalar_features: "x0,y_target,fx,d1x,d2x"
 
 train:
@@ -90,7 +90,7 @@ model:
 
 gnn:
   layers_mp: 3
-  dim_inner: 132
+  dim_inner: 64
   layer_type: ginconv
   act: prelu
   dropout: 0.2

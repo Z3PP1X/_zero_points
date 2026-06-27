@@ -2,18 +2,13 @@
 # 2 x 3 x 2 x 2 = 24 Konfigurationen
 
 gnn.dim_inner:
-  - 64
-  - 128
+  - 32
 
 gnn.layers_mp:
-  - 2
-  - 3
-  - 4
+  - 1
 
 gnn.dropout:
-  - 0.0
   - 0.2
 
 model.graph_pooling:
   - mean
-  - add

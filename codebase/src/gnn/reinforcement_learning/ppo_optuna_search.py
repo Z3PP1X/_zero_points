@@ -8,7 +8,6 @@ from gnn.reinforcement_learning.feature_layout import (
     FIXED_GNN_ACTIVATION,
     FIXED_GNN_LAYER_COUNT,
     GLOBAL_INPUT_DIM_CHOICES,
-    NODE_INPUT_DIM_CHOICES,
     FeatureLayout,
 )
 from gnn.reinforcement_learning.ppo_trial_config import (
@@ -51,9 +50,6 @@ def sample_trial_configuration(
         num_layers=FIXED_GNN_LAYER_COUNT,
         dropout=FIXED_DROPOUT,
         layout=FeatureLayout(
-            node_input_dim=trial.suggest_categorical(
-                "node_input_dim", NODE_INPUT_DIM_CHOICES
-            ),
             global_input_dim=trial.suggest_categorical(
                 "global_input_dim", GLOBAL_INPUT_DIM_CHOICES
             ),

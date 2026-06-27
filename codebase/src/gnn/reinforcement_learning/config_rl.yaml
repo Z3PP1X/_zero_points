@@ -2,28 +2,18 @@
 # Central overview of all CLI settings for the GNN reinforcement-learning pipeline.
 # Values here are defaults; command-line flags override them at runtime.
 
-# Dataset / graph experiment
-# CLI: --experiment, --mode, --edge-direction, --add-kappa, --add-virtual-supernode, --feature-groups, --positional-encoding
-experiment:
-  name: nur_f  # nur_f | f_fp_roh | kein_inv
-  mode: tree_derivatives  # tree | tree_derivatives
-  add_kappa: false  # merge kappa (h-function) subgraphs from datasets/kappas/ (CLI: --add-kappa)
-  add_virtual_supernode: false  # add a fully-connected virtual supernode (CLI: --add-virtual-supernode)
-
-  # Feature classes: node | topology | positional | edge
-  # Each category: true -> all members | false -> none | [a, b] -> only these
-  features:
-    node: true
-    topology: true
-    # Anchor positional encoding (1/(1+hops) to nearest operator anchor per semantic
-    # group). Members: anchor_additive, anchor_scaling, anchor_periodic,
-    # anchor_exponential, anchor_transcendental. true = all groups, false = none.
-    # NOTE: incompatible with add_virtual_supernode (the supernode collapses distances).
-    positional: true
-    edge: true
-
-  # Optional explicit override (disables grouped toggles above when non-empty)
-  active_features: ""
+# Dataset / graph structure
+# The dataset paths, graph mode, active feature set, kappa and virtual-supernode
+# flags all come from a supervised-learning stage config — a single source of truth
+# shared with the supervised pipeline (supervised_learning/config_settings/<stage>/
+# base_config.yaml, its `data:` + `expression_graph:` blocks). RL ignores the SL
+# train/model/gnn keys (its architecture is Optuna-searched).
+#
+# Override on the CLI with: --stage, --mode, --add-kappa, --add-virtual-supernode,
+#   --feature-groups, --positional-encoding, --active-features
+# stage4_experiment = all 32 features, kappa off, supernode off (kappa-free full graph).
+# stage3_full_graph is the same but enables add_kappa → needs kappa data; opt in explicitly.
+stage: stage4_experiment  # 1|2|3|4 or folder name (stage1_pure_ast … stage4_experiment)
 
 # Reward: potential-based shaping (PBRS) -- see reward.py and
 # supervised_learning/handover_20260627_120213/reward-redesign-plan.md.

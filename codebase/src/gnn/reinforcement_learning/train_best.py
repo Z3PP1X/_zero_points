@@ -43,12 +43,12 @@ from gnn.reinforcement_learning.feature_layout import (
 from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
 from gnn.reinforcement_learning.rl_config import (
-    RL_EXPERIMENT_CHOICES,
     add_shared_graph_args,
     load_yaml_config,
     read_rl_settings,
     resolve_rl_features,
     resolve_rl_setting,
+    resolve_stage_dataset,
 )
 
 RECEIVER_PORT = 5650
@@ -211,7 +211,6 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
     )
     
     layout = FeatureLayout(
-        node_input_dim=int(params["node_input_dim"]),
         global_input_dim=int(params["global_input_dim"]),
         padded_node_feature_count=padded_node_feature_count,
         active_feature_names=active_feature_names,
@@ -246,14 +245,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--db",
         type=str,
         required=True,
-        help="Path to the SQLite database containing Optuna studies (e.g. optuna_kein_inv_n4g6_20260520_011237.db)",
-    )
-    parser.add_argument(
-        "--experiment",
-        type=str,
-        default=None,
-        choices=list(RL_EXPERIMENT_CHOICES),
-        help="The experiment name / graph directory to use.",
+        help="Path to the SQLite database containing Optuna studies (e.g. optuna_stage3_full_graph_n4g6_20260520_011237.db)",
     )
     parser.add_argument(
         "--study-name",
@@ -330,16 +322,14 @@ def main() -> None:
     config_path = script_dir / args.config
     settings = read_rl_settings(load_yaml_config(config_path))
 
-    experiment = resolve_rl_setting(args.experiment, settings["experiment"])
-    mode = resolve_rl_setting(args.mode, settings["mode"])
-    add_kappa = resolve_rl_setting(
-        None, settings["add_kappa"], is_flag=True, flag_set=args.add_kappa
-    )
-    add_virtual_supernode = resolve_rl_setting(
-        None,
-        settings["add_virtual_supernode"],
-        is_flag=True,
-        flag_set=args.add_virtual_supernode,
+    stage = resolve_rl_setting(args.stage, settings["stage"])
+    stage_dataset = resolve_stage_dataset(stage)
+    experiment = stage_dataset.label
+
+    mode = resolve_rl_setting(args.mode, stage_dataset.mode)
+    add_kappa = bool(resolve_rl_setting(args.add_kappa, stage_dataset.add_kappa))
+    add_virtual_supernode = bool(
+        resolve_rl_setting(args.add_virtual_supernode, stage_dataset.add_virtual_supernode)
     )
     timesteps = int(
         resolve_rl_setting(args.timesteps, settings["train_best_timesteps"])
@@ -364,7 +354,7 @@ def main() -> None:
     )
 
     feature_selection, active_features = resolve_rl_features(
-        load_yaml_config(config_path).get("experiment") or {},
+        stage_dataset.expression_graph,
         feature_groups=args.feature_groups,
         node_features=args.node_features,
         topology_features=args.topology_features,
@@ -396,7 +386,9 @@ def main() -> None:
 
     print("\n--- GNN RL RUN CONFIGURATION ---")
     print(f"  Config:           {config_path.name}")
-    print(f"  Experiment:       {experiment}")
+    print(f"  Stage:            {stage_dataset.label}")
+    print(f"  Graphs:           {stage_dataset.graphs_path}")
+    print(f"  Curated CSV:      {stage_dataset.curated_csv}")
     print(f"  Mode:             {mode}")
     print(f"  Add kappa:        {add_kappa}")
     print(f"  Add supernode:    {add_virtual_supernode}")
@@ -434,10 +426,12 @@ def main() -> None:
     )
     from gnn.shared.utils.unified_loader import UnifiedDataLoader
     unified_loader = UnifiedDataLoader.get_instance(
-        dataset_name=experiment,
+        dataset_name=stage_dataset.dataset_name,
         mode=mode,
         add_kappa=add_kappa,
         add_virtual_supernode=add_virtual_supernode,
+        csv_path=stage_dataset.curated_csv,
+        graphs_path=stage_dataset.graphs_path,
     )
     loader = unified_loader.graph_loader
     preprocessor = Preprocessor(loader=loader, mode=mode, active_features=active_features)
