@@ -16,7 +16,11 @@ import torch.nn.functional as F
 from sklearn.metrics import auc as sk_auc
 from sklearn.metrics import roc_auc_score, roc_curve
 
-from gnn.supervised_learning.loader_graphgym import compute_binary_metrics
+from gnn.supervised_learning.loader_graphgym import (
+    _hard_predictions,
+    compute_binary_metrics,
+)
+from gnn.supervised_learning.run_results.eval_metrics import prediction_probabilities
 from gnn.supervised_learning.run_results.diagnostics import (
     _positive_class_probs,
     _provenance_subtitle,
@@ -75,6 +79,67 @@ def test_positive_class_probs_are_valid_probabilities():
     for pos in (0, 1):
         s = _positive_class_probs(scores, pos)
         assert s.min() >= 0.0 and s.max() <= 1.0
+
+
+# --------------------------------------------------------------- single-logit (binary head)
+# The production GraphGym head is a SINGLE logit; pred_score = sigmoid(logit) = P(class 1).
+# These guard the two display-layer bugs found in the final_model_selection run:
+#   Bug 1 — _hard_predictions returned a positive-class INDICATOR (1 == predicted class 0)
+#           for pos_label==0, inverting accuracy/precision/recall/f1.
+#   Bug 2 — prediction_probabilities sigmoided the already-sigmoid score a second time,
+#           corrupting ECE / Brier / reliability (but not the rank-based AUC).
+
+
+def _toy_sigmoid_scores(n=600, class1_rate=0.6, sep=1.3, seed=0):
+    """Labels + a correlated single-column P(class 1) (what the binary head emits)."""
+    rng = np.random.default_rng(seed)
+    y = (rng.random(n) < class1_rate).astype(int)
+    logit = rng.normal(0.0, 0.7, n) + (y == 1) * sep - (y == 0) * sep
+    p1 = torch.sigmoid(torch.tensor(logit, dtype=torch.float))
+    return torch.tensor(y), p1
+
+
+def test_hard_predictions_single_logit_are_class_labels_not_indicators():
+    """_hard_predictions must return y_true-encoded labels for BOTH pos_label values.
+
+    Regression for Bug 1: for a good single-logit model the hard accuracy is high (~the
+    fraction separated), never its 1 - acc mirror image, regardless of which class is the
+    metric positive. The predicted LABEL is pos_label-invariant (only the decision cutoff
+    on P(class 1) matters), so both pos_label calls return identical labels at thresh 0.5.
+    """
+    y, p1 = _toy_sigmoid_scores(class1_rate=0.6)
+    pred0 = _hard_predictions(p1, pos_label=0, thresh=0.5).numpy()
+    pred1 = _hard_predictions(p1, pos_label=1, thresh=0.5).numpy()
+    # labels, not indicators: identical regardless of the reporting positive class
+    assert np.array_equal(pred0, pred1)
+    # at thresh 0.5 the label is argmax(P): predict class 1 iff P(class 1) > 0.5
+    assert np.array_equal(pred0, (p1.numpy() > 0.5).astype(int))
+    acc = float((pred0 == y.numpy()).mean())
+    assert acc > 0.75  # a separated model — NOT the inverted ~0.20
+
+
+def test_compute_binary_metrics_single_logit_not_inverted():
+    """f1/accuracy on a single-logit score reflect the real (good) model, not its inverse.
+
+    Directly exercises the final_model_selection failure mode: minority = class 0 so
+    pos_label defaults to 0, the branch that used to invert.
+    """
+    y, p1 = _toy_sigmoid_scores(class1_rate=0.7)  # class 0 is the minority -> pos_label 0
+    m0 = compute_binary_metrics(y, p1, pos_label=0, round_digits=6)
+    # accuracy of the actual labels, computed independently of the metric code
+    direct_acc = float(((p1.numpy() > 0.5).astype(int) == y.numpy()).mean())
+    assert abs(m0["accuracy"] - direct_acc) < 1e-6
+    assert m0["accuracy"] > 0.7 and m0["f1"] > 0.5  # not the inverted mirror
+
+
+def test_prediction_probabilities_no_double_sigmoid_on_single_logit():
+    """A 1-col probability input is passed through unchanged (Bug 2 would re-sigmoid it)."""
+    p1 = torch.tensor([0.05, 0.3, 0.5, 0.8, 0.97])
+    probs = prediction_probabilities(p1)
+    assert torch.allclose(probs[:, 1], p1, atol=1e-6)
+    assert torch.allclose(probs[:, 0], 1.0 - p1, atol=1e-6)
+    # double sigmoid would have squashed everything toward [0.5, 0.73]
+    assert probs[:, 1].min() < 0.1 and probs[:, 1].max() > 0.9
 
 
 @pytest.mark.parametrize("pos_label", [0, 1])

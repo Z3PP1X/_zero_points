@@ -86,12 +86,22 @@ def _positive_class_scores(pred_score, pos_label: int):
 
 
 def _hard_predictions(pred_score, pos_label: int, thresh: float):
+    """Hard 0/1 CLASS LABELS (same encoding as ``y_true``), NOT a positive-class indicator.
+
+    Single-logit head: ``scores = P(class 1)``. We threshold the positive class's
+    probability (``thresh`` is a cutoff on P(positive)) and map the decision back to the
+    actual class label — ``pos_label`` when the positive class wins, else the other class.
+    The previous ``pos_label==0`` branch returned ``(scores <= 1-thresh)`` directly, i.e.
+    ``1`` for a predicted class 0 — the OPPOSITE of y_true's encoding — which inverted every
+    hard-label metric (accuracy/precision/recall/f1) whenever the training minority was
+    class 0. AUC/PR-AUC were unaffected (they use ``_positive_class_scores``).
+    """
     if len(pred_score.shape) > 1 and pred_score.shape[1] > 1:
         return pred_score.argmax(dim=1)
     scores = _to_numpy(pred_score)
-    if pos_label == 1:
-        return torch.tensor((scores > thresh).astype(int))
-    return torch.tensor((scores <= (1.0 - thresh)).astype(int))
+    pos_scores = scores if pos_label == 1 else 1.0 - scores
+    predicted_positive = (pos_scores > thresh).astype(int)
+    return torch.tensor(predicted_positive if pos_label == 1 else 1 - predicted_positive)
 
 
 def compute_binary_metrics(true, pred_score, round_digits=None, pos_label: int | None = None):

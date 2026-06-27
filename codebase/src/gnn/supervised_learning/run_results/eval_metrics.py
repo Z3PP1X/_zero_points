@@ -71,14 +71,26 @@ def _as_tensor(values) -> torch.Tensor:
 
 
 def prediction_probabilities(pred_score) -> torch.Tensor:
-    """Return class probabilities [N, C] from logits, log-softmax, or sigmoid scores."""
+    """Return class probabilities [N, C] from the model's ALREADY-ACTIVATED scores.
+
+    The supervised loss emits activated scores as ``pred_score`` (the logger/metrics
+    contract — see ``weighted_cross_entropy``): 2-col log-softmax for the multiclass head,
+    or a single column ``sigmoid(logit) = P(class 1)`` for the binary head. Both are
+    converted to a proper [N, 2] probability matrix here.
+
+    IMPORTANT: the single-column input is already a probability in [0, 1]; it must NOT be
+    passed through ``sigmoid`` again. The previous version did exactly that (a double
+    sigmoid), squashing every score into a narrow band around 0.5 and corrupting the
+    reliability diagram, ECE and Brier score (and the saved ``predictions_*.npz``). The
+    monotone squash left AUC/PR-AUC unchanged, which is why the bug hid for so long.
+    """
     pred_t = _as_tensor(pred_score).float()
     if pred_t.ndim > 1 and pred_t.shape[1] > 1:
         if torch.all(pred_t <= 1e-5):
             return pred_t.exp()
         return F.softmax(pred_t, dim=-1)
 
-    scores = torch.sigmoid(pred_t.squeeze(-1) if pred_t.ndim > 1 else pred_t)
+    scores = pred_t.squeeze(-1) if pred_t.ndim > 1 else pred_t
     if scores.ndim == 0:
         scores = scores.unsqueeze(0)
     return torch.stack([1.0 - scores, scores], dim=-1)
