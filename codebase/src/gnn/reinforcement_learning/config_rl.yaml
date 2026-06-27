@@ -25,6 +25,15 @@ experiment:
   # Optional explicit override (disables grouped toggles above when non-empty)
   active_features: ""
 
+# Reward: potential-based shaping (PBRS) -- see reward.py and
+# supervised_learning/handover_20260627_120213/reward-redesign-plan.md.
+#   Phi(s) = -log10(clip(lastStepError, tolerance, error_ref) / tolerance)
+#   r_total = lambda_s*(gamma*Phi(s')*(1-is_last) - Phi(s)) - w_time*dAbsTime/timeBudget
+#             (+ record bonus + budget hinge on the last step)
+# Weights lambda_s/w_time/w_record/w_over are Optuna-searched (ppo_optuna_search.py).
+# The PBRS gamma is tied to the PPO discount (ppo.gamma); error_ref is a fixed
+# structural constant (default 1.0 in RewardCalculator / RewardShapingParameters).
+
 # Optuna hyperparameter search (main.py)
 optuna:
   timesteps: 10000

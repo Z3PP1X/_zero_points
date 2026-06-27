@@ -21,17 +21,27 @@ NODE_INPUT_DIM_CHOICES = (4, 5)
 EDGE_INPUT_DIM_CHOICES = (4, 8)
 GLOBAL_INPUT_DIM_CHOICES = (6, 8)
 
+# Fixed architecture — NOT Optuna-searched. Set once here and applied identically in
+# both the search builder (ppo_optuna_search) and the final-training builder
+# (train_best). dim_inner == the GNN hidden width.
+FIXED_DIM_INNER = 32            # GNN hidden width ("dim_inner")
+FIXED_GNN_LAYER_COUNT = 1       # number of message-passing layers
+FIXED_DROPOUT = 0.2             # per-graph feature-column dropout (ExpressionGNN)
+FIXED_GNN_ACTIVATION = "prelu"  # sole activation function
+
 # Suffix for Optuna study/DB names. Bump (or change choices) when categorical search
 # spaces change so load_if_exists does not reuse incompatible distributions.
+# edge_input_dim is no longer searched (GIN convs ignore edge features), so it is
+# absent from both the search space and this suffix.
 OPTUNA_SEARCH_SPACE_SUFFIX = (
     f"n{''.join(str(choice) for choice in NODE_INPUT_DIM_CHOICES)}"
-    f"e{''.join(str(choice) for choice in EDGE_INPUT_DIM_CHOICES)}"
     f"g{''.join(str(choice) for choice in GLOBAL_INPUT_DIM_CHOICES)}"
     f"_{current_timestamp}"
 )
 
-HIDDEN_DIM_CHOICES = (64, 128, 256, 512)
-GNN_LAYER_COUNT_CHOICES = (1, 2, 3)
+# Activations the GNN backbone supports. The RL pipeline is fixed to
+# FIXED_GNN_ACTIVATION; this tuple is kept for the backbone unit test that builds
+# every variant.
 GNN_ACTIVATION_CHOICES = (
     "prelu",
     "relu",

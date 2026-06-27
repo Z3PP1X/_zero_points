@@ -10,7 +10,13 @@ import torch
 from optuna.pruners import MedianPruner
 from stable_baselines3 import PPO
 
-from gnn.reinforcement_learning.feature_layout import OPTUNA_SEARCH_SPACE_SUFFIX
+from gnn.reinforcement_learning.feature_layout import (
+    FIXED_DIM_INNER,
+    FIXED_DROPOUT,
+    FIXED_GNN_ACTIVATION,
+    FIXED_GNN_LAYER_COUNT,
+    OPTUNA_SEARCH_SPACE_SUFFIX,
+)
 from gnn.shared.models.gnn_backbones import ExpressionGNN
 from gnn.reinforcement_learning.mathematica_vec_env import MathematicaVecEnv, build_mathematica_training_env
 from gnn.reinforcement_learning.gateway.network_gateway import CONTROL_FRESH_TRIAL_ENV, NetworkGateway
@@ -126,7 +132,12 @@ class PpoOptunaWorkflow:
         with mlflow.start_run(run_name=f"Trial_{trial.number}", nested=True):
             try:
                 mlflow.log_params(trial.params)
-                mlflow.log_param("reward_version", "v2_tolerance")
+                mlflow.log_param("reward_version", "v3_pbrs")
+                # Fixed (non-searched) architecture — record for traceability.
+                mlflow.log_param("dim_inner", FIXED_DIM_INNER)
+                mlflow.log_param("gnn_layers", FIXED_GNN_LAYER_COUNT)
+                mlflow.log_param("dropout", FIXED_DROPOUT)
+                mlflow.log_param("gnn_activation", FIXED_GNN_ACTIVATION)
                 model.learn(total_timesteps=self.timesteps_per_trial, callback=callback)
                 self._finalize_episode_state(env)
                 env.close()
@@ -199,15 +210,12 @@ class PpoOptunaWorkflow:
     ) -> RewardCalculator:
         reward = trial_config.reward
         return RewardCalculator(
-            basis_reward=reward.basis_reward,
-            gamma=reward.reward_gamma,
-            alpha=reward.alpha,
-            time_tolerance=reward.time_tolerance,
-            step_cost_lambda=reward.step_cost_lambda,
-            time_bad_penalty=reward.time_bad_penalty,
-            solver_mismatch_penalty=reward.solver_mismatch_penalty,
-            solver_match_bonus=reward.solver_match_bonus,
-            solver_wrong_slow_coef=reward.solver_wrong_slow_coef,
+            gamma=trial_config.ppo.gamma,  # PBRS gamma MUST equal the PPO discount
+            lambda_s=reward.lambda_s,
+            w_time=reward.w_time,
+            w_record=reward.w_record,
+            w_over=reward.w_over,
+            error_ref=reward.error_ref,
         )
 
     def _build_training_env(self, reward_calculator: RewardCalculator):
@@ -230,6 +238,7 @@ class PpoOptunaWorkflow:
             global_hidden_dim=policy.layout.global_input_dim,
             activation=policy.activation,
             num_layers=policy.num_layers,
+            dropout=policy.dropout,
             classify=False,
         )
         policy_kwargs = {

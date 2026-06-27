@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -32,8 +34,11 @@ from gnn.shared.models.gnn_backbones import ExpressionGNN
 from gnn.reinforcement_learning.sb3_extractor import CustomGNNFeaturesExtractor
 from gnn.reinforcement_learning.feature_layout import (
     FeatureLayout,
-    EDGE_INPUT_DIM_CHOICES,
     NATIVE_NODE_FEATURE_COUNT,
+    FIXED_DIM_INNER,
+    FIXED_GNN_LAYER_COUNT,
+    FIXED_DROPOUT,
+    FIXED_GNN_ACTIVATION,
 )
 from gnn.shared.utils.feature_config import validate_positional_supernode_compatibility
 from gnn.reinforcement_learning.ppo_trial_config import PpoHyperparameters, RewardShapingParameters, GnnPolicySpec, TrialConfiguration
@@ -198,29 +203,27 @@ def build_trial_configuration(params: dict, override_seed: int | None = None, pa
     )
     
     reward = RewardShapingParameters(
-        alpha=float(params["alpha"]),
-        basis_reward=float(params["basis_reward"]),
-        reward_gamma=float(params["reward_gamma"]),
-        step_cost_lambda=float(params["step_cost_lambda"]),
-        time_bad_penalty=float(params["time_bad_penalty"]),
-        solver_mismatch_penalty=float(params["solver_mismatch_penalty"]),
-        solver_match_bonus=float(params["solver_match_bonus"]),
-        solver_wrong_slow_coef=float(params["solver_wrong_slow_coef"]),
-        time_tolerance=float(params.get("time_tolerance", 0.03)),
+        lambda_s=float(params["lambda_s"]),
+        w_time=float(params["w_time"]),
+        w_record=float(params["w_record"]),
+        w_over=float(params["w_over"]),
+        error_ref=float(params.get("error_ref", 1.0)),
     )
     
     layout = FeatureLayout(
         node_input_dim=int(params["node_input_dim"]),
         global_input_dim=int(params["global_input_dim"]),
-        edge_input_dim=int(params.get("edge_input_dim", EDGE_INPUT_DIM_CHOICES[0])),
         padded_node_feature_count=padded_node_feature_count,
         active_feature_names=active_feature_names,
     )
-    
+
+    # Architecture is fixed (not part of the study), so read it from constants
+    # rather than the trial params.
     policy = GnnPolicySpec(
-        activation=params.get("gnn_activation", "leaky_relu"),
-        hidden_dim=int(params["hidden_dim"]),
-        num_layers=int(params["num_gnn_layers"]),
+        activation=FIXED_GNN_ACTIVATION,
+        hidden_dim=FIXED_DIM_INNER,
+        num_layers=FIXED_GNN_LAYER_COUNT,
+        dropout=FIXED_DROPOUT,
         layout=layout,
     )
     
@@ -400,7 +403,7 @@ def main() -> None:
     print(f"  GNN Activation:   {trial_config.policy.activation}")
     print(f"  Hidden Dim:       {trial_config.policy.hidden_dim}")
     print(f"  Num Layers:       {trial_config.policy.num_layers}")
-    print(f"  Heads:            {trial_config.policy.heads}")
+    print(f"  Dropout:          {trial_config.policy.dropout}")
     print(f"  Learning Rate:    {trial_config.ppo.learning_rate:.2e}")
     print(f"  Gamma (PPO):      {trial_config.ppo.gamma:.4f}")
     print(f"  Entropy Coef:     {trial_config.ppo.ent_coef:.2e}")
@@ -448,15 +451,12 @@ def main() -> None:
     gateway.send_control(CONTROL_FRESH_TRIAL_ENV)
 
     reward_calculator = RewardCalculator(
-        basis_reward=trial_config.reward.basis_reward,
-        gamma=trial_config.reward.reward_gamma,
-        alpha=trial_config.reward.alpha,
-        time_tolerance=trial_config.reward.time_tolerance,
-        step_cost_lambda=trial_config.reward.step_cost_lambda,
-        time_bad_penalty=trial_config.reward.time_bad_penalty,
-        solver_mismatch_penalty=trial_config.reward.solver_mismatch_penalty,
-        solver_match_bonus=trial_config.reward.solver_match_bonus,
-        solver_wrong_slow_coef=trial_config.reward.solver_wrong_slow_coef,
+        gamma=trial_config.ppo.gamma,  # PBRS gamma MUST equal the PPO discount
+        lambda_s=trial_config.reward.lambda_s,
+        w_time=trial_config.reward.w_time,
+        w_record=trial_config.reward.w_record,
+        w_over=trial_config.reward.w_over,
+        error_ref=trial_config.reward.error_ref,
     )
 
     env = build_mathematica_training_env(
@@ -475,6 +475,7 @@ def main() -> None:
         global_hidden_dim=trial_config.policy.layout.global_input_dim,
         activation=trial_config.policy.activation,
         num_layers=trial_config.policy.num_layers,
+        dropout=trial_config.policy.dropout,
         classify=False,
     )
 
@@ -520,6 +521,7 @@ def main() -> None:
             mlflow.log_param("gnn_activation", trial_config.policy.activation)
             mlflow.log_param("hidden_dim", trial_config.policy.hidden_dim)
             mlflow.log_param("num_layers", trial_config.policy.num_layers)
+            mlflow.log_param("dropout", trial_config.policy.dropout)
             mlflow.log_param("learning_rate", trial_config.ppo.learning_rate)
             mlflow.log_param("gamma", trial_config.ppo.gamma)
             mlflow.log_param("ent_coef", trial_config.ppo.ent_coef)
@@ -530,12 +532,13 @@ def main() -> None:
             mlflow.log_param("add_kappa", add_kappa)
             mlflow.log_param("add_virtual_supernode", add_virtual_supernode)
 
-            mlflow.log_param("reward_version", "v2_tolerance")
-            mlflow.log_param("reward_alpha", trial_config.reward.alpha)
-            mlflow.log_param("reward_gamma", trial_config.reward.reward_gamma)
-            mlflow.log_param("time_tolerance", trial_config.reward.time_tolerance)
-            mlflow.log_param("step_cost_lambda", trial_config.reward.step_cost_lambda)
-            mlflow.log_param("time_bad_penalty", trial_config.reward.time_bad_penalty)
+            mlflow.log_param("reward_version", "v3_pbrs")
+            mlflow.log_param("reward_gamma", trial_config.ppo.gamma)  # PBRS gamma = PPO gamma
+            mlflow.log_param("reward_lambda_s", trial_config.reward.lambda_s)
+            mlflow.log_param("reward_w_time", trial_config.reward.w_time)
+            mlflow.log_param("reward_w_record", trial_config.reward.w_record)
+            mlflow.log_param("reward_w_over", trial_config.reward.w_over)
+            mlflow.log_param("reward_error_ref", trial_config.reward.error_ref)
 
             model.learn(total_timesteps=timesteps, callback=training_callback)
 
